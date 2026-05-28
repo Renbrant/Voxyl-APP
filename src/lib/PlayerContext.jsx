@@ -34,8 +34,7 @@ export function PlayerProvider({ children }) {
   const [episodeSource, setEpisodeSource] = useState(null);
 
   // ─── Core refs ───────────────────────────────────────────────────────────
-  const audioRef = useRef(null);
-  const preloadAudioRef = useRef(null); // stores URL string only — no second Audio element
+  const audioRef = useRef(null);         // HTMLAudioElement — web only
   const volumeRef = useRef(1);
   const queueRef = useRef([]);
   const currentIndexRef = useRef(-1);
@@ -43,40 +42,50 @@ export function PlayerProvider({ children }) {
   const autoplayRef = useRef(true);
   const finishedUrlsRef = useRef(new Set());
   const transitioningRef = useRef(false);
-  const rafRef = useRef(null);
+  const rafRef = useRef(null);           // rAF id — web only
 
   // ─── Save / progress refs ────────────────────────────────────────────────
   const localSaveTimerRef = useRef(null);
   const dbSaveTimerRef = useRef(null);
   const podcastPlayRecordedRef = useRef(new Set());
   const userRef = useRef(null);
-  const playInitiatedRef = useRef(false);
   const wakeLockRef = useRef(null);
 
-  // ─── Mark episode as finished ────────────────────────────────────────────
+  // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
+  const nativeCurrentTimeRef = useRef(0);
+  const nativeDurationRef = useRef(0);
+
+  // ─── Keep refs in sync with state ────────────────────────────────────────
+  queueRef.current = queue;
+  autoplayRef.current = autoplay;
+  finishedUrlsRef.current = finishedUrls;
+  userRef.current = user;
+
+  // =========================================================================
+  // ── SHARED HELPERS ────────────────────────────────────────────────────────
+  // =========================================================================
+
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
     finishedUrlsRef.current = new Set([...finishedUrlsRef.current, audioUrl]);
     setFinishedUrls(new Set(finishedUrlsRef.current));
-    const audio = audioRef.current;
-    setCachedProgress(audioUrl, audio?.currentTime || 0, audio?.duration || 0, true);
+    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = isNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
+    setCachedProgress(audioUrl, pos, dur, true);
     const u = userRef.current;
     if (u) saveProgressToDB(base44, u.id, audioUrl).catch(() => {});
   }, []);
 
-  // ─── Record podcast play when >50% reached ──────────────────────────────
   const recordPodcastPlay = useCallback(() => {
     const ep = currentEpisodeRef.current;
-    const audio = audioRef.current;
-    if (!ep?.audioUrl || !audio) return;
+    if (!ep?.audioUrl) return;
     if (podcastPlayRecordedRef.current.has(ep.audioUrl)) return;
-    const dur = isNaN(audio.duration) ? 0 : audio.duration;
-    const pos = audio.currentTime;
+    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = isNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (dur > 0 && pos / dur >= 0.5) {
       podcastPlayRecordedRef.current.add(ep.audioUrl);
-      const feedUrl = ep.feedUrl || ep.id || '';
       base44.functions.invoke('recordPodcastPlay', {
-        feed_url: feedUrl,
+        feed_url: ep.feedUrl || ep.id || '',
         podcast_title: ep.feedTitle || '',
         podcast_image: ep.image || '',
         audio_url: ep.audioUrl,
@@ -88,13 +97,11 @@ export function PlayerProvider({ children }) {
     }
   }, []);
 
-  // ─── Save current position ────────────────────────────────────────────────
   const saveCurrentProgress = useCallback((forceDB = false) => {
     const ep = currentEpisodeRef.current;
-    const audio = audioRef.current;
-    if (!ep?.audioUrl || !audio) return;
-    const pos = audio.currentTime;
-    const dur = isNaN(audio.duration) ? 0 : audio.duration;
+    if (!ep?.audioUrl) return;
+    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = isNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (pos < MIN_SAVE_POSITION) return;
     const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
     setCachedProgress(ep.audioUrl, pos, dur, finished);
@@ -115,9 +122,9 @@ export function PlayerProvider({ children }) {
     dbSaveTimerRef.current = setInterval(() => saveCurrentProgress(true), DB_SAVE_INTERVAL_MS);
   }, [saveCurrentProgress, stopSaveTimers]);
 
-  // ─── Update MediaSession metadata ────────────────────────────────────────
+  // ── Web-only: MediaSession metadata ───────────────────────────────────────
   const updateMediaSession = useCallback((episode) => {
-    if (!('mediaSession' in navigator)) return;
+    if (isNative || !('mediaSession' in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: episode.title,
       artist: episode.feedTitle || 'Voxyl',
@@ -133,161 +140,160 @@ export function PlayerProvider({ children }) {
     });
   }, []);
 
-  // ─── Preload next episode (URL hint only — no second Audio element) ──────
-  const preloadNext = useCallback((nextEpisode) => {
-    if (!nextEpisode?.audioUrl) return;
-    preloadAudioRef.current = nextEpisode.audioUrl;
-    console.log('[PRELOAD] hint stored:', nextEpisode.title);
-  }, []);
+  // ── Advance to next episode ───────────────────────────────────────────────
+  const advanceToNextEpisodeRef = useRef(null);
 
-  // ─── rAF monitor: primary strategy, fires before 'ended' ────────────────
-  const monitorPlaybackRef = useRef(null);
-
-  const monitorPlayback = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || audio.paused || transitioningRef.current) return;
-
-    if (!isNaN(audio.duration) && audio.duration > 0) {
-      const remaining = audio.duration - audio.currentTime;
-      if (remaining <= 0.25) {
-        console.log('[RAF MONITOR] remaining:', remaining, '| visibility:', document.visibilityState);
-        if (!transitioningRef.current) {
-          transitioningRef.current = true;
-          advanceToNextEpisodeImmediateRef.current?.();
-        }
-        return;
-      }
-    }
-
-    rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  monitorPlaybackRef.current = monitorPlayback;
-
-  // ─── Advance to next episode immediately (no React dependencies) ─────────
-  const advanceToNextEpisodeImmediateRef = useRef(null);
-
-  const advanceToNextEpisodeImmediate = useCallback(async () => {
-    const audio = audioRef.current;
-    if (!audio) { transitioningRef.current = false; return; }
-
+  const advanceToNextEpisode = useCallback(async () => {
     if (!autoplayRef.current) {
-      console.log('[ADVANCE] autoplay off, skipping');
       transitioningRef.current = false;
       return;
     }
 
     const currentQueue = queueRef.current;
-    const currentIdx = currentIndexRef.current;
-    const nextIdx = currentIdx + 1;
+    const nextIdx = currentIndexRef.current + 1;
     const nextEpisode = currentQueue[nextIdx];
 
-    console.log('[ADVANCE] starting immediate transition. currentIdx:', currentIdx, 'nextIdx:', nextIdx);
-    console.log('[ADVANCE] next episode:', nextEpisode?.title);
-
     if (!nextEpisode) {
-      console.log('[ADVANCE] no next episode in queue');
       transitioningRef.current = false;
+      setIsPlaying(false);
       return;
     }
 
-    // Save progress of current episode first
+    // Save + mark current as finished
     saveCurrentProgress(true);
-
-    // Mark current as finished in refs immediately
     const prevUrl = currentEpisodeRef.current?.audioUrl;
     if (prevUrl) {
       finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
-      setCachedProgress(prevUrl, audio.duration || 0, audio.duration || 0, true);
+      const dur = isNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
+      setCachedProgress(prevUrl, dur, dur, true);
     }
 
-    try {
-      // Update refs FIRST — before touching audio
-      currentEpisodeRef.current = nextEpisode;
-      currentIndexRef.current = nextIdx;
+    currentEpisodeRef.current = nextEpisode;
+    currentIndexRef.current = nextIdx;
 
-      // Pause current playback cleanly before swapping src
+    if (isNative) {
+      // ── Native path ──
+      setCurrentEpisode(nextEpisode);
+      setIsLoading(true);
+      setFinishedUrls(new Set(finishedUrlsRef.current));
+      await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
+      setIsPlaying(true);
+      setIsLoading(false);
+    } else {
+      // ── Web path ──
+      const audio = audioRef.current;
+      cancelAnimationFrame(rafRef.current);
       audio.pause();
-
-      // Swap source on the SAME audio element + force buffer reset
       audio.src = nextEpisode.audioUrl;
       audio.load();
       audio.currentTime = nextEpisode.skip_start_seconds || 0;
       audio.volume = volumeRef.current ?? 1;
-
-      console.log('[ADVANCE] audio.paused:', audio.paused, '| visibility:', document.visibilityState);
-
-      await audio.play();
-
-      console.log('[ADVANCE] play() success:', nextEpisode.title);
-
-      // Update React state AFTER play succeeds
-      setCurrentEpisode(nextEpisode);
-      setIsPlaying(true);
-      setIsLoading(false);
-      setFinishedUrls(new Set(finishedUrlsRef.current));
-
-      updateMediaSession(nextEpisode);
-      nativeAudioPlayer.updateNotification(nextEpisode, true);
-
-      // Notify Service Worker
-      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({
-          type: 'UPDATE_EPISODE',
-          payload: { ...nextEpisode, queue: currentQueue, autoplay: autoplayRef.current },
-        });
+      try {
+        await audio.play();
+        setCurrentEpisode(nextEpisode);
+        setIsPlaying(true);
+        setIsLoading(false);
+        setFinishedUrls(new Set(finishedUrlsRef.current));
+        updateMediaSession(nextEpisode);
+        notifyServiceWorker(nextEpisode, currentQueue);
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
+      } catch (err) {
+        console.error('[ADVANCE] play() failed', err);
       }
-
-      // Preload the one after next
-      preloadNext(currentQueue[nextIdx + 1]);
-
-      transitioningRef.current = false;
-
-      // Restart rAF monitor for the new episode
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
-
-    } catch (err) {
-      console.log('[ADVANCE] play() failed', err);
-      transitioningRef.current = false;
     }
-  }, [saveCurrentProgress, updateMediaSession, preloadNext]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  advanceToNextEpisodeImmediateRef.current = advanceToNextEpisodeImmediate;
+    transitioningRef.current = false;
+  }, [saveCurrentProgress, updateMediaSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Audio element setup (once) ──────────────────────────────────────────
+  advanceToNextEpisodeRef.current = advanceToNextEpisode;
+
+  const tryAdvance = useCallback((source) => {
+    if (!transitioningRef.current) {
+      transitioningRef.current = true;
+      console.log(`[${source}] triggering advance`);
+      advanceToNextEpisodeRef.current?.();
+    }
+  }, []);
+
+  // =========================================================================
+  // ── NATIVE PLAYER SETUP ───────────────────────────────────────────────────
+  // =========================================================================
+
   useEffect(() => {
+    if (!isNative) return;
+
+    nativeAudioPlayer.initialize({
+      onTimeUpdate: (posSec, durSec) => {
+        nativeCurrentTimeRef.current = posSec;
+        if (durSec > 0) nativeDurationRef.current = durSec;
+        setCurrentTime(posSec);
+        if (durSec > 0) setDuration(durSec);
+
+        // skip_end_seconds support
+        const ep = currentEpisodeRef.current;
+        const skipEnd = ep?.skip_end_seconds || 0;
+        if (skipEnd > 0 && durSec > 0) {
+          const stopAt = durSec - skipEnd;
+          if (posSec >= stopAt) tryAdvance('NATIVE SKIP_END');
+        }
+      },
+      onEnded: () => {
+        console.log('[NATIVE] onEnded');
+        tryAdvance('NATIVE ENDED');
+      },
+      onStateChange: (playing) => {
+        setIsPlaying(playing);
+        if (playing) startSaveTimers();
+        else { stopSaveTimers(); saveCurrentProgress(true); }
+      },
+    });
+
+    return () => {
+      nativeAudioPlayer.destroy();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // =========================================================================
+  // ── WEB AUDIO ELEMENT SETUP ───────────────────────────────────────────────
+  // =========================================================================
+
+  // ── rAF monitor (web only) ────────────────────────────────────────────────
+  const monitorPlaybackRef = useRef(null);
+  const monitorPlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || audio.paused || transitioningRef.current) return;
+    if (!isNaN(audio.duration) && audio.duration > 0) {
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining <= 0.25) {
+        tryAdvance('RAF MONITOR');
+        return;
+      }
+    }
+    rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
+  }, [tryAdvance]); // eslint-disable-line react-hooks/exhaustive-deps
+  monitorPlaybackRef.current = monitorPlayback;
+
+  useEffect(() => {
+    if (isNative) return; // native path handles its own audio
+
     const audio = new Audio();
     audio.preload = 'auto';
     audio.crossOrigin = 'anonymous';
     audioRef.current = audio;
 
-    const tryAdvance = (source) => {
-      if (!transitioningRef.current) {
-        transitioningRef.current = true;
-        console.log(`[${source}]`, 'triggering advance');
-        advanceToNextEpisodeImmediateRef.current?.();
-      }
-    };
-
     audio.addEventListener('timeupdate', () => {
       setCurrentTime(audio.currentTime);
-
       if (!isNaN(audio.duration) && audio.duration > 0) {
-        const remaining = audio.duration - audio.currentTime;
-        if (remaining <= 0.2) {
-          console.log('[TIMEUPDATE FALLBACK] remaining:', remaining);
+        if (audio.duration - audio.currentTime <= 0.2) {
           tryAdvance('TIMEUPDATE FALLBACK');
           return;
         }
       }
-
-      // skip_end_seconds support
       const ep = currentEpisodeRef.current;
       const skipEnd = ep?.skip_end_seconds || 0;
       if (skipEnd > 0 && audio.duration && !isNaN(audio.duration)) {
-        const stopAt = audio.duration - skipEnd;
-        if (audio.currentTime >= stopAt) {
+        if (audio.currentTime >= audio.duration - skipEnd) {
           tryAdvance('SKIP_END');
         }
       }
@@ -298,30 +304,25 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('waiting', () => setIsLoading(true));
+    audio.addEventListener('canplay', () => setIsLoading(false));
 
     audio.addEventListener('playing', () => {
       setIsLoading(false);
       startSaveTimers();
       requestWakeLock();
-      nativeAudioPlayer.updatePlayingState(true);
-      // Start rAF monitor on every play event (covers resume after pause too)
       cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
     });
-
-    audio.addEventListener('canplay', () => setIsLoading(false));
 
     audio.addEventListener('pause', () => {
       stopSaveTimers();
       saveCurrentProgress(true);
       cancelAnimationFrame(rafRef.current);
       releaseWakeLock();
-      nativeAudioPlayer.updatePlayingState(false);
     });
 
-    // 'ended' fallback — fires if RAF and timeupdate both missed it (e.g. deep background)
     audio.addEventListener('ended', () => {
-      console.log('[ENDED FALLBACK] fired for:', currentEpisodeRef.current?.title);
+      console.log('[ENDED FALLBACK]', currentEpisodeRef.current?.title);
       tryAdvance('ENDED FALLBACK');
     });
 
@@ -333,27 +334,22 @@ export function PlayerProvider({ children }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── MediaSession action handlers ────────────────────────────────────────
+  // ── Web MediaSession action handlers ─────────────────────────────────────
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (isNative || !('mediaSession' in navigator)) return;
     const audio = audioRef.current;
     navigator.mediaSession.setActionHandler('play',          () => { audio?.play().then(() => setIsPlaying(true)).catch(() => {}); });
     navigator.mediaSession.setActionHandler('pause',         () => { audio?.pause(); setIsPlaying(false); });
     navigator.mediaSession.setActionHandler('previoustrack', () => playPrevRef.current?.());
-    navigator.mediaSession.setActionHandler('nexttrack',     () => {
-      if (!transitioningRef.current) {
-        transitioningRef.current = true;
-        advanceToNextEpisodeImmediateRef.current?.();
-      }
-    });
+    navigator.mediaSession.setActionHandler('nexttrack',     () => tryAdvance('MEDIA SESSION NEXT'));
     navigator.mediaSession.setActionHandler('seekbackward',  (d) => { if (audio) audio.currentTime = Math.max(0, audio.currentTime - (d?.seekOffset ?? 15)); });
     navigator.mediaSession.setActionHandler('seekforward',   (d) => { if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d?.seekOffset ?? 30)); });
     navigator.mediaSession.setActionHandler('seekto',        (d) => { if (audio && d.seekTime != null) audio.currentTime = d.seekTime; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Lock screen scrubber ─────────────────────────────────────────────────
+  // ── Lock screen scrubber (web) ────────────────────────────────────────────
   useEffect(() => {
-    if (!('mediaSession' in navigator) || !duration) return;
+    if (isNative || !('mediaSession' in navigator) || !duration) return;
     try {
       navigator.mediaSession.setPositionState({
         duration,
@@ -363,38 +359,41 @@ export function PlayerProvider({ children }) {
     } catch (_) {}
   }, [currentTime, duration]);
 
-  // ─── Wake Lock (web) ─────────────────────────────────────────────────────
+  // ── Web Wake Lock ─────────────────────────────────────────────────────────
   const requestWakeLock = useCallback(async () => {
-    if (isNative) return; // native handles this via Foreground Service
-    if (!('wakeLock' in navigator)) return;
+    if (isNative || !('wakeLock' in navigator)) return;
     try {
-      if (wakeLockRef.current) return; // already held
+      if (wakeLockRef.current) return;
       wakeLockRef.current = await navigator.wakeLock.request('screen');
-      wakeLockRef.current.addEventListener('release', () => {
-        wakeLockRef.current = null;
-      });
-      console.log('[WakeLock] acquired');
-    } catch (err) {
-      console.log('[WakeLock] failed:', err.message);
-    }
+      wakeLockRef.current.addEventListener('release', () => { wakeLockRef.current = null; });
+    } catch (_) {}
   }, []);
 
   const releaseWakeLock = useCallback(async () => {
     if (wakeLockRef.current) {
       await wakeLockRef.current.release().catch(() => {});
       wakeLockRef.current = null;
-      console.log('[WakeLock] released');
     }
   }, []);
 
-  // ─── Load user + progress on mount ───────────────────────────────────────
+  // ── Service Worker helpers (web) ──────────────────────────────────────────
+  const notifyServiceWorker = (episode, q) => {
+    if (isNative || !('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({
+      type: 'UPDATE_EPISODE',
+      payload: { ...episode, queue: q, autoplay: autoplayRef.current },
+    });
+  };
+
+  // =========================================================================
+  // ── MOUNT: user, SW, progress ────────────────────────────────────────────
+  // =========================================================================
+
   useEffect(() => {
     base44.auth.me().then(async u => {
       setUser(u);
       userRef.current = u;
-      if (u) {
-        try { await loadProgressFromDB(base44, u.id); } catch {}
-      }
+      if (u) { try { await loadProgressFromDB(base44, u.id); } catch {} }
       setFinishedUrls(getAllFinishedFromCache());
       finishedUrlsRef.current = getAllFinishedFromCache();
     }).catch(() => {
@@ -403,7 +402,7 @@ export function PlayerProvider({ children }) {
       finishedUrlsRef.current = cached;
     });
 
-    if ('serviceWorker' in navigator) {
+    if (!isNative && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
       navigator.serviceWorker.addEventListener('message', event => {
         if (event.data.type === 'PLAY') {
@@ -414,145 +413,136 @@ export function PlayerProvider({ children }) {
         }
       });
     }
-
-    // Initialize native player (no-op on web)
-    nativeAudioPlayer.initialize(() => {
-      if (!transitioningRef.current) {
-        transitioningRef.current = true;
-        advanceToNextEpisodeImmediateRef.current?.();
-      }
-    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-
-  // ─── Keep refs in sync with state ────────────────────────────────────────
-  queueRef.current = queue;
-  autoplayRef.current = autoplay;
-  finishedUrlsRef.current = finishedUrls;
-  userRef.current = user;
-
-  // ─── Internal: play an episode directly on the audio element ─────────────
-  const playEpisodeAudio = useCallback((episode, queue_, skipResume = false) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    cancelAnimationFrame(rafRef.current);
-    transitioningRef.current = false;
-
-    saveCurrentProgress(true);
-
-    playInitiatedRef.current = true;
-    setIsLoading(true);
-    setCurrentEpisode(episode);
-    currentEpisodeRef.current = episode;
-
-    // Find index in queue
-    const q = queue_ || queueRef.current;
-    const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);
-    currentIndexRef.current = idx;
-
-    const savedProgress = getCachedProgress(episode.audioUrl);
-    const resumeAt = !skipResume && savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
-      ? savedProgress.position_seconds
-      : (episode.skip_start_seconds || 0);
-
-    audio.src = episode.audioUrl;
-
-    const doPlay = () => {
-      audio.play().then(() => {
-        setIsPlaying(true);
-        // Preload next
-        preloadNext(q[idx + 1]);
-      }).catch((e) => {
-        console.error('[playEpisodeAudio] play() rejected:', e);
-      });
-    };
-
-    if (resumeAt > 0) {
-      audio.addEventListener('loadedmetadata', function onMeta() {
-        audio.removeEventListener('loadedmetadata', onMeta);
-        audio.currentTime = resumeAt;
-        doPlay();
-      });
-      audio.load();
-    } else {
-      doPlay();
-    }
-
-    updateMediaSession(episode);
-    nativeAudioPlayer.updateNotification(episode, true);
-    nativeAudioPlayer.setQueue(q, idx);
-
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'UPDATE_EPISODE',
-        payload: { ...episode, queue: q, autoplay: autoplayRef.current },
-      });
-    }
-  }, [saveCurrentProgress, updateMediaSession, preloadNext]);
-
-  // ─── Public play() ───────────────────────────────────────────────────────
-  const play = (episode, newQueue = [], source = null) => {
-    const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
-    if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
-    if (source) setEpisodeSource(source);
-
-    if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
-      audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
-      return;
-    }
-
-    playEpisodeAudio(episode, updatedQueue);
-  };
-
-  const togglePlay = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (isPlaying) { audio.pause(); setIsPlaying(false); }
-    else { audio.play().then(() => setIsPlaying(true)).catch(() => {}); }
-  };
-
-  const seek = (time) => {
-    if (audioRef.current) audioRef.current.currentTime = time;
-  };
-
-  // playNext is now just a wrapper for advanceToNextEpisodeImmediate
-  const playNext = () => {
-    if (!autoplayRef.current) return;
-    if (!transitioningRef.current) {
-      transitioningRef.current = true;
-      advanceToNextEpisodeImmediateRef.current?.();
-    }
-  };
-
-  const playPrevRef = useRef(null);
-  const playPrev = () => {
-    const idx = currentIndexRef.current;
-    const q = queueRef.current;
-    if (idx > 0) playEpisodeAudio(q[idx - 1], q);
-  };
-  playPrevRef.current = playPrev;
-
-  // ─── Sync finished URLs to Service Worker ────────────────────────────────
+  // ── Sync finished URLs to SW ──────────────────────────────────────────────
   useEffect(() => {
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'UPDATE_FINISHED_URLS',
-        payload: Array.from(finishedUrls),
-      });
-    }
+    if (isNative || !('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({
+      type: 'UPDATE_FINISHED_URLS',
+      payload: Array.from(finishedUrls),
+    });
   }, [finishedUrls]);
 
-  // ─── Persist autoplay + notify SW ────────────────────────────────────────
+  // ── Persist autoplay + notify SW ─────────────────────────────────────────
   useEffect(() => {
     try { localStorage.setItem('voxyl_autoplay', String(autoplay)); } catch {}
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    if (!isNative && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'SET_AUTOPLAY',
         payload: { autoplay },
       });
     }
   }, [autoplay]);
+
+  // =========================================================================
+  // ── PLAYBACK API ──────────────────────────────────────────────────────────
+  // =========================================================================
+
+  const playEpisodeInternal = useCallback(async (episode, q, skipResume = false) => {
+    transitioningRef.current = false;
+    saveCurrentProgress(true);
+
+    setIsLoading(true);
+    setCurrentEpisode(episode);
+    currentEpisodeRef.current = episode;
+
+    const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);
+    currentIndexRef.current = idx;
+
+    const savedProgress = getCachedProgress(episode.audioUrl);
+    const resumeAt = !skipResume && savedProgress?.position_seconds > MIN_SAVE_POSITION && !savedProgress?.finished
+      ? savedProgress.position_seconds
+      : (episode.skip_start_seconds || 0);
+
+    if (isNative) {
+      // ── Native path ──
+      await nativeAudioPlayer.play(episode, resumeAt);
+      const dur = nativeAudioPlayer.getDuration();
+      if (dur > 0) { setDuration(dur); nativeDurationRef.current = dur; }
+      setCurrentTime(resumeAt);
+      nativeCurrentTimeRef.current = resumeAt;
+      setIsPlaying(true);
+      setIsLoading(false);
+    } else {
+      // ── Web path ──
+      const audio = audioRef.current;
+      cancelAnimationFrame(rafRef.current);
+      audio.src = episode.audioUrl;
+
+      const doPlay = () => {
+        audio.play()
+          .then(() => { setIsPlaying(true); })
+          .catch(e => console.error('[play] rejected:', e));
+      };
+
+      if (resumeAt > 0) {
+        audio.addEventListener('loadedmetadata', function onMeta() {
+          audio.removeEventListener('loadedmetadata', onMeta);
+          audio.currentTime = resumeAt;
+          doPlay();
+        });
+        audio.load();
+      } else {
+        doPlay();
+      }
+
+      updateMediaSession(episode);
+      notifyServiceWorker(episode, q);
+    }
+  }, [saveCurrentProgress, updateMediaSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const play = useCallback((episode, newQueue = [], source = null) => {
+    const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
+    if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
+    if (source) setEpisodeSource(source);
+
+    if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
+      // Resume same episode
+      if (isNative) nativeAudioPlayer.resume();
+      else audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+      return;
+    }
+
+    playEpisodeInternal(episode, updatedQueue);
+  }, [playEpisodeInternal]);
+
+  const togglePlay = useCallback(() => {
+    if (isNative) {
+      if (isPlaying) { nativeAudioPlayer.pause(); setIsPlaying(false); }
+      else { nativeAudioPlayer.resume(); setIsPlaying(true); }
+    } else {
+      const audio = audioRef.current;
+      if (!audio) return;
+      if (isPlaying) { audio.pause(); setIsPlaying(false); }
+      else { audio.play().then(() => setIsPlaying(true)).catch(() => {}); }
+    }
+  }, [isPlaying]);
+
+  const seek = useCallback((time) => {
+    if (isNative) {
+      nativeAudioPlayer.seek(time);
+      nativeCurrentTimeRef.current = time;
+      setCurrentTime(time);
+    } else {
+      if (audioRef.current) audioRef.current.currentTime = time;
+    }
+  }, []);
+
+  const playNext = useCallback(() => {
+    if (!autoplayRef.current) return;
+    tryAdvance('MANUAL NEXT');
+  }, [tryAdvance]);
+
+  const playPrevRef = useRef(null);
+  const playPrev = useCallback(() => {
+    const idx = currentIndexRef.current;
+    const q = queueRef.current;
+    if (idx > 0) playEpisodeInternal(q[idx - 1], q);
+  }, [playEpisodeInternal]);
+  playPrevRef.current = playPrev;
+
+  // =========================================================================
 
   return (
     <PlayerContext.Provider value={{
