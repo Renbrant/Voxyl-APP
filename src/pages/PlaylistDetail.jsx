@@ -176,7 +176,7 @@ export default function PlaylistDetail() {
     if (currentEpisode?.audioUrl === ep.audioUrl) { togglePlay(); return; }
     play(ep, episodes, { type: 'playlist', id });
     setPlayedUrls(prev => new Set([...prev, ep.audioUrl]));
-    base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id, plays_count: (playlist?.plays_count || 0) + 1 }).catch(() => {});
+    base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
   };
 
   const loadEpisodesRef = useRef(null);
@@ -298,7 +298,7 @@ export default function PlaylistDetail() {
               onClick={() => {
                 const nextUnplayed = episodes.find(ep => !finishedUrls.has(ep.audioUrl)) || episodes[0];
                 play(nextUnplayed, episodes);
-                base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id, plays_count: (playlist?.plays_count || 0) + 1 }).catch(() => {});
+                base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full gradient-primary text-white text-xs font-medium"
             >
