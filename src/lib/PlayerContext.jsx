@@ -123,6 +123,8 @@ export function PlayerProvider({ children }) {
   }, []);
 
   // ─── Audio element setup ──────────────────────────────────────────────────
+  const endedFallbackRef = useRef(null);
+
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'none';
@@ -149,7 +151,29 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('waiting', () => setIsLoading(true));
-    audio.addEventListener('playing', () => { setIsLoading(false); startSaveTimers(); });
+    audio.addEventListener('playing', () => {
+      setIsLoading(false);
+      startSaveTimers();
+      // Start fallback polling: if audio stalls near end without firing 'ended', advance manually
+      clearInterval(endedFallbackRef.current);
+      endedFallbackRef.current = setInterval(() => {
+        if (!audio.paused && !audio.ended && !isNaN(audio.duration) && audio.duration > 0) {
+          const remaining = audio.duration - audio.currentTime;
+          if (remaining < 1.5) {
+            clearInterval(endedFallbackRef.current);
+            const url = currentEpisodeRef.current?.audioUrl;
+            if (url) {
+              finishedUrlsRef.current = new Set([...finishedUrlsRef.current, url]);
+              setCachedProgress(url, audio.duration, audio.duration, true);
+            }
+            setFinishedUrls(new Set(finishedUrlsRef.current));
+            setTimeout(() => playEpisodeAudioRef.current && playNextRef.current?.(), 300);
+          }
+        } else if (audio.paused || audio.ended) {
+          clearInterval(endedFallbackRef.current);
+        }
+      }, 1000);
+    });
     audio.addEventListener('canplay', () => setIsLoading(false));
     audio.addEventListener('pause', () => {
       stopSaveTimers();
@@ -158,21 +182,29 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('ended', () => {
       setIsPlaying(false);
       stopSaveTimers();
-      markFinished(currentEpisodeRef.current?.audioUrl);
+      const url = currentEpisodeRef.current?.audioUrl;
+      // Mark finished directly in ref first (safe in background, no React batch needed)
+      if (url) {
+        finishedUrlsRef.current = new Set([...finishedUrlsRef.current, url]);
+        setCachedProgress(url, audio.duration || 0, audio.duration || 0, true);
+      }
+      setFinishedUrls(new Set(finishedUrlsRef.current));
       // Notify Service Worker about the end
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.controller?.postMessage({
           type: 'EPISODE_ENDED',
-          payload: { audioUrl: currentEpisodeRef.current?.audioUrl }
+          payload: { audioUrl: url }
         });
       }
-      playNextRef.current?.();
+      // Small delay to let state settle, then advance
+      setTimeout(() => playEpisodeAudioRef.current && playNextRef.current?.(), 300);
     });
 
     return () => {
       audio.pause();
       audio.src = '';
       stopSaveTimers();
+      clearInterval(endedFallbackRef.current);
     };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
