@@ -10,6 +10,7 @@ import {
   FINISH_THRESHOLD,
   MIN_SAVE_POSITION,
 } from '@/lib/episodeProgressCache';
+import { nativeAudioPlayer, isNative } from '@/lib/nativeAudioPlayer';
 
 const PlayerContext = createContext(null);
 
@@ -50,6 +51,7 @@ export function PlayerProvider({ children }) {
   const podcastPlayRecordedRef = useRef(new Set());
   const userRef = useRef(null);
   const playInitiatedRef = useRef(false);
+  const wakeLockRef = useRef(null);
 
   // ─── Mark episode as finished ────────────────────────────────────────────
   const markFinished = useCallback((audioUrl) => {
@@ -226,6 +228,7 @@ export function PlayerProvider({ children }) {
       setFinishedUrls(new Set(finishedUrlsRef.current));
 
       updateMediaSession(nextEpisode);
+      nativeAudioPlayer.updateNotification(nextEpisode, true);
 
       // Notify Service Worker
       if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -299,6 +302,8 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('playing', () => {
       setIsLoading(false);
       startSaveTimers();
+      requestWakeLock();
+      nativeAudioPlayer.updatePlayingState(true);
       // Start rAF monitor on every play event (covers resume after pause too)
       cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
@@ -310,6 +315,8 @@ export function PlayerProvider({ children }) {
       stopSaveTimers();
       saveCurrentProgress(true);
       cancelAnimationFrame(rafRef.current);
+      releaseWakeLock();
+      nativeAudioPlayer.updatePlayingState(false);
     });
 
     // 'ended' fallback — fires if RAF and timeupdate both missed it (e.g. deep background)
@@ -356,6 +363,30 @@ export function PlayerProvider({ children }) {
     } catch (_) {}
   }, [currentTime, duration]);
 
+  // ─── Wake Lock (web) ─────────────────────────────────────────────────────
+  const requestWakeLock = useCallback(async () => {
+    if (isNative) return; // native handles this via Foreground Service
+    if (!('wakeLock' in navigator)) return;
+    try {
+      if (wakeLockRef.current) return; // already held
+      wakeLockRef.current = await navigator.wakeLock.request('screen');
+      wakeLockRef.current.addEventListener('release', () => {
+        wakeLockRef.current = null;
+      });
+      console.log('[WakeLock] acquired');
+    } catch (err) {
+      console.log('[WakeLock] failed:', err.message);
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(async () => {
+    if (wakeLockRef.current) {
+      await wakeLockRef.current.release().catch(() => {});
+      wakeLockRef.current = null;
+      console.log('[WakeLock] released');
+    }
+  }, []);
+
   // ─── Load user + progress on mount ───────────────────────────────────────
   useEffect(() => {
     base44.auth.me().then(async u => {
@@ -383,7 +414,16 @@ export function PlayerProvider({ children }) {
         }
       });
     }
-  }, []);
+
+    // Initialize native player (no-op on web)
+    nativeAudioPlayer.initialize(() => {
+      if (!transitioningRef.current) {
+        transitioningRef.current = true;
+        advanceToNextEpisodeImmediateRef.current?.();
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // ─── Keep refs in sync with state ────────────────────────────────────────
   queueRef.current = queue;
@@ -440,6 +480,8 @@ export function PlayerProvider({ children }) {
     }
 
     updateMediaSession(episode);
+    nativeAudioPlayer.updateNotification(episode, true);
+    nativeAudioPlayer.setQueue(q, idx);
 
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
