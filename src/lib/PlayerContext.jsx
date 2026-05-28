@@ -34,7 +34,8 @@ export function PlayerProvider({ children }) {
 
   // ─── Core refs ───────────────────────────────────────────────────────────
   const audioRef = useRef(null);
-  const preloadAudioRef = useRef(null);
+  const preloadAudioRef = useRef(null); // stores URL string only — no second Audio element
+  const volumeRef = useRef(1);
   const queueRef = useRef([]);
   const currentIndexRef = useRef(-1);
   const currentEpisodeRef = useRef(null);
@@ -130,20 +131,14 @@ export function PlayerProvider({ children }) {
     });
   }, []);
 
-  // ─── Preload next episode ────────────────────────────────────────────────
+  // ─── Preload next episode (URL hint only — no second Audio element) ──────
   const preloadNext = useCallback((nextEpisode) => {
     if (!nextEpisode?.audioUrl) return;
-    if (preloadAudioRef.current) {
-      preloadAudioRef.current.src = '';
-    }
-    const pre = new Audio();
-    pre.preload = 'auto';
-    pre.src = nextEpisode.audioUrl;
-    preloadAudioRef.current = pre;
-    console.log('[PRELOAD] preloading:', nextEpisode.title);
+    preloadAudioRef.current = nextEpisode.audioUrl;
+    console.log('[PRELOAD] hint stored:', nextEpisode.title);
   }, []);
 
-  // ─── rAF monitor: detects end BEFORE 'ended' fires ──────────────────────
+  // ─── rAF monitor: primary strategy, fires before 'ended' ────────────────
   const monitorPlaybackRef = useRef(null);
 
   const monitorPlayback = useCallback(() => {
@@ -153,9 +148,11 @@ export function PlayerProvider({ children }) {
     if (!isNaN(audio.duration) && audio.duration > 0) {
       const remaining = audio.duration - audio.currentTime;
       if (remaining <= 0.25) {
-        console.log('[MONITOR] near end, triggering advance. remaining:', remaining);
-        transitioningRef.current = true;
-        advanceToNextEpisodeImmediateRef.current?.();
+        console.log('[RAF MONITOR] remaining:', remaining, '| visibility:', document.visibilityState);
+        if (!transitioningRef.current) {
+          transitioningRef.current = true;
+          advanceToNextEpisodeImmediateRef.current?.();
+        }
         return;
       }
     }
@@ -207,9 +204,16 @@ export function PlayerProvider({ children }) {
       currentEpisodeRef.current = nextEpisode;
       currentIndexRef.current = nextIdx;
 
-      // Swap source immediately on the SAME audio element
+      // Pause current playback cleanly before swapping src
+      audio.pause();
+
+      // Swap source on the SAME audio element + force buffer reset
       audio.src = nextEpisode.audioUrl;
+      audio.load();
       audio.currentTime = nextEpisode.skip_start_seconds || 0;
+      audio.volume = volumeRef.current ?? 1;
+
+      console.log('[ADVANCE] audio.paused:', audio.paused, '| visibility:', document.visibilityState);
 
       await audio.play();
 
@@ -251,20 +255,37 @@ export function PlayerProvider({ children }) {
   // ─── Audio element setup (once) ──────────────────────────────────────────
   useEffect(() => {
     const audio = new Audio();
-    audio.preload = 'none';
+    audio.preload = 'auto';
+    audio.crossOrigin = 'anonymous';
     audioRef.current = audio;
+
+    const tryAdvance = (source) => {
+      if (!transitioningRef.current) {
+        transitioningRef.current = true;
+        console.log(`[${source}]`, 'triggering advance');
+        advanceToNextEpisodeImmediateRef.current?.();
+      }
+    };
 
     audio.addEventListener('timeupdate', () => {
       setCurrentTime(audio.currentTime);
+
+      if (!isNaN(audio.duration) && audio.duration > 0) {
+        const remaining = audio.duration - audio.currentTime;
+        if (remaining <= 0.2) {
+          console.log('[TIMEUPDATE FALLBACK] remaining:', remaining);
+          tryAdvance('TIMEUPDATE FALLBACK');
+          return;
+        }
+      }
 
       // skip_end_seconds support
       const ep = currentEpisodeRef.current;
       const skipEnd = ep?.skip_end_seconds || 0;
       if (skipEnd > 0 && audio.duration && !isNaN(audio.duration)) {
         const stopAt = audio.duration - skipEnd;
-        if (audio.currentTime >= stopAt && !transitioningRef.current) {
-          transitioningRef.current = true;
-          advanceToNextEpisodeImmediateRef.current?.();
+        if (audio.currentTime >= stopAt) {
+          tryAdvance('SKIP_END');
         }
       }
     });
@@ -291,13 +312,10 @@ export function PlayerProvider({ children }) {
       cancelAnimationFrame(rafRef.current);
     });
 
-    // Keep 'ended' as a safety fallback (though rAF should fire first)
+    // 'ended' fallback — fires if RAF and timeupdate both missed it (e.g. deep background)
     audio.addEventListener('ended', () => {
-      console.log('[ended] fallback fired for:', currentEpisodeRef.current?.title);
-      if (!transitioningRef.current) {
-        transitioningRef.current = true;
-        advanceToNextEpisodeImmediateRef.current?.();
-      }
+      console.log('[ENDED FALLBACK] fired for:', currentEpisodeRef.current?.title);
+      tryAdvance('ENDED FALLBACK');
     });
 
     return () => {
