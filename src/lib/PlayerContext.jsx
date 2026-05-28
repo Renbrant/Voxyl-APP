@@ -13,9 +13,7 @@ import {
 
 const PlayerContext = createContext(null);
 
-// How often (ms) to sync current position to localStorage while playing
 const LOCAL_SAVE_INTERVAL_MS = 5000;
-// How often (ms) to push to DB while playing
 const DB_SAVE_INTERVAL_MS = 30000;
 
 export function PlayerProvider({ children }) {
@@ -28,24 +26,29 @@ export function PlayerProvider({ children }) {
     try { const v = localStorage.getItem('voxyl_autoplay'); return v === null ? true : v === 'true'; }
     catch { return true; }
   });
-  const queueRef = useRef([]);
-  const autoplayRef = useRef(true);
-  const finishedUrlsRef = useRef(new Set());
   const [playerMinimized, setPlayerMinimized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [finishedUrls, setFinishedUrls] = useState(new Set());
   const [user, setUser] = useState(null);
-  const [episodeSource, setEpisodeSource] = useState(null); // { type: 'playlist'|'podcast', id: string }
+  const [episodeSource, setEpisodeSource] = useState(null);
 
+  // ─── Core refs ───────────────────────────────────────────────────────────
   const audioRef = useRef(null);
-  const playNextRef = useRef(null);
-  const playPrevRef = useRef(null);
-  const playEpisodeAudioRef = useRef(null);
-  const playInitiatedRef = useRef(false);
+  const preloadAudioRef = useRef(null);
+  const queueRef = useRef([]);
+  const currentIndexRef = useRef(-1);
   const currentEpisodeRef = useRef(null);
+  const autoplayRef = useRef(true);
+  const finishedUrlsRef = useRef(new Set());
+  const transitioningRef = useRef(false);
+  const rafRef = useRef(null);
+
+  // ─── Save / progress refs ────────────────────────────────────────────────
   const localSaveTimerRef = useRef(null);
   const dbSaveTimerRef = useRef(null);
-  const podcastPlayRecordedRef = useRef(new Set()); // Track which episodes already recorded as plays
+  const podcastPlayRecordedRef = useRef(new Set());
+  const userRef = useRef(null);
+  const playInitiatedRef = useRef(false);
 
   // ─── Mark episode as finished ────────────────────────────────────────────
   const markFinished = useCallback((audioUrl) => {
@@ -54,23 +57,19 @@ export function PlayerProvider({ children }) {
     setFinishedUrls(new Set(finishedUrlsRef.current));
     const audio = audioRef.current;
     setCachedProgress(audioUrl, audio?.currentTime || 0, audio?.duration || 0, true);
-    if (user) saveProgressToDB(base44, user.id, audioUrl).catch(() => {});
-  }, [user]);
+    const u = userRef.current;
+    if (u) saveProgressToDB(base44, u.id, audioUrl).catch(() => {});
+  }, []);
 
   // ─── Record podcast play when >50% reached ──────────────────────────────
   const recordPodcastPlay = useCallback(() => {
     const ep = currentEpisodeRef.current;
     const audio = audioRef.current;
     if (!ep?.audioUrl || !audio) return;
-
-    // Only record once per episode per session
     if (podcastPlayRecordedRef.current.has(ep.audioUrl)) return;
-
     const dur = isNaN(audio.duration) ? 0 : audio.duration;
     const pos = audio.currentTime;
-    const playPercent = dur > 0 ? (pos / dur) : 0;
-
-    if (playPercent >= 0.5) {
+    if (dur > 0 && pos / dur >= 0.5) {
       podcastPlayRecordedRef.current.add(ep.audioUrl);
       const feedUrl = ep.feedUrl || ep.id || '';
       base44.functions.invoke('recordPodcastPlay', {
@@ -80,54 +79,176 @@ export function PlayerProvider({ children }) {
         audio_url: ep.audioUrl,
         episode_title: ep.title || '',
       }).then(() => {
-        // Invalidate caches so Feed and Playlists reflect the new play
-        if (user?.id) {
-          invalidateCache(`user-podcast-plays-${user.id}`);
-        }
+        const u = userRef.current;
+        if (u?.id) invalidateCache(`user-podcast-plays-${u.id}`);
       }).catch(() => {});
     }
-  }, [user]);
+  }, []);
 
-  // ─── Save current position to cache (and optionally DB) ──────────────────
-  const saveCurrentProgress = useCallback((forcDB = false) => {
+  // ─── Save current position ────────────────────────────────────────────────
+  const saveCurrentProgress = useCallback((forceDB = false) => {
     const ep = currentEpisodeRef.current;
     const audio = audioRef.current;
     if (!ep?.audioUrl || !audio) return;
-
     const pos = audio.currentTime;
     const dur = isNaN(audio.duration) ? 0 : audio.duration;
     if (pos < MIN_SAVE_POSITION) return;
-
     const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
     setCachedProgress(ep.audioUrl, pos, dur, finished);
-
-    if (finished) {
-      setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
-    }
-
-    // Record podcast play if >50% reached
+    if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
     recordPodcastPlay();
-
-    if (forcDB && user) {
-      saveProgressToDB(base44, user.id, ep.audioUrl).catch(() => {});
-    }
-  }, [user, recordPodcastPlay]);
-
-  // ─── Periodic save timers ─────────────────────────────────────────────────
-  const startSaveTimers = useCallback(() => {
-    stopSaveTimers();
-    localSaveTimerRef.current = setInterval(() => saveCurrentProgress(false), LOCAL_SAVE_INTERVAL_MS);
-    dbSaveTimerRef.current = setInterval(() => saveCurrentProgress(true), DB_SAVE_INTERVAL_MS);
-  }, [saveCurrentProgress]);
+    const u = userRef.current;
+    if (forceDB && u) saveProgressToDB(base44, u.id, ep.audioUrl).catch(() => {});
+  }, [recordPodcastPlay]);
 
   const stopSaveTimers = useCallback(() => {
     clearInterval(localSaveTimerRef.current);
     clearInterval(dbSaveTimerRef.current);
   }, []);
 
-  // ─── Audio element setup ──────────────────────────────────────────────────
-  const endedFallbackRef = useRef(null);
+  const startSaveTimers = useCallback(() => {
+    stopSaveTimers();
+    localSaveTimerRef.current = setInterval(() => saveCurrentProgress(false), LOCAL_SAVE_INTERVAL_MS);
+    dbSaveTimerRef.current = setInterval(() => saveCurrentProgress(true), DB_SAVE_INTERVAL_MS);
+  }, [saveCurrentProgress, stopSaveTimers]);
 
+  // ─── Update MediaSession metadata ────────────────────────────────────────
+  const updateMediaSession = useCallback((episode) => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: episode.title,
+      artist: episode.feedTitle || 'Voxyl',
+      album: 'Voxyl',
+      artwork: episode.image
+        ? [
+            { src: episode.image, sizes: '96x96',   type: 'image/jpeg' },
+            { src: episode.image, sizes: '128x128', type: 'image/jpeg' },
+            { src: episode.image, sizes: '256x256', type: 'image/jpeg' },
+            { src: episode.image, sizes: '512x512', type: 'image/jpeg' },
+          ]
+        : [],
+    });
+  }, []);
+
+  // ─── Preload next episode ────────────────────────────────────────────────
+  const preloadNext = useCallback((nextEpisode) => {
+    if (!nextEpisode?.audioUrl) return;
+    if (preloadAudioRef.current) {
+      preloadAudioRef.current.src = '';
+    }
+    const pre = new Audio();
+    pre.preload = 'auto';
+    pre.src = nextEpisode.audioUrl;
+    preloadAudioRef.current = pre;
+    console.log('[PRELOAD] preloading:', nextEpisode.title);
+  }, []);
+
+  // ─── rAF monitor: detects end BEFORE 'ended' fires ──────────────────────
+  const monitorPlaybackRef = useRef(null);
+
+  const monitorPlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || audio.paused || transitioningRef.current) return;
+
+    if (!isNaN(audio.duration) && audio.duration > 0) {
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining <= 0.25) {
+        console.log('[MONITOR] near end, triggering advance. remaining:', remaining);
+        transitioningRef.current = true;
+        advanceToNextEpisodeImmediateRef.current?.();
+        return;
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  monitorPlaybackRef.current = monitorPlayback;
+
+  // ─── Advance to next episode immediately (no React dependencies) ─────────
+  const advanceToNextEpisodeImmediateRef = useRef(null);
+
+  const advanceToNextEpisodeImmediate = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) { transitioningRef.current = false; return; }
+
+    if (!autoplayRef.current) {
+      console.log('[ADVANCE] autoplay off, skipping');
+      transitioningRef.current = false;
+      return;
+    }
+
+    const currentQueue = queueRef.current;
+    const currentIdx = currentIndexRef.current;
+    const nextIdx = currentIdx + 1;
+    const nextEpisode = currentQueue[nextIdx];
+
+    console.log('[ADVANCE] starting immediate transition. currentIdx:', currentIdx, 'nextIdx:', nextIdx);
+    console.log('[ADVANCE] next episode:', nextEpisode?.title);
+
+    if (!nextEpisode) {
+      console.log('[ADVANCE] no next episode in queue');
+      transitioningRef.current = false;
+      return;
+    }
+
+    // Save progress of current episode first
+    saveCurrentProgress(true);
+
+    // Mark current as finished in refs immediately
+    const prevUrl = currentEpisodeRef.current?.audioUrl;
+    if (prevUrl) {
+      finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
+      setCachedProgress(prevUrl, audio.duration || 0, audio.duration || 0, true);
+    }
+
+    try {
+      // Update refs FIRST — before touching audio
+      currentEpisodeRef.current = nextEpisode;
+      currentIndexRef.current = nextIdx;
+
+      // Swap source immediately on the SAME audio element
+      audio.src = nextEpisode.audioUrl;
+      audio.currentTime = nextEpisode.skip_start_seconds || 0;
+
+      await audio.play();
+
+      console.log('[ADVANCE] play() success:', nextEpisode.title);
+
+      // Update React state AFTER play succeeds
+      setCurrentEpisode(nextEpisode);
+      setIsPlaying(true);
+      setIsLoading(false);
+      setFinishedUrls(new Set(finishedUrlsRef.current));
+
+      updateMediaSession(nextEpisode);
+
+      // Notify Service Worker
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'UPDATE_EPISODE',
+          payload: { ...nextEpisode, queue: currentQueue, autoplay: autoplayRef.current },
+        });
+      }
+
+      // Preload the one after next
+      preloadNext(currentQueue[nextIdx + 1]);
+
+      transitioningRef.current = false;
+
+      // Restart rAF monitor for the new episode
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
+
+    } catch (err) {
+      console.log('[ADVANCE] play() failed', err);
+      transitioningRef.current = false;
+    }
+  }, [saveCurrentProgress, updateMediaSession, preloadNext]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  advanceToNextEpisodeImmediateRef.current = advanceToNextEpisodeImmediate;
+
+  // ─── Audio element setup (once) ──────────────────────────────────────────
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'none';
@@ -136,15 +257,14 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('timeupdate', () => {
       setCurrentTime(audio.currentTime);
 
+      // skip_end_seconds support
       const ep = currentEpisodeRef.current;
       const skipEnd = ep?.skip_end_seconds || 0;
       if (skipEnd > 0 && audio.duration && !isNaN(audio.duration)) {
         const stopAt = audio.duration - skipEnd;
-        if (audio.currentTime >= stopAt) {
-          audio.pause();
-          setIsPlaying(false);
-          markFinished(ep?.audioUrl);
-          playNextRef.current?.();
+        if (audio.currentTime >= stopAt && !transitioningRef.current) {
+          transitioningRef.current = true;
+          advanceToNextEpisodeImmediateRef.current?.();
         }
       }
     });
@@ -154,79 +274,59 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('waiting', () => setIsLoading(true));
+
     audio.addEventListener('playing', () => {
       setIsLoading(false);
       startSaveTimers();
-      // Start fallback polling: if audio stalls near end without firing 'ended', advance manually
-      clearInterval(endedFallbackRef.current);
-      endedFallbackRef.current = setInterval(() => {
-        if (!audio.paused && !audio.ended && !isNaN(audio.duration) && audio.duration > 0) {
-          const remaining = audio.duration - audio.currentTime;
-          if (remaining < 1.5) {
-            clearInterval(endedFallbackRef.current);
-            const url = currentEpisodeRef.current?.audioUrl;
-            if (url) {
-              finishedUrlsRef.current = new Set([...finishedUrlsRef.current, url]);
-              setCachedProgress(url, audio.duration, audio.duration, true);
-            }
-            setFinishedUrls(new Set(finishedUrlsRef.current));
-            playNextRef.current?.();
-          }
-        } else if (audio.paused || audio.ended) {
-          clearInterval(endedFallbackRef.current);
-        }
-      }, 1000);
+      // Start rAF monitor on every play event (covers resume after pause too)
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
     });
+
     audio.addEventListener('canplay', () => setIsLoading(false));
+
     audio.addEventListener('pause', () => {
       stopSaveTimers();
       saveCurrentProgress(true);
+      cancelAnimationFrame(rafRef.current);
     });
+
+    // Keep 'ended' as a safety fallback (though rAF should fire first)
     audio.addEventListener('ended', () => {
-      console.log('[audio ended] fired for:', currentEpisodeRef.current?.title);
-      setIsPlaying(false);
-      stopSaveTimers();
-      const url = currentEpisodeRef.current?.audioUrl;
-      // Mark finished directly in ref first (safe in background, no React batch needed)
-      if (url) {
-        finishedUrlsRef.current = new Set([...finishedUrlsRef.current, url]);
-        setCachedProgress(url, audio.duration || 0, audio.duration || 0, true);
+      console.log('[ended] fallback fired for:', currentEpisodeRef.current?.title);
+      if (!transitioningRef.current) {
+        transitioningRef.current = true;
+        advanceToNextEpisodeImmediateRef.current?.();
       }
-      setFinishedUrls(new Set(finishedUrlsRef.current));
-      // Notify Service Worker about the end
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.controller?.postMessage({
-          type: 'EPISODE_ENDED',
-          payload: { audioUrl: url }
-        });
-      }
-      // Call playNext immediately — no setTimeout (Android blocks async play() in background)
-      console.log('[audio ended] calling playNext...');
-      playNextRef.current?.();
     });
 
     return () => {
       audio.pause();
       audio.src = '';
       stopSaveTimers();
-      clearInterval(endedFallbackRef.current);
+      cancelAnimationFrame(rafRef.current);
     };
-  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── MediaSession action handlers (set once, use refs) ───────────────────
+  // ─── MediaSession action handlers ────────────────────────────────────────
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const audio = audioRef.current;
     navigator.mediaSession.setActionHandler('play',          () => { audio?.play().then(() => setIsPlaying(true)).catch(() => {}); });
     navigator.mediaSession.setActionHandler('pause',         () => { audio?.pause(); setIsPlaying(false); });
     navigator.mediaSession.setActionHandler('previoustrack', () => playPrevRef.current?.());
-    navigator.mediaSession.setActionHandler('nexttrack',     () => playNextRef.current?.());
+    navigator.mediaSession.setActionHandler('nexttrack',     () => {
+      if (!transitioningRef.current) {
+        transitioningRef.current = true;
+        advanceToNextEpisodeImmediateRef.current?.();
+      }
+    });
     navigator.mediaSession.setActionHandler('seekbackward',  (d) => { if (audio) audio.currentTime = Math.max(0, audio.currentTime - (d?.seekOffset ?? 15)); });
     navigator.mediaSession.setActionHandler('seekforward',   (d) => { if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d?.seekOffset ?? 30)); });
     navigator.mediaSession.setActionHandler('seekto',        (d) => { if (audio && d.seekTime != null) audio.currentTime = d.seekTime; });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Lock screen scrubber position state ─────────────────────────────────
+  // ─── Lock screen scrubber ─────────────────────────────────────────────────
   useEffect(() => {
     if (!('mediaSession' in navigator) || !duration) return;
     try {
@@ -240,50 +340,46 @@ export function PlayerProvider({ children }) {
 
   // ─── Load user + progress on mount ───────────────────────────────────────
   useEffect(() => {
-   base44.auth.me().then(async u => {
-     setUser(u);
-     if (u) {
-       try {
-         await loadProgressFromDB(base44, u.id);
-       } catch {}
-     }
-     // Seed finishedUrls from cache (fast, no DB needed)
-     setFinishedUrls(getAllFinishedFromCache());
-   }).catch(() => {
-     setFinishedUrls(getAllFinishedFromCache());
-   });
+    base44.auth.me().then(async u => {
+      setUser(u);
+      userRef.current = u;
+      if (u) {
+        try { await loadProgressFromDB(base44, u.id); } catch {}
+      }
+      setFinishedUrls(getAllFinishedFromCache());
+      finishedUrlsRef.current = getAllFinishedFromCache();
+    }).catch(() => {
+      const cached = getAllFinishedFromCache();
+      setFinishedUrls(cached);
+      finishedUrlsRef.current = cached;
+    });
 
-   // Register Service Worker for background playback
-   if ('serviceWorker' in navigator) {
-     navigator.serviceWorker.register('/sw.js').catch(() => {});
-   }
-
-   // Listen for messages from Service Worker
-   if ('serviceWorker' in navigator) {
-     navigator.serviceWorker.addEventListener('message', event => {
-       if (event.data.type === 'PLAY_NEXT_EPISODE') {
-         // Auto-play next episode from background
-         playNextRef.current?.();
-       } else if (event.data.type === 'PLAY') {
-         audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
-       } else if (event.data.type === 'PAUSE') {
-         audioRef.current?.pause();
-         setIsPlaying(false);
-       }
-     });
-   }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data.type === 'PLAY') {
+          audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+        } else if (event.data.type === 'PAUSE') {
+          audioRef.current?.pause();
+          setIsPlaying(false);
+        }
+      });
+    }
   }, []);
 
   // ─── Keep refs in sync with state ────────────────────────────────────────
-  currentEpisodeRef.current = currentEpisode;
   queueRef.current = queue;
   autoplayRef.current = autoplay;
   finishedUrlsRef.current = finishedUrls;
+  userRef.current = user;
 
-  // ─── Internal: switch audio source and play (safe in background) ─────────
+  // ─── Internal: play an episode directly on the audio element ─────────────
   const playEpisodeAudio = useCallback((episode, queue_, skipResume = false) => {
     const audio = audioRef.current;
     if (!audio) return;
+
+    cancelAnimationFrame(rafRef.current);
+    transitioningRef.current = false;
 
     saveCurrentProgress(true);
 
@@ -292,6 +388,11 @@ export function PlayerProvider({ children }) {
     setCurrentEpisode(episode);
     currentEpisodeRef.current = episode;
 
+    // Find index in queue
+    const q = queue_ || queueRef.current;
+    const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);
+    currentIndexRef.current = idx;
+
     const savedProgress = getCachedProgress(episode.audioUrl);
     const resumeAt = !skipResume && savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
       ? savedProgress.position_seconds
@@ -299,50 +400,38 @@ export function PlayerProvider({ children }) {
 
     audio.src = episode.audioUrl;
 
+    const doPlay = () => {
+      audio.play().then(() => {
+        setIsPlaying(true);
+        // Preload next
+        preloadNext(q[idx + 1]);
+      }).catch((e) => {
+        console.error('[playEpisodeAudio] play() rejected:', e);
+      });
+    };
+
     if (resumeAt > 0) {
       audio.addEventListener('loadedmetadata', function onMeta() {
         audio.removeEventListener('loadedmetadata', onMeta);
         audio.currentTime = resumeAt;
-        audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        doPlay();
       });
       audio.load();
     } else {
-      audio.play().then(() => setIsPlaying(true)).catch((e) => {
-        console.error('[playEpisodeAudio] play() rejected:', e);
-      });
+      doPlay();
     }
 
-    // Update MediaSession metadata immediately
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: episode.title,
-        artist: episode.feedTitle || 'Voxyl',
-        album: 'Voxyl',
-        artwork: episode.image
-          ? [
-              { src: episode.image, sizes: '96x96',   type: 'image/jpeg' },
-              { src: episode.image, sizes: '128x128', type: 'image/jpeg' },
-              { src: episode.image, sizes: '256x256', type: 'image/jpeg' },
-              { src: episode.image, sizes: '512x512', type: 'image/jpeg' },
-            ]
-          : [],
-      });
-    }
+    updateMediaSession(episode);
 
-    // Update Service Worker
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'UPDATE_EPISODE',
-        payload: {
-          ...episode,
-          queue: queue_ || queueRef.current,
-          autoplay: autoplayRef.current,
-        }
+        payload: { ...episode, queue: q, autoplay: autoplayRef.current },
       });
     }
-  }, [saveCurrentProgress]);
+  }, [saveCurrentProgress, updateMediaSession, preloadNext]);
 
-  // ─── play() ──────────────────────────────────────────────────────────────
+  // ─── Public play() ───────────────────────────────────────────────────────
   const play = (episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
     if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
@@ -359,68 +448,48 @@ export function PlayerProvider({ children }) {
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-    } else {
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
-    }
+    if (isPlaying) { audio.pause(); setIsPlaying(false); }
+    else { audio.play().then(() => setIsPlaying(true)).catch(() => {}); }
   };
 
   const seek = (time) => {
     if (audioRef.current) audioRef.current.currentTime = time;
   };
 
+  // playNext is now just a wrapper for advanceToNextEpisodeImmediate
   const playNext = () => {
-    const ep = currentEpisodeRef.current;
-    const q = queueRef.current;
-    console.log('[playNext] called. autoplay:', autoplayRef.current, 'queue len:', q.length, 'current:', ep?.title);
-    if (!autoplayRef.current) { console.log('[playNext] autoplay off, aborting'); return; }
-    if (!ep || q.length === 0) { console.log('[playNext] no ep or empty queue'); return; }
-    const idx = q.findIndex(e => e.audioUrl === ep.audioUrl);
-    console.log('[playNext] idx:', idx, 'finished count:', finishedUrlsRef.current.size);
-
-    // Find next unfinished episode using refs (safe when screen is off)
-    for (let i = idx + 1; i < q.length; i++) {
-      const nextEp = q[i];
-      const isFinished = finishedUrlsRef.current.has(nextEp.audioUrl);
-      console.log('[playNext] candidate', i, nextEp.title, 'finished:', isFinished);
-      if (!isFinished) {
-        console.log('[playNext] playing next:', nextEp.title);
-        playEpisodeAudioRef.current?.(nextEp, q, true);
-        return;
-      }
+    if (!autoplayRef.current) return;
+    if (!transitioningRef.current) {
+      transitioningRef.current = true;
+      advanceToNextEpisodeImmediateRef.current?.();
     }
-    console.log('[playNext] no more unfinished episodes in queue');
   };
 
+  const playPrevRef = useRef(null);
   const playPrev = () => {
-    if (!currentEpisode || queue.length === 0) return;
-    const idx = queue.findIndex(e => e.audioUrl === currentEpisode.audioUrl);
-    if (idx > 0) setCurrentEpisode(queue[idx - 1]);
+    const idx = currentIndexRef.current;
+    const q = queueRef.current;
+    if (idx > 0) playEpisodeAudio(q[idx - 1], q);
   };
-
-  playNextRef.current = playNext;
   playPrevRef.current = playPrev;
-  playEpisodeAudioRef.current = playEpisodeAudio;
 
-  // Sync finished URLs to Service Worker
+  // ─── Sync finished URLs to Service Worker ────────────────────────────────
   useEffect(() => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'UPDATE_FINISHED_URLS',
-        payload: Array.from(finishedUrls)
+        payload: Array.from(finishedUrls),
       });
     }
   }, [finishedUrls]);
 
-  // Persist autoplay preference + notify Service Worker
+  // ─── Persist autoplay + notify SW ────────────────────────────────────────
   useEffect(() => {
     try { localStorage.setItem('voxyl_autoplay', String(autoplay)); } catch {}
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'SET_AUTOPLAY',
-        payload: { autoplay }
+        payload: { autoplay },
       });
     }
   }, [autoplay]);
