@@ -37,6 +37,7 @@ export function PlayerProvider({ children }) {
   const audioRef = useRef(null);
   const playNextRef = useRef(null);
   const playPrevRef = useRef(null);
+  const playEpisodeAudioRef = useRef(null);
   const playInitiatedRef = useRef(false);
   const currentEpisodeRef = useRef(null);
   const localSaveTimerRef = useRef(null);
@@ -175,41 +176,18 @@ export function PlayerProvider({ children }) {
     };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── MediaSession metadata ────────────────────────────────────────────────
+  // ─── MediaSession action handlers (set once, use refs) ───────────────────
   useEffect(() => {
-    if (!currentEpisode || !audioRef.current) return;
+    if (!('mediaSession' in navigator)) return;
     const audio = audioRef.current;
-
-    if (playInitiatedRef.current) {
-      playInitiatedRef.current = false;
-    } else {
-      audio.src = currentEpisode.audioUrl;
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
-    }
-
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentEpisode.title,
-        artist: currentEpisode.feedTitle || 'Voxyl',
-        album: 'Voxyl',
-        artwork: currentEpisode.image
-          ? [
-              { src: currentEpisode.image, sizes: '96x96',   type: 'image/jpeg' },
-              { src: currentEpisode.image, sizes: '128x128', type: 'image/jpeg' },
-              { src: currentEpisode.image, sizes: '256x256', type: 'image/jpeg' },
-              { src: currentEpisode.image, sizes: '512x512', type: 'image/jpeg' },
-            ]
-          : [],
-      });
-      navigator.mediaSession.setActionHandler('play',          () => { audio.play().then(() => setIsPlaying(true)).catch(() => {}); });
-      navigator.mediaSession.setActionHandler('pause',         () => { audio.pause(); setIsPlaying(false); });
-      navigator.mediaSession.setActionHandler('previoustrack', () => playPrevRef.current?.());
-      navigator.mediaSession.setActionHandler('nexttrack',     () => playNextRef.current?.());
-      navigator.mediaSession.setActionHandler('seekbackward',  (d) => { audio.currentTime = Math.max(0, audio.currentTime - (d?.seekOffset ?? 15)); });
-      navigator.mediaSession.setActionHandler('seekforward',   (d) => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d?.seekOffset ?? 30)); });
-      navigator.mediaSession.setActionHandler('seekto',        (d) => { if (d.seekTime != null) audio.currentTime = d.seekTime; });
-    }
-  }, [currentEpisode]);
+    navigator.mediaSession.setActionHandler('play',          () => { audio?.play().then(() => setIsPlaying(true)).catch(() => {}); });
+    navigator.mediaSession.setActionHandler('pause',         () => { audio?.pause(); setIsPlaying(false); });
+    navigator.mediaSession.setActionHandler('previoustrack', () => playPrevRef.current?.());
+    navigator.mediaSession.setActionHandler('nexttrack',     () => playNextRef.current?.());
+    navigator.mediaSession.setActionHandler('seekbackward',  (d) => { if (audio) audio.currentTime = Math.max(0, audio.currentTime - (d?.seekOffset ?? 15)); });
+    navigator.mediaSession.setActionHandler('seekforward',   (d) => { if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d?.seekOffset ?? 30)); });
+    navigator.mediaSession.setActionHandler('seekto',        (d) => { if (audio && d.seekTime != null) audio.currentTime = d.seekTime; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Lock screen scrubber position state ─────────────────────────────────
   useEffect(() => {
@@ -265,54 +243,78 @@ export function PlayerProvider({ children }) {
   autoplayRef.current = autoplay;
   finishedUrlsRef.current = finishedUrls;
 
+  // ─── Internal: switch audio source and play (safe in background) ─────────
+  const playEpisodeAudio = useCallback((episode, queue_) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    saveCurrentProgress(true);
+
+    playInitiatedRef.current = true;
+    setIsLoading(true);
+    setCurrentEpisode(episode);
+    currentEpisodeRef.current = episode;
+
+    const savedProgress = getCachedProgress(episode.audioUrl);
+    const resumeAt = savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
+      ? savedProgress.position_seconds
+      : (episode.skip_start_seconds || 0);
+
+    audio.src = episode.audioUrl;
+
+    if (resumeAt > 0) {
+      audio.addEventListener('loadedmetadata', function onMeta() {
+        audio.removeEventListener('loadedmetadata', onMeta);
+        audio.currentTime = resumeAt;
+        audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      });
+      audio.load();
+    } else {
+      audio.play().then(() => setIsPlaying(true)).catch(() => {});
+    }
+
+    // Update MediaSession metadata immediately
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: episode.title,
+        artist: episode.feedTitle || 'Voxyl',
+        album: 'Voxyl',
+        artwork: episode.image
+          ? [
+              { src: episode.image, sizes: '96x96',   type: 'image/jpeg' },
+              { src: episode.image, sizes: '128x128', type: 'image/jpeg' },
+              { src: episode.image, sizes: '256x256', type: 'image/jpeg' },
+              { src: episode.image, sizes: '512x512', type: 'image/jpeg' },
+            ]
+          : [],
+      });
+    }
+
+    // Update Service Worker
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'UPDATE_EPISODE',
+        payload: {
+          ...episode,
+          queue: queue_ || queueRef.current,
+          autoplay: autoplayRef.current,
+        }
+      });
+    }
+  }, [saveCurrentProgress]);
+
   // ─── play() ──────────────────────────────────────────────────────────────
   const play = (episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
     if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
     if (source) setEpisodeSource(source);
 
-    if (currentEpisode?.audioUrl === episode.audioUrl) {
+    if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
       audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
       return;
     }
 
-    // Save progress for the outgoing episode before switching
-    saveCurrentProgress(true);
-
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    playInitiatedRef.current = true;
-    setIsLoading(true);
-    audio.src = episode.audioUrl;
-
-    // Resume from saved position (skip_start_seconds takes priority if no saved progress)
-    const savedProgress = getCachedProgress(episode.audioUrl);
-    const resumeAt = savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
-      ? savedProgress.position_seconds
-      : (episode.skip_start_seconds || 0);
-
-    if (resumeAt > 0) {
-      audio.addEventListener('loadedmetadata', function onMeta() {
-        audio.currentTime = resumeAt;
-        audio.removeEventListener('loadedmetadata', onMeta);
-      });
-    }
-
-    audio.play().then(() => setIsPlaying(true)).catch(() => {});
-    setCurrentEpisode(episode);
-
-    // Update Service Worker with current episode and queue
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'UPDATE_EPISODE',
-        payload: {
-          ...episode,
-          queue: updatedQueue,
-          autoplay: autoplay
-        }
-      });
-    }
+    playEpisodeAudio(episode, updatedQueue);
   };
 
   const togglePlay = () => {
@@ -340,7 +342,8 @@ export function PlayerProvider({ children }) {
     for (let i = idx + 1; i < q.length; i++) {
       const nextEp = q[i];
       if (!finishedUrlsRef.current.has(nextEp.audioUrl)) {
-        play(nextEp, q);
+        // Use ref-based function to avoid React state issues in background
+        playEpisodeAudioRef.current?.(nextEp, q);
         return;
       }
     }
@@ -354,6 +357,7 @@ export function PlayerProvider({ children }) {
 
   playNextRef.current = playNext;
   playPrevRef.current = playPrev;
+  playEpisodeAudioRef.current = playEpisodeAudio;
 
   // Sync finished URLs to Service Worker
   useEffect(() => {
