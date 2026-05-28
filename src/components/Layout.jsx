@@ -1,6 +1,5 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useRef, useEffect, useState } from 'react';
-import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import AudioPlayer from './player/AudioPlayer';
 import { usePlayer } from '@/lib/PlayerContext';
@@ -8,6 +7,8 @@ import FollowRequestsBell from '@/components/notifications/FollowRequestsBell';
 import { base44 } from '@/api/base44Client';
 import { redirectToLogin } from '@/lib/authRedirect';
 import { t } from '@/lib/i18n';
+import BottomNav from '@/components/common/BottomNav';
+import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
 
 const getNavItems = () => [
   { icon: Home, label: t('navFeed'), path: '/' },

@@ -25,6 +25,7 @@ import SwipeableEpisodeRow from '@/components/player/SwipeableEpisodeRow';
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import BottomNav from '@/components/common/BottomNav';
 
 const GRADIENT_COLORS = [
   'from-purple-600 to-cyan-400',
@@ -323,7 +324,7 @@ export default function PlaylistDetail() {
             <p className="text-xs mt-1">{t('detailNoEpisodesHint')}</p>
           </div>
         ) : (
-          <div className="space-y-2 pb-4">
+          <div className="space-y-2 pb-24">
             {episodes.map((ep, i) => {
               const isActive = currentEpisode?.audioUrl === ep.audioUrl;
               const isCurrentlyPlaying = isActive && isPlaying;
@@ -589,6 +590,7 @@ export default function PlaylistDetail() {
         onSaved={() => refetchPlaylist()}
       />
     )}
+    <BottomNav />
     </>
   );
 }
