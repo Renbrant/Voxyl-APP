@@ -24,7 +24,10 @@ export function PlayerProvider({ children }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [queue, setQueue] = useState([]);
-  const [autoplay, setAutoplay] = useState(true);
+  const [autoplay, setAutoplay] = useState(() => {
+    try { const v = localStorage.getItem('voxyl_autoplay'); return v === null ? true : v === 'true'; }
+    catch { return true; }
+  });
   const queueRef = useRef([]);
   const autoplayRef = useRef(true);
   const finishedUrlsRef = useRef(new Set());
@@ -180,6 +183,7 @@ export function PlayerProvider({ children }) {
       saveCurrentProgress(true);
     });
     audio.addEventListener('ended', () => {
+      console.log('[audio ended] fired for:', currentEpisodeRef.current?.title);
       setIsPlaying(false);
       stopSaveTimers();
       const url = currentEpisodeRef.current?.audioUrl;
@@ -197,6 +201,7 @@ export function PlayerProvider({ children }) {
         });
       }
       // Call playNext immediately — no setTimeout (Android blocks async play() in background)
+      console.log('[audio ended] calling playNext...');
       playNextRef.current?.();
     });
 
@@ -302,7 +307,9 @@ export function PlayerProvider({ children }) {
       });
       audio.load();
     } else {
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      audio.play().then(() => setIsPlaying(true)).catch((e) => {
+        console.error('[playEpisodeAudio] play() rejected:', e);
+      });
     }
 
     // Update MediaSession metadata immediately
@@ -367,18 +374,24 @@ export function PlayerProvider({ children }) {
   const playNext = () => {
     const ep = currentEpisodeRef.current;
     const q = queueRef.current;
-    if (!ep || q.length === 0 || !autoplayRef.current) return;
+    console.log('[playNext] called. autoplay:', autoplayRef.current, 'queue len:', q.length, 'current:', ep?.title);
+    if (!autoplayRef.current) { console.log('[playNext] autoplay off, aborting'); return; }
+    if (!ep || q.length === 0) { console.log('[playNext] no ep or empty queue'); return; }
     const idx = q.findIndex(e => e.audioUrl === ep.audioUrl);
+    console.log('[playNext] idx:', idx, 'finished count:', finishedUrlsRef.current.size);
 
     // Find next unfinished episode using refs (safe when screen is off)
     for (let i = idx + 1; i < q.length; i++) {
       const nextEp = q[i];
-      if (!finishedUrlsRef.current.has(nextEp.audioUrl)) {
-        // skipResume=true: don't use loadedmetadata in background (Android blocks it)
+      const isFinished = finishedUrlsRef.current.has(nextEp.audioUrl);
+      console.log('[playNext] candidate', i, nextEp.title, 'finished:', isFinished);
+      if (!isFinished) {
+        console.log('[playNext] playing next:', nextEp.title);
         playEpisodeAudioRef.current?.(nextEp, q, true);
         return;
       }
     }
+    console.log('[playNext] no more unfinished episodes in queue');
   };
 
   const playPrev = () => {
@@ -401,8 +414,9 @@ export function PlayerProvider({ children }) {
     }
   }, [finishedUrls]);
 
-  // Notify Service Worker about autoplay changes
+  // Persist autoplay preference + notify Service Worker
   useEffect(() => {
+    try { localStorage.setItem('voxyl_autoplay', String(autoplay)); } catch {}
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'SET_AUTOPLAY',
