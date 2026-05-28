@@ -21,16 +21,19 @@ const ASSET_ID = 'voxyl_current'; // single-slot player
 
 class NativeAudioPlayer {
   constructor() {
-    this._plugin = null;       // @capgo/capacitor-native-audio NativeAudio
+    this._plugin = null;         // @capgo/capacitor-native-audio NativeAudio
     this._ready = false;
     this._currentUrl = null;
     this._duration = 0;
-    this._onTimeUpdate = null; // (posSeconds, durSeconds) => void
-    this._onEnded = null;      // () => void
-    this._onStateChange = null; // (playing: boolean) => void
+    this._isPlaying = false;     // ground-truth playing state
+    this._onTimeUpdate = null;   // (posSeconds, durSeconds) => void
+    this._onEnded = null;        // () => void
+    this._onStateChange = null;  // (playing: boolean) => void
     this._timeListener = null;
     this._stateListener = null;
     this._completeListener = null;
+    this._interruptionListener = null;
+    this._appStateListener = null;
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────
@@ -72,11 +75,51 @@ class NativeAudioPlayer {
         }
       });
 
-      // Playback state (play/pause from lockscreen, BT, notification)
+      // Playback state — fired by lock screen, BT controls, notification, interruptions
       this._stateListener = await this._plugin.addListener('playbackState', (data) => {
         // data: { assetId, playing }
-        this._onStateChange?.(data.playing);
+        this._isPlaying = !!data.playing;
+        this._onStateChange?.(this._isPlaying);
       });
+
+      // iOS audio session interruption (phone call, Siri, alarm, etc.)
+      // When interruption ends with shouldResume=true, resume playback automatically.
+      this._interruptionListener = await this._plugin.addListener('interruption', (data) => {
+        // data: { type: 'began' | 'ended', shouldResume?: boolean }
+        if (data.type === 'ended' && data.shouldResume && this._currentUrl) {
+          console.log('[NativeAudioPlayer] interruption ended — resuming');
+          this._plugin.resume({ assetId: ASSET_ID }).catch(() => {});
+        } else if (data.type === 'began') {
+          // iOS pauses AVPlayer automatically; sync our state
+          this._isPlaying = false;
+          this._onStateChange?.(false);
+        }
+      }).catch(() => null); // older plugin versions may not have this event
+
+      // Capacitor App state — sync playing state when returning from background
+      const AppPlugin = window.Capacitor?.Plugins?.App ?? null;
+      if (AppPlugin) {
+        this._appStateListener = await AppPlugin.addListener('appStateChange', async (state) => {
+          if (state.isActive && this._currentUrl) {
+            // Re-sync actual playing state from the native engine
+            try {
+              const { currentTime } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
+              // If we think we're playing but native stopped (e.g. iOS killed session),
+              // fire onStateChange so the UI reflects reality.
+              // We detect a stall by comparing last known time vs now after 500ms.
+              const timeBefore = (currentTime ?? 0) / 1000;
+              await new Promise(r => setTimeout(r, 500));
+              const { currentTime: currentTime2 } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
+              const timeAfter = (currentTime2 ?? 0) / 1000;
+              const actuallyPlaying = Math.abs(timeAfter - timeBefore) > 0.05;
+              if (this._isPlaying !== actuallyPlaying) {
+                this._isPlaying = actuallyPlaying;
+                this._onStateChange?.(actuallyPlaying);
+              }
+            } catch (_) {}
+          }
+        }).catch(() => null);
+      }
 
       this._ready = true;
       console.log('[NativeAudioPlayer] initialized');
@@ -116,9 +159,10 @@ class NativeAudioPlayer {
       });
 
       await this._plugin.play({ assetId: ASSET_ID });
+      this._isPlaying = true;
 
       // iOS AVPlayer populates duration asynchronously after play() starts.
-      // Poll until we get a valid value (up to ~3s).
+      // Poll until we get a valid value (up to ~6s).
       this._pollDuration(url, resumeAt);
 
     } catch (err) {
@@ -155,21 +199,32 @@ class NativeAudioPlayer {
   async pause() {
     if (!isNative || !this._ready) return;
     await this._plugin.pause({ assetId: ASSET_ID }).catch(() => {});
+    this._isPlaying = false;
   }
 
   // ── Resume ───────────────────────────────────────────────────────────────
   async resume() {
     if (!isNative || !this._ready) return;
     await this._plugin.resume({ assetId: ASSET_ID }).catch(() => {});
+    this._isPlaying = true;
   }
 
-  // ── Seek ─────────────────────────────────────────────────────────────────
-  async seek(seconds) {
+  // ── Seek — debounced to prevent rapid-fire during scrubber drag ───────────
+  seek(seconds) {
     if (!isNative || !this._ready) return;
-    await this._plugin.setCurrentTime({
-      assetId: ASSET_ID,
-      time: seconds * 1000,
-    }).catch(() => {});
+    // Cancel any pending seek and schedule a new one 80ms later.
+    // This prevents flooding the native bridge during seek bar dragging.
+    clearTimeout(this._seekTimer);
+    this._seekTimer = setTimeout(() => {
+      this._plugin.setCurrentTime({
+        assetId: ASSET_ID,
+        time: seconds * 1000,
+      }).catch(() => {});
+    }, 80);
+  }
+
+  isCurrentlyPlaying() {
+    return this._isPlaying;
   }
 
   // ── Stop / cleanup ───────────────────────────────────────────────────────
@@ -198,9 +253,12 @@ class NativeAudioPlayer {
 
   // ── Cleanup listeners ────────────────────────────────────────────────────
   async destroy() {
+    clearTimeout(this._seekTimer);
     await this._timeListener?.remove?.();
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
+    await this._interruptionListener?.remove?.();
+    await this._appStateListener?.remove?.();
     await this.stop();
   }
 }

@@ -509,8 +509,15 @@ export function PlayerProvider({ children }) {
 
   const togglePlay = useCallback(() => {
     if (isNative) {
-      if (isPlaying) { nativeAudioPlayer.pause(); setIsPlaying(false); }
-      else { nativeAudioPlayer.resume(); setIsPlaying(true); }
+      // Let onStateChange (fired by native) be the source of truth for isPlaying.
+      // We optimistically update UI immediately, but native corrects it if needed.
+      if (isPlaying) {
+        setIsPlaying(false);
+        nativeAudioPlayer.pause();
+      } else {
+        setIsPlaying(true);
+        nativeAudioPlayer.resume();
+      }
     } else {
       const audio = audioRef.current;
       if (!audio) return;

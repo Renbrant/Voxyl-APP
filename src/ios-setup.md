@@ -76,6 +76,9 @@ In **App Store Connect → App Information**:
 | Bluetooth controls | Handled by `AVAudioSessionCategoryPlayback` + plugin |
 | Episode auto-advance | `complete` event listener in `nativeAudioPlayer.js` |
 | Resume position on episode change | `_pollDuration()` waits for AVPlayer then seeks |
-| Seek bar dragging stability | `seek()` calls `setCurrentTime()` directly |
+| Seek bar scrubbing stability | Debounced 80ms — prevents bridge flooding during drag |
+| Audio interruption recovery | `interruption` listener — auto-resumes after calls/Siri |
+| App foreground sync | `appStateChange` listener — re-syncs play state on resume |
 | `backgroundAudio: true` in configure | Set in `nativeAudioPlayer.js` |
 | `focus: true` in configure | Set in `nativeAudioPlayer.js` + `capacitor.config.ts` |
+| Playing state source of truth | `_isPlaying` tracked in `NativeAudioPlayer`, UI follows `onStateChange` |
