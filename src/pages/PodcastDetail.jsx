@@ -144,42 +144,39 @@ export default function PodcastDetail() {
   return (
     <PageTransition>
       <div className="min-h-screen bg-background">
-        {/* Header */}
-        <div className={cn("relative h-56 bg-gradient-to-br", gradient)}>
-          {podcastMeta?.image && (
-            <img src={podcastMeta.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-          )}
-          <div className="absolute inset-0 bg-black/50" />
-          <div className="absolute top-12 left-4 right-4 flex items-center justify-between z-10">
-            <button
-              onClick={() => navigate(-1)}
-              className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
-            >
-              <ArrowLeft size={18} className="text-white" />
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-4 pt-12 pb-3 bg-background">
+          <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center" style={{ WebkitTapHighlightColor: 'transparent' }}>
+            <ArrowLeft size={18} className="text-foreground" />
+          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowInfo(true)} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
+              <Info size={16} />
             </button>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowInfo(true)}
-                className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white"
-              >
-                <Info size={16} />
-              </button>
-              <button
-                onClick={handleLike}
-                className={cn("w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center", liked ? "text-red-400" : "text-white")}
-              >
-                <Heart size={16} fill={liked ? "currentColor" : "none"} />
-              </button>
-            </div>
+            <button
+              onClick={handleLike}
+              className={cn("w-9 h-9 rounded-full bg-secondary flex items-center justify-center", liked ? "text-red-400" : "text-muted-foreground")}
+            >
+              <Heart size={16} fill={liked ? "currentColor" : "none"} />
+            </button>
           </div>
-          <div className="absolute bottom-4 left-4 right-4 z-10">
+        </div>
+
+        {/* Cover + info row */}
+        <div className="flex gap-4 px-4 pb-4 bg-background">
+          <div className={cn("w-24 h-24 rounded-2xl flex-shrink-0 bg-gradient-to-br overflow-hidden relative", gradient)}>
+            {podcastMeta?.image && (
+              <img src={podcastMeta.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0 flex flex-col justify-center">
             {podcastMeta ? (
               <>
-                <h1 className="text-xl font-grotesk font-bold text-white leading-tight line-clamp-2">{podcastMeta.title}</h1>
-                {podcastMeta.author && <p className="text-sm text-white/70 mt-0.5">{podcastMeta.author}</p>}
+                <h1 className="text-xl font-grotesk font-bold text-foreground leading-tight line-clamp-2">{podcastMeta.title}</h1>
+                {podcastMeta.author && <p className="text-sm text-muted-foreground mt-0.5">{podcastMeta.author}</p>}
               </>
             ) : (
-              <div className="h-14 animate-pulse" />
+              <div className="h-16 animate-pulse rounded-xl bg-secondary" />
             )}
           </div>
         </div>

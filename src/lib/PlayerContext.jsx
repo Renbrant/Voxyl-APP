@@ -167,7 +167,7 @@ export function PlayerProvider({ children }) {
               setCachedProgress(url, audio.duration, audio.duration, true);
             }
             setFinishedUrls(new Set(finishedUrlsRef.current));
-            setTimeout(() => playEpisodeAudioRef.current && playNextRef.current?.(), 300);
+            playNextRef.current?.();
           }
         } else if (audio.paused || audio.ended) {
           clearInterval(endedFallbackRef.current);
@@ -196,8 +196,8 @@ export function PlayerProvider({ children }) {
           payload: { audioUrl: url }
         });
       }
-      // Small delay to let state settle, then advance
-      setTimeout(() => playEpisodeAudioRef.current && playNextRef.current?.(), 300);
+      // Call playNext immediately — no setTimeout (Android blocks async play() in background)
+      playNextRef.current?.();
     });
 
     return () => {
@@ -276,7 +276,7 @@ export function PlayerProvider({ children }) {
   finishedUrlsRef.current = finishedUrls;
 
   // ─── Internal: switch audio source and play (safe in background) ─────────
-  const playEpisodeAudio = useCallback((episode, queue_) => {
+  const playEpisodeAudio = useCallback((episode, queue_, skipResume = false) => {
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -288,7 +288,7 @@ export function PlayerProvider({ children }) {
     currentEpisodeRef.current = episode;
 
     const savedProgress = getCachedProgress(episode.audioUrl);
-    const resumeAt = savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
+    const resumeAt = !skipResume && savedProgress && savedProgress.position_seconds > MIN_SAVE_POSITION && !savedProgress.finished
       ? savedProgress.position_seconds
       : (episode.skip_start_seconds || 0);
 
@@ -374,8 +374,8 @@ export function PlayerProvider({ children }) {
     for (let i = idx + 1; i < q.length; i++) {
       const nextEp = q[i];
       if (!finishedUrlsRef.current.has(nextEp.audioUrl)) {
-        // Use ref-based function to avoid React state issues in background
-        playEpisodeAudioRef.current?.(nextEp, q);
+        // skipResume=true: don't use loadedmetadata in background (Android blocks it)
+        playEpisodeAudioRef.current?.(nextEp, q, true);
         return;
       }
     }
