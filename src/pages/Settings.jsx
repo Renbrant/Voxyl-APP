@@ -8,6 +8,7 @@ import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import BlockedUsersModal from '@/components/profile/BlockedUsersModal';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import PageTransition from '@/components/common/PageTransition';
 
 const THEME_OPTIONS = () => [
   { key: 'auto', label: t('settingsThemeAuto'), icon: Monitor },
@@ -139,6 +140,7 @@ export default function Settings() {
   };
 
   return (
+    <PageTransition>
     <div className="bg-background pb-24">
       <VoxylHeader 
         title={t('settingsTitle')}
@@ -327,5 +329,6 @@ export default function Settings() {
         )}
       </AnimatePresence>
     </div>
+    </PageTransition>
   );
 }

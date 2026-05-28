@@ -1,6 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { t } from '@/lib/i18n';
+import PageTransition from '@/components/common/PageTransition';
 
 const getSections = () => [
   {
@@ -46,6 +47,7 @@ export default function PrivacyPolicy() {
   const sections = getSections();
 
   return (
+    <PageTransition>
     <div className="min-h-screen bg-background">
       {/* Header */}
       <div className="sticky top-0 z-10 glass border-b border-border px-4 py-4 flex items-center gap-3"
@@ -124,5 +126,6 @@ export default function PrivacyPolicy() {
         </div>
       </div>
     </div>
+    </PageTransition>
   );
 }

@@ -109,7 +109,12 @@ export default function Feed() {
   const handleLike = requireAuth(async (playlist) => {
     const liked = likes.includes(playlist.id);
     setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
-    await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+    try {
+      await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+    } catch {
+      // Revert optimistic update on failure
+      setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));
+    }
   });
 
   const visiblePlaylists = playlists.filter(p => {

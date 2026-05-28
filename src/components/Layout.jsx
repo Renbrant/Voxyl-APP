@@ -62,7 +62,7 @@ export default function Layout() {
     <div className="flex flex-col bg-background max-w-md mx-auto relative" style={{ height: '100dvh' }}>
       <main
         className="flex-1 overflow-y-auto pb-20"
-        style={{ WebkitOverflowScrolling: 'touch', paddingBottom: 'calc(5rem + min(env(safe-area-inset-bottom, 0px), 4px))' }}
+        style={{ WebkitOverflowScrolling: 'touch', paddingBottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}
       >
         <Outlet />
       </main>
@@ -72,7 +72,7 @@ export default function Layout() {
 
       <nav
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
-        style={{ paddingBottom: 'min(env(safe-area-inset-bottom, 0px), 4px)', userSelect: 'none', WebkitUserSelect: 'none', background: 'hsl(var(--card))' }}
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)', userSelect: 'none', WebkitUserSelect: 'none', background: 'hsl(var(--card))' }}
       >
         <div className="flex items-center justify-around px-2 py-3">
           {getNavItems().map(({ icon: Icon, label, path }) => {

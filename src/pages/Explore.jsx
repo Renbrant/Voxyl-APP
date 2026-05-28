@@ -111,7 +111,12 @@ export default function Explore() {
     if (!user) return;
     const liked = likes.includes(playlist.id);
     setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
-    await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+    try {
+      await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+    } catch {
+      // Revert optimistic update on failure
+      setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));
+    }
   };
 
   // Fetch Voxyl playlists ordered by last week's plays across all users

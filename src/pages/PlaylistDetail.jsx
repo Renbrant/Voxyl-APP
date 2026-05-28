@@ -62,7 +62,11 @@ export default function PlaylistDetail() {
     e?.stopPropagation?.();
     if (!playlist) return;
     setLiked(v => !v);
-    await base44.functions.invoke('togglePlaylistLike', { playlist_id: id });
+    try {
+      await base44.functions.invoke('togglePlaylistLike', { playlist_id: id });
+    } catch {
+      setLiked(v => !v); // revert on failure
+    }
   });
 
   useEffect(() => {
@@ -114,20 +118,24 @@ export default function PlaylistDetail() {
     e?.stopPropagation?.();
     if (!playlist || isOwner) return;
     setFollowingLoader(true);
-    if (following) {
-      const records = await base44.entities.Follow.filter({ follower_id: user.id, following_id: playlist.creator_id });
-      if (records[0]) await base44.entities.Follow.delete(records[0].id);
-      setFollowing(false);
-    } else {
-      await base44.entities.Follow.create({
-        follower_id: user.id,
-        follower_email: user.email,
-        follower_name: user.full_name || user.email.split('@')[0],
-        follower_username: user.username || '',
-        following_id: playlist.creator_id,
-        status: 'accepted'
-      });
-      setFollowing(true);
+    const prevFollowing = following;
+    setFollowing(v => !v);
+    try {
+      if (prevFollowing) {
+        const records = await base44.entities.Follow.filter({ follower_id: user.id, following_id: playlist.creator_id });
+        if (records[0]) await base44.entities.Follow.delete(records[0].id);
+      } else {
+        await base44.entities.Follow.create({
+          follower_id: user.id,
+          follower_email: user.email,
+          follower_name: user.full_name || user.email.split('@')[0],
+          follower_username: user.username || '',
+          following_id: playlist.creator_id,
+          status: 'accepted'
+        });
+      }
+    } catch {
+      setFollowing(prevFollowing); // revert on failure
     }
     setFollowingLoader(false);
   });
