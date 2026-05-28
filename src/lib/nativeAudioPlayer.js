@@ -54,7 +54,8 @@ class NativeAudioPlayer {
 
       await this._plugin.configure({
         fade: false,
-        focus: true,
+        focus: true,          // Request audio focus (Android) / AVAudioSession (iOS)
+        backgroundAudio: true, // Keep playback alive when screen locks / app backgrounds
       });
 
       // currentTime events — fired every ~100ms while playing
@@ -114,24 +115,39 @@ class NativeAudioPlayer {
         prevEnabled: true,
       });
 
-      // Fetch duration
-      try {
-        const { duration } = await this._plugin.getDuration({ assetId: ASSET_ID });
-        this._duration = (duration ?? 0) / 1000; // ms → s
-      } catch (_) {}
-
-      // Seek to resume position before starting
-      if (resumeAt > 0) {
-        await this._plugin.setCurrentTime({
-          assetId: ASSET_ID,
-          time: resumeAt * 1000, // s → ms
-        }).catch(() => {});
-      }
-
       await this._plugin.play({ assetId: ASSET_ID });
+
+      // iOS AVPlayer populates duration asynchronously after play() starts.
+      // Poll until we get a valid value (up to ~3s).
+      this._pollDuration(url, resumeAt);
 
     } catch (err) {
       console.error('[NativeAudioPlayer] play() failed:', err?.message);
+    }
+  }
+
+  // ── Duration polling (iOS AVPlayer needs time after play()) ──────────────
+  async _pollDuration(urlAtStart, resumeAt) {
+    const MAX_ATTEMPTS = 30; // 30 × 200ms = 6s max
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      // Stop if the track changed while we were polling
+      if (this._currentUrl !== urlAtStart) return;
+      await new Promise(r => setTimeout(r, 200));
+      try {
+        const { duration } = await this._plugin.getDuration({ assetId: ASSET_ID });
+        const durSec = (duration ?? 0) / 1000;
+        if (durSec > 0) {
+          this._duration = durSec;
+          // Now that duration is known, seek to resume position
+          if (resumeAt > 0 && this._currentUrl === urlAtStart) {
+            await this._plugin.setCurrentTime({
+              assetId: ASSET_ID,
+              time: resumeAt * 1000,
+            }).catch(() => {});
+          }
+          return;
+        }
+      } catch (_) {}
     }
   }
 
