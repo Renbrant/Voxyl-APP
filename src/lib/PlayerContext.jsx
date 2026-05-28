@@ -25,6 +25,9 @@ export function PlayerProvider({ children }) {
   const [duration, setDuration] = useState(0);
   const [queue, setQueue] = useState([]);
   const [autoplay, setAutoplay] = useState(true);
+  const queueRef = useRef([]);
+  const autoplayRef = useRef(true);
+  const finishedUrlsRef = useRef(new Set());
   const [playerMinimized, setPlayerMinimized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [finishedUrls, setFinishedUrls] = useState(new Set());
@@ -43,7 +46,8 @@ export function PlayerProvider({ children }) {
   // ─── Mark episode as finished ────────────────────────────────────────────
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
-    setFinishedUrls(prev => new Set([...prev, audioUrl]));
+    finishedUrlsRef.current = new Set([...finishedUrlsRef.current, audioUrl]);
+    setFinishedUrls(new Set(finishedUrlsRef.current));
     const audio = audioRef.current;
     setCachedProgress(audioUrl, audio?.currentTime || 0, audio?.duration || 0, true);
     if (user) saveProgressToDB(base44, user.id, audioUrl).catch(() => {});
@@ -255,13 +259,16 @@ export function PlayerProvider({ children }) {
    }
   }, []);
 
-  // ─── Keep ref in sync ────────────────────────────────────────────────────
+  // ─── Keep refs in sync with state ────────────────────────────────────────
   currentEpisodeRef.current = currentEpisode;
+  queueRef.current = queue;
+  autoplayRef.current = autoplay;
+  finishedUrlsRef.current = finishedUrls;
 
   // ─── play() ──────────────────────────────────────────────────────────────
   const play = (episode, newQueue = [], source = null) => {
-    const updatedQueue = newQueue.length > 0 ? newQueue : queue;
-    if (newQueue.length > 0) setQueue(newQueue);
+    const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
+    if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
     if (source) setEpisodeSource(source);
 
     if (currentEpisode?.audioUrl === episode.audioUrl) {
@@ -324,19 +331,19 @@ export function PlayerProvider({ children }) {
   };
 
   const playNext = () => {
-    if (!currentEpisode || queue.length === 0 || !autoplay) return;
-    const idx = queue.findIndex(e => e.audioUrl === currentEpisode.audioUrl);
-    
-    // Find next unfinished episode
-    for (let i = idx + 1; i < queue.length; i++) {
-      const nextEp = queue[i];
-      if (!finishedUrls.has(nextEp.audioUrl)) {
-        // Play next episode (will resume from saved position if partial)
-        play(nextEp, queue);
+    const ep = currentEpisodeRef.current;
+    const q = queueRef.current;
+    if (!ep || q.length === 0 || !autoplayRef.current) return;
+    const idx = q.findIndex(e => e.audioUrl === ep.audioUrl);
+
+    // Find next unfinished episode using refs (safe when screen is off)
+    for (let i = idx + 1; i < q.length; i++) {
+      const nextEp = q[i];
+      if (!finishedUrlsRef.current.has(nextEp.audioUrl)) {
+        play(nextEp, q);
         return;
       }
     }
-    // All remaining episodes are finished
   };
 
   const playPrev = () => {
