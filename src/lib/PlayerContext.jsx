@@ -439,6 +439,21 @@ export function PlayerProvider({ children }) {
   // ── PLAYBACK API ──────────────────────────────────────────────────────────
   // =========================================================================
 
+  // ── Resolve audio URL — follows server-side redirects to get the final CDN URL ──
+  // Many podcast feeds redirect to a CDN that allows CORS; resolving server-side fixes it.
+  const resolveAudioUrl = useCallback(async (audioUrl) => {
+    try {
+      const res = await base44.functions.invoke('proxyAudio', { audioUrl });
+      const resolved = res?.data?.resolvedUrl;
+      if (resolved && resolved !== audioUrl) {
+        console.log('[resolveAudioUrl] resolved redirect:', audioUrl, '→', resolved);
+      }
+      return resolved || audioUrl;
+    } catch (_) {
+      return audioUrl;
+    }
+  }, []);
+
   const playEpisodeInternal = useCallback(async (episode, q, skipResume = false) => {
     transitioningRef.current = false;
     saveCurrentProgress(true);
@@ -468,7 +483,10 @@ export function PlayerProvider({ children }) {
       // ── Web path ──
       const audio = audioRef.current;
       cancelAnimationFrame(rafRef.current);
-      audio.src = episode.audioUrl;
+
+      // Resolve redirects server-side to get the final CDN URL (fixes CORS on many podcasts)
+      const resolvedUrl = await resolveAudioUrl(episode.audioUrl);
+      audio.src = resolvedUrl;
 
       const doPlay = () => {
         audio.play()
@@ -490,7 +508,7 @@ export function PlayerProvider({ children }) {
       updateMediaSession(episode);
       notifyServiceWorker(episode, q);
     }
-  }, [saveCurrentProgress, updateMediaSession]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [saveCurrentProgress, updateMediaSession, resolveAudioUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const play = useCallback((episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;

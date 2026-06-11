@@ -19,5 +19,8 @@
       "default": false,
       "description": "If true, user won't appear in general searches. Only findable by exact username."
     }
-  }
+  },
+  "required": [
+    "username"
+  ]
 }

@@ -56,5 +56,25 @@
     "reported_user_id",
     "content_type",
     "reason"
-  ]
+  ],
+  "rls": {
+    "create": {
+      "data.reporter_id": "{{user.id}}"
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
 }
