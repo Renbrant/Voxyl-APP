@@ -34,8 +34,9 @@ const config: CapacitorConfig = {
   plugins: {
     // @capgo/capacitor-native-audio plugin configuration
     NativeAudio: {
-      // Keep audio session active when app goes to background / screen locks
       focus: true,
+      backgroundPlayback: true,
+      showNotification: true,
     },
   },
 };

@@ -1,3 +1,7 @@
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { App } from '@capacitor/app';
+import { NativeAudio } from '@capgo/capacitor-native-audio';
+
 /**
  * NativeAudioPlayer — wrapper around @capgo/capacitor-native-audio
  *
@@ -6,18 +10,13 @@
  *   Android  → ExoPlayer via @capgo/capacitor-native-audio
  *   iOS      → AVPlayer via @capgo/capacitor-native-audio
  *
- * The plugin is imported DYNAMICALLY so the web bundle never fails to resolve it.
- * window.Capacitor is injected by the native WebView at runtime.
+ * The plugin provides a web implementation, so importing it directly is safe.
  */
 
-// ─── Platform detection (no static import needed) ───────────────────────────
-export const isNative = !!(
-  typeof window !== 'undefined' &&
-  window.Capacitor &&
-  window.Capacitor.isNativePlatform?.()
-);
+export const isNative = Capacitor.isNativePlatform();
 
 const ASSET_ID = 'voxyl_current'; // single-slot player
+const BackgroundAudioService = registerPlugin('BackgroundAudioService');
 
 class NativeAudioPlayer {
   constructor() {
@@ -32,7 +31,6 @@ class NativeAudioPlayer {
     this._timeListener = null;
     this._stateListener = null;
     this._completeListener = null;
-    this._interruptionListener = null;
     this._appStateListener = null;
   }
 
@@ -46,33 +44,20 @@ class NativeAudioPlayer {
     this._onStateChange = onStateChange;
 
     console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
-    console.log('[NativeAudioPlayer] Capacitor.Plugins keys:', Object.keys(window.Capacitor?.Plugins ?? {}));
-
     try {
-      // Access plugin via Capacitor's global registry — zero static/dynamic imports
-      // The plugin registers itself on window.Capacitor.Plugins when loaded natively
-      const NativeAudio = window.Capacitor?.Plugins?.NativeAudio ?? null;
-      if (!NativeAudio) {
-        console.error('[NativeAudioPlayer] FATAL: NativeAudio plugin not found in Capacitor.Plugins. ' +
-          'Run "npx cap sync android" and rebuild the APK. ' +
-          'Available plugins:', Object.keys(window.Capacitor?.Plugins ?? {}));
-        return;
-      }
-      console.log('[NativeAudioPlayer] NativeAudio plugin found:', !!NativeAudio);
       this._plugin = NativeAudio;
 
       console.log('[NativeAudioPlayer] calling configure()...');
       await this._plugin.configure({
-        fade: false,
-        focus: true,          // Request audio focus (Android) / AVAudioSession (iOS)
-        backgroundAudio: true, // Keep playback alive when screen locks / app backgrounds
+        focus: true,
+        backgroundPlayback: true,
+        showNotification: true,
       });
       console.log('[NativeAudioPlayer] configure() succeeded');
 
       // currentTime events — fired every ~100ms while playing
       this._timeListener = await this._plugin.addListener('currentTime', (data) => {
-        // data: { assetId, currentTime (ms) }
-        const posSec = (data.currentTime ?? 0) / 1000;
+        const posSec = data.currentTime ?? 0;
         this._onTimeUpdate?.(posSec, this._duration);
       });
 
@@ -85,29 +70,13 @@ class NativeAudioPlayer {
 
       // Playback state — fired by lock screen, BT controls, notification, interruptions
       this._stateListener = await this._plugin.addListener('playbackState', (data) => {
-        // data: { assetId, playing }
-        this._isPlaying = !!data.playing;
+        this._isPlaying = !!data.isPlaying;
         this._onStateChange?.(this._isPlaying);
       });
 
-      // iOS audio session interruption (phone call, Siri, alarm, etc.)
-      // When interruption ends with shouldResume=true, resume playback automatically.
-      this._interruptionListener = await this._plugin.addListener('interruption', (data) => {
-        // data: { type: 'began' | 'ended', shouldResume?: boolean }
-        if (data.type === 'ended' && data.shouldResume && this._currentUrl) {
-          console.log('[NativeAudioPlayer] interruption ended — resuming');
-          this._plugin.resume({ assetId: ASSET_ID }).catch(() => {});
-        } else if (data.type === 'began') {
-          // iOS pauses AVPlayer automatically; sync our state
-          this._isPlaying = false;
-          this._onStateChange?.(false);
-        }
-      }).catch(() => null); // older plugin versions may not have this event
-
       // Capacitor App state — sync playing state when returning from background
-      const AppPlugin = window.Capacitor?.Plugins?.App ?? null;
-      if (AppPlugin) {
-        this._appStateListener = await AppPlugin.addListener('appStateChange', async (state) => {
+      if (App) {
+        this._appStateListener = await App.addListener('appStateChange', async (state) => {
           if (state.isActive && this._currentUrl) {
             // Re-sync actual playing state from the native engine
             try {
@@ -115,10 +84,10 @@ class NativeAudioPlayer {
               // If we think we're playing but native stopped (e.g. iOS killed session),
               // fire onStateChange so the UI reflects reality.
               // We detect a stall by comparing last known time vs now after 500ms.
-              const timeBefore = (currentTime ?? 0) / 1000;
+              const timeBefore = currentTime ?? 0;
               await new Promise(r => setTimeout(r, 500));
               const { currentTime: currentTime2 } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
-              const timeAfter = (currentTime2 ?? 0) / 1000;
+              const timeAfter = currentTime2 ?? 0;
               const actuallyPlaying = Math.abs(timeAfter - timeBefore) > 0.05;
               if (this._isPlaying !== actuallyPlaying) {
                 this._isPlaying = actuallyPlaying;
@@ -157,6 +126,10 @@ class NativeAudioPlayer {
     console.log('[NativeAudioPlayer] loading URL:', url, '| resumeAt:', resumeAt);
 
     try {
+      await BackgroundAudioService.start().catch((error) => {
+        console.warn('[NativeAudioPlayer] foreground service start failed:', error?.message);
+      });
+
       // Unload previous asset if URL changed
       if (this._currentUrl && this._currentUrl !== url) {
         console.log('[NativeAudioPlayer] unloading previous asset:', this._currentUrl);
@@ -173,13 +146,12 @@ class NativeAudioPlayer {
         assetPath: url,
         audioChannelNum: 1,
         isUrl: true,
-        // Notification / lockscreen metadata
-        title: episode.title || '',
-        artist: episode.feedTitle || 'Voxyl',
-        albumTitle: 'Voxyl',
-        artworkUrl: episode.image || '',
-        nextEnabled: true,
-        prevEnabled: true,
+        notificationMetadata: {
+          title: episode.title || '',
+          artist: episode.feedTitle || 'Voxyl',
+          album: 'Voxyl',
+          artworkUrl: episode.image || '',
+        },
       });
 
       console.log('[NativeAudioPlayer] preload() succeeded, calling play()...');
@@ -193,6 +165,9 @@ class NativeAudioPlayer {
 
     } catch (err) {
       console.error('[NativeAudioPlayer] play() FAILED:', err?.message, err);
+      this._isPlaying = false;
+      this._onStateChange?.(false);
+      throw err;
     }
   }
 
@@ -205,14 +180,14 @@ class NativeAudioPlayer {
       await new Promise(r => setTimeout(r, 200));
       try {
         const { duration } = await this._plugin.getDuration({ assetId: ASSET_ID });
-        const durSec = (duration ?? 0) / 1000;
+        const durSec = duration ?? 0;
         if (durSec > 0) {
           this._duration = durSec;
           // Now that duration is known, seek to resume position
           if (resumeAt > 0 && this._currentUrl === urlAtStart) {
             await this._plugin.setCurrentTime({
               assetId: ASSET_ID,
-              time: resumeAt * 1000,
+              time: resumeAt,
             }).catch(() => {});
           }
           return;
@@ -244,7 +219,7 @@ class NativeAudioPlayer {
     this._seekTimer = setTimeout(() => {
       this._plugin.setCurrentTime({
         assetId: ASSET_ID,
-        time: seconds * 1000,
+        time: seconds,
       }).catch(() => {});
     }, 80);
   }
@@ -258,6 +233,7 @@ class NativeAudioPlayer {
     if (!isNative || !this._ready) return;
     await this._plugin.stop({ assetId: ASSET_ID }).catch(() => {});
     await this._plugin.unload({ assetId: ASSET_ID }).catch(() => {});
+    await BackgroundAudioService.stop().catch(() => {});
     this._currentUrl = null;
     this._duration = 0;
   }
@@ -267,7 +243,7 @@ class NativeAudioPlayer {
     if (!isNative || !this._ready) return 0;
     try {
       const { currentTime } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
-      return (currentTime ?? 0) / 1000;
+      return currentTime ?? 0;
     } catch (_) {
       return 0;
     }
@@ -282,13 +258,20 @@ class NativeAudioPlayer {
     return this._ready === true;
   }
 
+  async waitUntilReady(timeoutMs = 1500) {
+    const deadline = Date.now() + timeoutMs;
+    while (!this._ready && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return this._ready;
+  }
+
   // ── Cleanup listeners ────────────────────────────────────────────────────
   async destroy() {
     clearTimeout(this._seekTimer);
     await this._timeListener?.remove?.();
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
-    await this._interruptionListener?.remove?.();
     await this._appStateListener?.remove?.();
     await this.stop();
   }

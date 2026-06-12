@@ -16,6 +16,8 @@ const PlayerContext = createContext(null);
 
 const LOCAL_SAVE_INTERVAL_MS = 5000;
 const DB_SAVE_INTERVAL_MS = 30000;
+const LOADING_TIMEOUT_MS = 8000;
+const PLAY_RETRY_DELAYS_MS = [0, 750, 2000];
 
 export function PlayerProvider({ children }) {
   const [currentEpisode, setCurrentEpisode] = useState(null);
@@ -43,6 +45,7 @@ export function PlayerProvider({ children }) {
   const finishedUrlsRef = useRef(new Set());
   const transitioningRef = useRef(false);
   const rafRef = useRef(null);           // rAF id — web only
+  const loadingWatchdogRef = useRef(null);
 
   // ─── Save / progress refs ────────────────────────────────────────────────
   const localSaveTimerRef = useRef(null);
@@ -125,6 +128,88 @@ export function PlayerProvider({ children }) {
     dbSaveTimerRef.current = setInterval(() => saveCurrentProgress(true), DB_SAVE_INTERVAL_MS);
   }, [saveCurrentProgress, stopSaveTimers]);
 
+  const clearLoadingState = useCallback(() => {
+    clearTimeout(loadingWatchdogRef.current);
+    loadingWatchdogRef.current = null;
+    setIsLoading(false);
+  }, []);
+
+  const armLoadingWatchdog = useCallback((reason) => {
+    clearTimeout(loadingWatchdogRef.current);
+    setIsLoading(true);
+    loadingWatchdogRef.current = setTimeout(() => {
+      const audio = audioRef.current;
+      console.error('[PLAYLIST] audio loading timed out', {
+        reason,
+        episode: currentEpisodeRef.current?.title,
+        src: audio?.currentSrc || audio?.src,
+        networkState: audio?.networkState,
+        readyState: audio?.readyState,
+      });
+      setIsLoading(false);
+      setIsPlaying(false);
+      transitioningRef.current = false;
+    }, LOADING_TIMEOUT_MS);
+  }, []);
+
+  const waitForMediaReady = useCallback((audio, timeoutMs) => new Promise((resolve) => {
+    if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      audio.removeEventListener('canplay', finish);
+      audio.removeEventListener('canplaythrough', finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+    audio.addEventListener('canplay', finish, { once: true });
+    audio.addEventListener('canplaythrough', finish, { once: true });
+  }), []);
+
+  const requestWebPlayback = useCallback(async (audio, transitionLabel) => {
+    let lastError = null;
+
+    for (let attempt = 0; attempt < PLAY_RETRY_DELAYS_MS.length; attempt += 1) {
+      const delay = PLAY_RETRY_DELAYS_MS[attempt];
+      if (delay > 0) await waitForMediaReady(audio, delay);
+
+      try {
+        console.log('[PLAYLIST] play() requested', {
+          transition: transitionLabel,
+          attempt: attempt + 1,
+          src: audio.currentSrc || audio.src,
+        });
+        await audio.play();
+        console.log('[PLAYLIST] play() resolved', {
+          transition: transitionLabel,
+          attempt: attempt + 1,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        console.error('[PLAYLIST] play() rejected', {
+          transition: transitionLabel,
+          attempt: attempt + 1,
+          name: error?.name,
+          message: error?.message,
+        });
+
+        const recoverable = error?.name === 'AbortError' ||
+          error?.name === 'NotAllowedError' ||
+          audio.networkState === HTMLMediaElement.NETWORK_LOADING;
+        if (!recoverable) break;
+      }
+    }
+
+    throw lastError || new Error('Audio playback did not start');
+  }, [waitForMediaReady]);
+
   // ── Web-only: MediaSession metadata ───────────────────────────────────────
   const updateMediaSession = useCallback((episode) => {
     if (isNative || !('mediaSession' in navigator)) return;
@@ -146,8 +231,10 @@ export function PlayerProvider({ children }) {
   // ── Advance to next episode ───────────────────────────────────────────────
   const advanceToNextEpisodeRef = useRef(null);
 
-  const advanceToNextEpisode = useCallback(async () => {
-    if (!autoplayRef.current) {
+  const advanceToNextEpisode = useCallback(async (source = 'UNKNOWN') => {
+    const isManualAdvance = source === 'MANUAL NEXT' || source === 'MEDIA SESSION NEXT';
+    if (!autoplayRef.current && !isManualAdvance) {
+      if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.stop().catch(() => {});
       transitioningRef.current = false;
       return;
     }
@@ -157,10 +244,22 @@ export function PlayerProvider({ children }) {
     const nextEpisode = currentQueue[nextIdx];
 
     if (!nextEpisode) {
+      if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.stop().catch(() => {});
       transitioningRef.current = false;
       setIsPlaying(false);
+      clearLoadingState();
       return;
     }
+
+    console.log('[PLAYLIST] current episode ended', {
+      source,
+      title: currentEpisodeRef.current?.title,
+      index: currentIndexRef.current,
+    });
+    console.log('[PLAYLIST] next episode selected', {
+      title: nextEpisode.title,
+      index: nextIdx,
+    });
 
     // Save + mark current as finished
     saveCurrentProgress(true);
@@ -173,49 +272,70 @@ export function PlayerProvider({ children }) {
 
     currentEpisodeRef.current = nextEpisode;
     currentIndexRef.current = nextIdx;
+    setCurrentEpisode(nextEpisode);
+    setCurrentTime(0);
+    setDuration(0);
+    setFinishedUrls(new Set(finishedUrlsRef.current));
+    armLoadingWatchdog(`advance:${source}`);
 
-    if (isNative && nativeAudioPlayer.isReady()) {
-      // ── Native path ──
-      setCurrentEpisode(nextEpisode);
-      setIsLoading(true);
-      setFinishedUrls(new Set(finishedUrlsRef.current));
-      await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
-      setIsPlaying(true);
-      setIsLoading(false);
-    } else {
-      // ── Web path ──
-      const audio = audioRef.current;
-      cancelAnimationFrame(rafRef.current);
-      audio.pause();
-      audio.src = nextEpisode.audioUrl;
-      audio.load();
-      audio.currentTime = nextEpisode.skip_start_seconds || 0;
-      audio.volume = volumeRef.current ?? 1;
-      try {
-        await audio.play();
-        setCurrentEpisode(nextEpisode);
+    try {
+      if (isNative && nativeAudioPlayer.isReady()) {
+        await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
         setIsPlaying(true);
-        setIsLoading(false);
-        setFinishedUrls(new Set(finishedUrlsRef.current));
+        clearLoadingState();
+      } else {
+        const audio = audioRef.current;
+        if (!audio) throw new Error('Shared audio element is unavailable');
+
+        cancelAnimationFrame(rafRef.current);
+        audio.pause();
+        audio.src = nextEpisode.audioUrl;
+        audio.volume = volumeRef.current ?? 1;
+        console.log('[PLAYLIST] next URL assigned', {
+          title: nextEpisode.title,
+          url: nextEpisode.audioUrl,
+        });
+        audio.load();
+
+        const startAt = nextEpisode.skip_start_seconds || 0;
+        if (startAt > 0) {
+          await waitForMediaReady(audio, 2000);
+          audio.currentTime = startAt;
+        }
+
+        await requestWebPlayback(audio, `advance:${source}`);
+        setIsPlaying(true);
+        clearLoadingState();
         updateMediaSession(nextEpisode);
         notifyServiceWorker(nextEpisode, currentQueue);
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
-      } catch (err) {
-        console.error('[ADVANCE] play() failed', err);
       }
+    } catch (error) {
+      console.error('[PLAYLIST] next episode failed', {
+        source,
+        title: nextEpisode.title,
+        name: error?.name,
+        message: error?.message,
+      });
+      clearLoadingState();
+      setIsPlaying(false);
+    } finally {
+      transitioningRef.current = false;
     }
-
-    transitioningRef.current = false;
-  }, [saveCurrentProgress, updateMediaSession]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    armLoadingWatchdog,
+    clearLoadingState,
+    requestWebPlayback,
+    saveCurrentProgress,
+    updateMediaSession,
+    waitForMediaReady,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   advanceToNextEpisodeRef.current = advanceToNextEpisode;
 
   const tryAdvance = useCallback((source) => {
     if (!transitioningRef.current) {
       transitioningRef.current = true;
-      console.log(`[${source}] triggering advance`);
-      advanceToNextEpisodeRef.current?.();
+      advanceToNextEpisodeRef.current?.(source);
     }
   }, []);
 
@@ -303,14 +423,16 @@ export function PlayerProvider({ children }) {
 
     // ── Audio error diagnostics ───────────────────────────────────────────
     audio.addEventListener('error', () => {
-      console.error('[AUDIO ERROR]',
-        'code:', audio.error?.code,
-        'message:', audio.error?.message,
-        'src:', audio.src,
-        'currentSrc:', audio.currentSrc,
-        'networkState:', audio.networkState,
-        'readyState:', audio.readyState
-      );
+      console.error('[PLAYLIST] audio error', {
+        code: audio.error?.code,
+        message: audio.error?.message,
+        src: audio.currentSrc || audio.src,
+        networkState: audio.networkState,
+        readyState: audio.readyState,
+      });
+      clearLoadingState();
+      setIsPlaying(false);
+      transitioningRef.current = false;
     });
 
     audio.addEventListener('timeupdate', () => {
@@ -334,11 +456,32 @@ export function PlayerProvider({ children }) {
       setDuration(isNaN(audio.duration) ? 0 : audio.duration);
     });
 
-    audio.addEventListener('waiting', () => setIsLoading(true));
-    audio.addEventListener('canplay', () => setIsLoading(false));
+    audio.addEventListener('stalled', () => {
+      console.warn('[PLAYLIST] audio stalled', {
+        title: currentEpisodeRef.current?.title,
+        src: audio.currentSrc || audio.src,
+      });
+      armLoadingWatchdog('stalled');
+    });
+
+    audio.addEventListener('waiting', () => {
+      console.warn('[PLAYLIST] audio waiting', {
+        title: currentEpisodeRef.current?.title,
+        src: audio.currentSrc || audio.src,
+      });
+      armLoadingWatchdog('waiting');
+    });
+
+    audio.addEventListener('canplay', clearLoadingState);
+    audio.addEventListener('canplaythrough', clearLoadingState);
 
     audio.addEventListener('playing', () => {
-      setIsLoading(false);
+      console.log('[PLAYLIST] audio playing', {
+        title: currentEpisodeRef.current?.title,
+        src: audio.currentSrc || audio.src,
+      });
+      clearLoadingState();
+      setIsPlaying(true);
       startSaveTimers();
       requestWakeLock();
       cancelAnimationFrame(rafRef.current);
@@ -346,6 +489,10 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('pause', () => {
+      console.log('[PLAYLIST] audio paused', {
+        title: currentEpisodeRef.current?.title,
+        ended: audio.ended,
+      });
       stopSaveTimers();
       saveCurrentProgress(true);
       cancelAnimationFrame(rafRef.current);
@@ -353,8 +500,7 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('ended', () => {
-      console.log('[ENDED FALLBACK]', currentEpisodeRef.current?.title);
-      tryAdvance('ENDED FALLBACK');
+      tryAdvance('AUDIO ENDED');
     });
 
     return () => {
@@ -362,6 +508,7 @@ export function PlayerProvider({ children }) {
       audio.src = '';
       stopSaveTimers();
       cancelAnimationFrame(rafRef.current);
+      clearTimeout(loadingWatchdogRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -502,7 +649,7 @@ export function PlayerProvider({ children }) {
     transitioningRef.current = false;
     saveCurrentProgress(true);
 
-    setIsLoading(true);
+    armLoadingWatchdog('manual-play');
     setCurrentEpisode(episode);
     currentEpisodeRef.current = episode;
 
@@ -514,54 +661,80 @@ export function PlayerProvider({ children }) {
       ? savedProgress.position_seconds
       : (episode.skip_start_seconds || 0);
 
+    if (isNative && !nativeAudioPlayer.isReady()) {
+      await nativeAudioPlayer.waitUntilReady();
+    }
     const pluginReady = isNative && nativeAudioPlayer.isReady();
     console.log('[PlayerContext] playEpisodeInternal — isNative:', isNative, 'pluginReady:', pluginReady, 'url:', episode.audioUrl);
 
     if (pluginReady) {
-      // ── Native path ──
-      await nativeAudioPlayer.play(episode, resumeAt);
-      const dur = nativeAudioPlayer.getDuration();
-      if (dur > 0) { setDuration(dur); nativeDurationRef.current = dur; }
-      setCurrentTime(resumeAt);
-      nativeCurrentTimeRef.current = resumeAt;
-      setIsPlaying(true);
-      setIsLoading(false);
+      try {
+        await nativeAudioPlayer.play(episode, resumeAt);
+        const dur = nativeAudioPlayer.getDuration();
+        if (dur > 0) { setDuration(dur); nativeDurationRef.current = dur; }
+        setCurrentTime(resumeAt);
+        nativeCurrentTimeRef.current = resumeAt;
+        setIsPlaying(true);
+        clearLoadingState();
+      } catch (error) {
+        console.error('[PLAYLIST] native play failed', {
+          title: episode.title,
+          name: error?.name,
+          message: error?.message,
+        });
+        clearLoadingState();
+        setIsPlaying(false);
+      }
     } else {
       if (isNative) {
         console.warn('[PlayerContext] isNative=true but plugin NOT ready — falling back to web Audio element');
       }
       // ── Web path ──
       const audio = audioRef.current;
+      if (!audio) {
+        clearLoadingState();
+        setIsPlaying(false);
+        console.error('[PLAYLIST] shared audio element unavailable');
+        return;
+      }
       cancelAnimationFrame(rafRef.current);
       audio.src = episode.audioUrl;
+      audio.volume = volumeRef.current ?? 1;
+      console.log('[PLAYLIST] next URL assigned', {
+        title: episode.title,
+        url: episode.audioUrl,
+      });
+      audio.load();
 
-      const doPlay = () => {
-        console.log('[WEB AUDIO] about to play()',
-          'src:', audio.src,
-          'currentSrc:', audio.currentSrc,
-          'readyState:', audio.readyState,
-          'networkState:', audio.networkState
-        );
-        audio.play()
-          .then(() => { setIsPlaying(true); })
-          .catch(e => console.error('[WEB AUDIO] play() rejected —', 'name:', e?.name, 'message:', e?.message, e));
-      };
-
-      if (resumeAt > 0) {
-        audio.addEventListener('loadedmetadata', function onMeta() {
-          audio.removeEventListener('loadedmetadata', onMeta);
+      try {
+        if (resumeAt > 0) {
+          await waitForMediaReady(audio, 2000);
           audio.currentTime = resumeAt;
-          doPlay();
+        }
+        await requestWebPlayback(audio, 'manual-play');
+        setIsPlaying(true);
+        clearLoadingState();
+      } catch (error) {
+        console.error('[PLAYLIST] manual play failed', {
+          title: episode.title,
+          name: error?.name,
+          message: error?.message,
         });
-        audio.load();
-      } else {
-        doPlay();
+        clearLoadingState();
+        setIsPlaying(false);
       }
 
       updateMediaSession(episode);
       notifyServiceWorker(episode, q);
     }
-  }, [saveCurrentProgress, updateMediaSession]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    armLoadingWatchdog,
+    clearLoadingState,
+    requestWebPlayback,
+    saveCurrentProgress,
+    updateMediaSession,
+    waitForMediaReady,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const play = useCallback((episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
@@ -614,7 +787,6 @@ export function PlayerProvider({ children }) {
   }, []);
 
   const playNext = useCallback(() => {
-    if (!autoplayRef.current) return;
     tryAdvance('MANUAL NEXT');
   }, [tryAdvance]);
 
