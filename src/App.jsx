@@ -67,7 +67,6 @@ const BackButtonHandler = () => {
 
   useEffect(() => {
     const handlePopState = () => {
-      // If we're not at the root, go back; otherwise let the browser handle it
       if (location.pathname !== '/') {
         navigate(-1);
       }
@@ -76,6 +75,46 @@ const BackButtonHandler = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [location.pathname, navigate]);
 
+  return null;
+};
+
+/**
+ * Handles the OAuth callback on Capacitor Android.
+ * After Google login, Chrome redirects to https://voxyl-app.base44.app?access_token=...
+ * If Android App Links are configured, the OS re-opens this APK with that URL.
+ * We capture the token from the URL params here.
+ */
+const CapacitorOAuthHandler = () => {
+  useEffect(() => {
+    // Check if there's already an access_token in the URL (web fallback)
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('access_token');
+    if (token) {
+      localStorage.setItem('base44_access_token', token);
+      // Clean the token from the URL and reload so AuthContext picks it up
+      params.delete('access_token');
+      const clean = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}`;
+      window.history.replaceState({}, '', clean);
+      window.location.reload();
+      return;
+    }
+
+    // On Capacitor native, also listen for appUrlOpen (Android App Links)
+    if (!window.Capacitor?.isNativePlatform?.()) return;
+    let cleanup = null;
+    const CapApp = window.Capacitor?.Plugins?.App;
+    if (CapApp) {
+      CapApp.addListener('appUrlOpen', ({ url }) => {
+        const urlParams = new URLSearchParams(new URL(url).search);
+        const t = urlParams.get('access_token');
+        if (t) {
+          localStorage.setItem('base44_access_token', t);
+          window.location.replace('/');
+        }
+      }).then(handle => { cleanup = handle; });
+    }
+    return () => { cleanup?.remove?.(); };
+  }, []);
   return null;
 };
 
@@ -106,6 +145,7 @@ const AuthenticatedApp = () => {
   return (
     <>
     <BackButtonHandler />
+    <CapacitorOAuthHandler />
     <Routes location={location}>
       <Route element={<Layout />}>
         <Route path="/" element={<Feed />} />
