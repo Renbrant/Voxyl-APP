@@ -39,7 +39,9 @@
   ],
   "rls": {
     "create": {
-      "data.follower_id": "{{user.id}}"
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "read": {
       "$or": [
@@ -57,19 +59,9 @@
       ]
     },
     "update": {
-      "$or": [
-        {
-          "data.follower_id": "{{user.id}}"
-        },
-        {
-          "data.following_id": "{{user.id}}"
-        },
-        {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
-      ]
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "delete": {
       "$or": [
