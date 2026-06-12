@@ -51,10 +51,8 @@ export default function UserProfile() {
   }, [userId]);
 
   useEffect(() => {
-    if (!currentUser) return;
-
-    // Fetch playlists via backend function (respects friends_only visibility)
-    base44.functions.invoke('getUserPlaylists', { userId, currentUserId: currentUser.id })
+    // Fetch playlists — auth is resolved server-side, no need to wait for currentUser
+    base44.functions.invoke('getUserPlaylists', { userId })
       .then(res => {
         const data = res.data;
         setPlaylists(data.playlists || []);
@@ -70,6 +68,10 @@ export default function UserProfile() {
         }
       })
       .catch(() => setLoading(false));
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!currentUser) return;
 
     // Check follow status for pending
     base44.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
