@@ -2,9 +2,13 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 
+// Only two events are supported by @capacitor/browser v8:
+//   - browserFinished  (user closed the browser)
+//   - browserPageLoaded (initial URL finished loading — NOT subsequent navigations)
+// There is NO browserUrlChanged event. Do not add it.
+
 const WEB_CALLBACK_ORIGIN = 'https://voxyl.renbrant.com';
 const WEB_CALLBACK_PATH = '/auth/callback';
-const APP_BASE_URL = 'https://voxyl-app.base44.app';
 const HANDLED_URL_KEY = 'voxyl_last_auth_callback';
 const POST_AUTH_PATH_KEY = 'voxyl_post_auth_path';
 
@@ -16,13 +20,11 @@ const getTokenFromUrl = (url) => {
   log('Parsing token from URL:', url);
   try {
     const parsedUrl = new URL(url);
-
-    // 1. Query params
     const qp = parsedUrl.searchParams;
+
     const qpToken = qp.get('access_token') || qp.get('access_tc') || qp.get('token');
     if (qpToken) { log('Token found in query params'); return qpToken; }
 
-    // 2. Hash params
     const hashString = parsedUrl.hash.replace(/^#/, '');
     if (hashString) {
       const hp = new URLSearchParams(hashString);
@@ -30,7 +32,6 @@ const getTokenFromUrl = (url) => {
       if (hpToken) { log('Token found in hash params'); return hpToken; }
     }
 
-    // 3. Log everything for debugging
     log('All query params:', Object.fromEntries(qp.entries()));
     log('Hash string:', hashString || '(empty)');
     log('No token found in URL');
@@ -41,36 +42,26 @@ const getTokenFromUrl = (url) => {
   }
 };
 
-// ── URL match checks ────────────────────────────────────────────────────────
+// ── URL match check ─────────────────────────────────────────────────────────
 const isCallbackUrl = (url) => {
   try {
     const p = new URL(url);
-    // Our verified App Link callback
     const isWebCallback = p.origin === WEB_CALLBACK_ORIGIN && p.pathname === WEB_CALLBACK_PATH;
-    // Custom scheme fallback
     const isCustomScheme = p.protocol === 'com.renbrant.voxyl:'
       && p.hostname === 'auth' && p.pathname === '/callback';
-    // Base44 app URL with token (catches redirect before App Link fires)
-    const isBase44WithToken = p.origin === APP_BASE_URL
-      && (p.searchParams.has('access_token') || p.searchParams.has('access_tc')
-          || p.hash.includes('access_token') || p.hash.includes('access_tc'));
-
-    log('URL check — origin:', p.origin, 'path:', p.pathname,
-      '| isWebCallback:', isWebCallback,
-      '| isCustomScheme:', isCustomScheme,
-      '| isBase44WithToken:', isBase44WithToken);
-    return isWebCallback || isCustomScheme || isBase44WithToken;
+    log('URL check — isWebCallback:', isWebCallback, '| isCustomScheme:', isCustomScheme, '| url:', url);
+    return isWebCallback || isCustomScheme;
   } catch (e) {
-    err('isCallbackUrl parse error:', e?.message, 'url:', url);
+    err('isCallbackUrl parse error:', e?.message);
     return false;
   }
 };
 
-// ── Core handler (shared between appUrlOpen and browserPageLoaded) ──────────
+// ── Core handler ────────────────────────────────────────────────────────────
 export const handleNativeAuthCallback = async (url) => {
   log('handleNativeAuthCallback called with url:', url);
   if (!url) { log('No URL, skipping'); return false; }
-  if (!isCallbackUrl(url)) { log('Not a callback URL, skipping'); return false; }
+  if (!isCallbackUrl(url)) { log('Not a callback URL, skipping:', url); return false; }
 
   const token = getTokenFromUrl(url);
   if (!token) {
@@ -78,9 +69,8 @@ export const handleNativeAuthCallback = async (url) => {
     return false;
   }
 
-  // Deduplicate within session
   if (sessionStorage.getItem(HANDLED_URL_KEY) === url) {
-    log('Already handled this URL this session');
+    log('Already handled this session');
     return true;
   }
   sessionStorage.setItem(HANDLED_URL_KEY, url);
@@ -94,14 +84,13 @@ export const handleNativeAuthCallback = async (url) => {
     await Browser.close();
     log('Browser.close() succeeded');
   } catch (e) {
-    log('Browser.close() skipped (already closed):', e?.message);
+    log('Browser.close() skipped:', e?.message);
   }
 
   const postAuthPath = localStorage.getItem(POST_AUTH_PATH_KEY) || '/';
   localStorage.removeItem(POST_AUTH_PATH_KEY);
   log('Redirecting to post-auth path:', postAuthPath);
 
-  // Small delay to allow Browser to fully close before navigation
   await new Promise(r => setTimeout(r, 200));
   window.location.replace(postAuthPath);
   return true;
@@ -111,45 +100,25 @@ export const handleNativeAuthCallback = async (url) => {
 export const initializeNativeAuthCallback = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
-  // 1. appUrlOpen — fires when Android App Link opens the native app from Chrome
+  // appUrlOpen fires when Android intercepts a verified App Link URL.
+  // This is the ONLY reliable way to capture the callback with @capacitor/browser.
   log('Registering appUrlOpen listener');
   await CapacitorApp.addListener('appUrlOpen', ({ url }) => {
     log('appUrlOpen fired! url:', url);
     handleNativeAuthCallback(url).catch(e => err('appUrlOpen handler threw:', e?.message));
   });
 
-  // 2. browserPageLoaded — fires on EVERY navigation inside Capacitor Browser.
-  //    This catches the token if Base44 redirects to voxyl.renbrant.com/auth/callback
-  //    while the in-app browser is still open (before Chrome gets a chance to intercept).
-  //    It also catches if Base44 sends the token back on its own domain.
-  log('Registering Browser.addListener(browserPageLoaded)');
+  // browserFinished fires when user manually closes the browser (no token).
+  // Log it so we can tell in logcat whether the browser closed naturally or via redirect.
   try {
-    await Browser.addListener('browserPageLoaded', async () => {
-      // browserPageLoaded doesn't expose the URL, so we use browserFinished
-      // as a signal that the user closed the browser manually (no token received).
-      // We can't read the URL from this event — handled by browserUrlChanged instead.
-      log('browserPageLoaded fired (browser still open)');
-    });
-
-    // browserUrlChanged gives us the URL on each navigation
-    await Browser.addListener('browserUrlChanged', async ({ url }) => {
-      log('browserUrlChanged fired — url:', url);
-      if (isCallbackUrl(url)) {
-        log('Callback URL detected in Browser, handling...');
-        await handleNativeAuthCallback(url).catch(e =>
-          err('browserUrlChanged handler threw:', e?.message)
-        );
-      }
-    });
-
     await Browser.addListener('browserFinished', () => {
-      log('browserFinished fired (user closed browser or redirect completed)');
+      log('browserFinished fired — browser closed (by user or redirect)');
     });
   } catch (e) {
-    log('Browser listener registration failed (may not be supported):', e?.message);
+    log('browserFinished listener failed:', e?.message);
   }
 
-  // 3. Check if app was launched via a callback URL (cold start)
+  // Check cold-start launch URL (app opened directly via App Link while not running)
   log('Checking launch URL');
   const launchUrl = await CapacitorApp.getLaunchUrl();
   log('getLaunchUrl result:', JSON.stringify(launchUrl));
