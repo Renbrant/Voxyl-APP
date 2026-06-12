@@ -64,6 +64,10 @@ class NativeAudioPlayer {
       // Track completed
       this._completeListener = await this._plugin.addListener('complete', (data) => {
         if (data.assetId === ASSET_ID) {
+          console.log('[PLAYLIST] ended fired', {
+            source: 'native',
+            url: this._currentUrl,
+          });
           this._onEnded?.();
         }
       });
@@ -71,6 +75,12 @@ class NativeAudioPlayer {
       // Playback state — fired by lock screen, BT controls, notification, interruptions
       this._stateListener = await this._plugin.addListener('playbackState', (data) => {
         this._isPlaying = !!data.isPlaying;
+        if (this._isPlaying) {
+          console.log('[PLAYLIST] playing event', {
+            source: 'native',
+            url: this._currentUrl,
+          });
+        }
         this._onStateChange?.(this._isPlaying);
       });
 
@@ -109,14 +119,12 @@ class NativeAudioPlayer {
   async play(episode, resumeAt = 0) {
     console.log('[NativeAudioPlayer] play() called — isNative:', isNative, '_ready:', this._ready, 'url:', episode?.audioUrl);
     if (!isNative || !this._ready) {
-      console.warn('[NativeAudioPlayer] play() skipped — isNative:', isNative, '_ready:', this._ready);
-      return;
+      throw new Error(`Native audio is unavailable (native=${isNative}, ready=${this._ready})`);
     }
 
     const url = episode.audioUrl;
     if (!url) {
-      console.error('[NativeAudioPlayer] play() — episode has no audioUrl!', episode);
-      return;
+      throw new Error('Episode has no audio URL');
     }
     // Warn if URL looks relative (would resolve to localhost in WebView)
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -141,6 +149,11 @@ class NativeAudioPlayer {
 
       // Preload (registers the asset with the native engine)
       console.log('[NativeAudioPlayer] calling preload()...');
+      console.log('[PLAYLIST] audio src changed', {
+        source: 'native',
+        title: episode.title,
+        url,
+      });
       await this._plugin.preload({
         assetId: ASSET_ID,
         assetPath: url,
@@ -153,18 +166,37 @@ class NativeAudioPlayer {
           artworkUrl: episode.image || '',
         },
       });
+      console.log('[PLAYLIST] load() called', {
+        source: 'native',
+        title: episode.title,
+        url,
+      });
 
-      console.log('[NativeAudioPlayer] preload() succeeded, calling play()...');
+      console.log('[PLAYLIST] play() requested', {
+        source: 'native',
+        title: episode.title,
+        url,
+      });
       await this._plugin.play({ assetId: ASSET_ID });
       this._isPlaying = true;
-      console.log('[NativeAudioPlayer] play() succeeded ✓');
+      console.log('[PLAYLIST] play() resolved', {
+        source: 'native',
+        title: episode.title,
+        url,
+      });
 
       // iOS AVPlayer populates duration asynchronously after play() starts.
       // Poll until we get a valid value (up to ~6s).
       this._pollDuration(url, resumeAt);
 
     } catch (err) {
-      console.error('[NativeAudioPlayer] play() FAILED:', err?.message, err);
+      console.error('[PLAYLIST] play() rejected', {
+        source: 'native',
+        title: episode?.title,
+        url,
+        name: err?.name,
+        message: err?.message,
+      });
       this._isPlaying = false;
       this._onStateChange?.(false);
       throw err;

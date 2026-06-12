@@ -14,6 +14,7 @@ lerna-debug.log*
 node_modules
 .npm-cache/
 .gradle-work/
+.android-sdk-build/
 android/.plugin-build/
 dist
 dist-ssr

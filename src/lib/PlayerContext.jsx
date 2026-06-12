@@ -44,7 +44,6 @@ export function PlayerProvider({ children }) {
   const autoplayRef = useRef(true);
   const finishedUrlsRef = useRef(new Set());
   const transitioningRef = useRef(false);
-  const rafRef = useRef(null);           // rAF id — web only
   const loadingWatchdogRef = useRef(null);
 
   // ─── Save / progress refs ────────────────────────────────────────────────
@@ -287,7 +286,6 @@ export function PlayerProvider({ children }) {
         const audio = audioRef.current;
         if (!audio) throw new Error('Shared audio element is unavailable');
 
-        cancelAnimationFrame(rafRef.current);
         audio.pause();
         audio.src = nextEpisode.audioUrl;
         audio.volume = volumeRef.current ?? 1;
@@ -296,6 +294,10 @@ export function PlayerProvider({ children }) {
           url: nextEpisode.audioUrl,
         });
         audio.load();
+        console.log('[PLAYLIST] load() called', {
+          title: nextEpisode.title,
+          url: nextEpisode.audioUrl,
+        });
 
         const startAt = nextEpisode.skip_start_seconds || 0;
         if (startAt > 0) {
@@ -381,22 +383,6 @@ export function PlayerProvider({ children }) {
   // ── WEB AUDIO ELEMENT SETUP ───────────────────────────────────────────────
   // =========================================================================
 
-  // ── rAF monitor (web only) ────────────────────────────────────────────────
-  const monitorPlaybackRef = useRef(null);
-  const monitorPlayback = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || audio.paused || transitioningRef.current) return;
-    if (!isNaN(audio.duration) && audio.duration > 0) {
-      const remaining = audio.duration - audio.currentTime;
-      if (remaining <= 0.25) {
-        tryAdvance('RAF MONITOR');
-        return;
-      }
-    }
-    rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
-  }, [tryAdvance]); // eslint-disable-line react-hooks/exhaustive-deps
-  monitorPlaybackRef.current = monitorPlayback;
-
   // ── Global unhandled promise rejection logger ─────────────────────────────
   useEffect(() => {
     const handler = (event) => {
@@ -411,9 +397,7 @@ export function PlayerProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // Create the web HTMLAudioElement unless the native plugin is confirmed ready.
-    // If isNative=true but the plugin failed to init, we still need audioRef for fallback.
-    if (isNative && nativeAudioPlayer.isReady()) return;
+    if (isNative) return;
 
     const audio = new Audio();
     audio.preload = 'auto';
@@ -437,12 +421,6 @@ export function PlayerProvider({ children }) {
 
     audio.addEventListener('timeupdate', () => {
       setCurrentTime(audio.currentTime);
-      if (!isNaN(audio.duration) && audio.duration > 0) {
-        if (audio.duration - audio.currentTime <= 0.2) {
-          tryAdvance('TIMEUPDATE FALLBACK');
-          return;
-        }
-      }
       const ep = currentEpisodeRef.current;
       const skipEnd = ep?.skip_end_seconds || 0;
       if (skipEnd > 0 && audio.duration && !isNaN(audio.duration)) {
@@ -484,8 +462,6 @@ export function PlayerProvider({ children }) {
       setIsPlaying(true);
       startSaveTimers();
       requestWakeLock();
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(monitorPlaybackRef.current);
     });
 
     audio.addEventListener('pause', () => {
@@ -495,11 +471,15 @@ export function PlayerProvider({ children }) {
       });
       stopSaveTimers();
       saveCurrentProgress(true);
-      cancelAnimationFrame(rafRef.current);
       releaseWakeLock();
     });
 
     audio.addEventListener('ended', () => {
+      console.log('[PLAYLIST] ended fired', {
+        source: 'web',
+        title: currentEpisodeRef.current?.title,
+        src: audio.currentSrc || audio.src,
+      });
       tryAdvance('AUDIO ENDED');
     });
 
@@ -507,7 +487,6 @@ export function PlayerProvider({ children }) {
       audio.pause();
       audio.src = '';
       stopSaveTimers();
-      cancelAnimationFrame(rafRef.current);
       clearTimeout(loadingWatchdogRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -571,9 +550,7 @@ export function PlayerProvider({ children }) {
   // WebView requires a user gesture before any audio plays. This silently
   // unlocks the audio context on the first tap anywhere in the app.
   useEffect(() => {
-    // Skip audio unlock only when native plugin is confirmed ready.
-    // In fallback mode (isNative=true but plugin not ready), web audio still needs unlock.
-    if (isNative && nativeAudioPlayer.isReady()) return;
+    if (isNative) return;
     let unlocked = false;
     const unlock = () => {
       if (unlocked) return;
@@ -687,9 +664,12 @@ export function PlayerProvider({ children }) {
       }
     } else {
       if (isNative) {
-        console.warn('[PlayerContext] isNative=true but plugin NOT ready — falling back to web Audio element');
+        console.error('[PLAYLIST] native audio plugin did not initialize');
+        clearLoadingState();
+        setIsPlaying(false);
+        return;
       }
-      // ── Web path ──
+
       const audio = audioRef.current;
       if (!audio) {
         clearLoadingState();
@@ -697,7 +677,6 @@ export function PlayerProvider({ children }) {
         console.error('[PLAYLIST] shared audio element unavailable');
         return;
       }
-      cancelAnimationFrame(rafRef.current);
       audio.src = episode.audioUrl;
       audio.volume = volumeRef.current ?? 1;
       console.log('[PLAYLIST] next URL assigned', {
@@ -705,6 +684,10 @@ export function PlayerProvider({ children }) {
         url: episode.audioUrl,
       });
       audio.load();
+      console.log('[PLAYLIST] load() called', {
+        title: episode.title,
+        url: episode.audioUrl,
+      });
 
       try {
         if (resumeAt > 0) {

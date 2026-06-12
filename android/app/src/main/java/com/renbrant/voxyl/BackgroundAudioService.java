@@ -12,8 +12,10 @@ import android.os.IBinder;
 import androidx.core.app.NotificationCompat;
 
 public class BackgroundAudioService extends Service {
-    private static final String CHANNEL_ID = "voxyl_playback";
-    private static final int NOTIFICATION_ID = 4102;
+    // Match NativeAudio's MediaSession notification so playback replaces this
+    // bootstrap notification instead of leaving two persistent notifications.
+    private static final String CHANNEL_ID = "native_audio_channel";
+    private static final int NOTIFICATION_ID = 1001;
 
     @Override
     public void onCreate() {
@@ -56,7 +58,7 @@ public class BackgroundAudioService extends Service {
 
         NotificationChannel channel = new NotificationChannel(
             CHANNEL_ID,
-            "Voxyl playback",
+            "Audio Playback",
             NotificationManager.IMPORTANCE_LOW
         );
         channel.setDescription("Keeps podcast playback active in the background");
