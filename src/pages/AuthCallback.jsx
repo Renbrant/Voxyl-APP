@@ -5,12 +5,13 @@ const log = (...args) => console.log('[AUTH]', ...args);
 /**
  * /auth/callback — Base44-domain bridge page
  *
- * Base44 redirects here after login (from_url=https://voxyl-app.base44.app/auth/callback).
- * This page extracts the token from query params or hash, then immediately
- * redirects to the custom scheme so Android appUrlOpen fires:
- *   com.renbrant.voxyl://auth/callback?access_token=...
+ * Base44 redirects here after login because voxyl-app.base44.app is an allowed domain.
+ * This page always redirects to the native custom scheme when:
+ *   - a token is present, AND
+ *   - the URL contains native=1 (set by authRedirect.js for native login)
  *
- * On web (non-native), it stores the token and reloads the app normally.
+ * This avoids any dependency on window.Capacitor, which is unavailable inside
+ * Capacitor Browser / Chrome Custom Tabs.
  */
 export default function AuthCallback() {
   useEffect(() => {
@@ -27,27 +28,28 @@ export default function AuthCallback() {
       hash.get('access_tc') ||
       hash.get('token');
 
+    const isNativeCallback = search.get('native') === '1';
+
     log('All query params:', Object.fromEntries(search.entries()));
-    log('All hash params:', Object.fromEntries(hash.entries()));
     log('Token found:', token ? 'YES' : 'NO');
+    log('isNativeCallback (native=1):', isNativeCallback);
 
     if (!token) {
-      log('No token — redirecting to / without login');
+      log('No token — redirecting to /');
       window.location.replace('/');
       return;
     }
 
-    const isNative = !!(window.Capacitor?.isNativePlatform?.());
-    log('isNative:', isNative);
-
-    if (isNative) {
-      // Redirect to custom scheme — Android intent filter catches this and fires appUrlOpen
+    if (isNativeCallback) {
+      // Always redirect to custom scheme for native flow.
+      // Android intent filter catches this and fires appUrlOpen in the APK.
+      // window.Capacitor is NOT used here — it is unavailable in Chrome Custom Tab.
       const customSchemeUrl = `com.renbrant.voxyl://auth/callback?access_token=${encodeURIComponent(token)}`;
       log('Redirecting to custom scheme:', customSchemeUrl);
       window.location.href = customSchemeUrl;
     } else {
-      // Web fallback: store token and reload
-      log('Web: storing token and reloading');
+      // Web flow: store token and reload
+      log('Web flow: storing token and reloading');
       localStorage.setItem('base44_access_token', token);
       localStorage.setItem('token', token);
       window.location.replace('/');
