@@ -2,6 +2,7 @@ import { createContext, useState, useContext, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { appParams, base44ConfigError } from '@/lib/app-params';
 import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
+import { redirectToLogin } from '@/lib/authRedirect';
 
 const AuthContext = createContext();
 
@@ -165,7 +166,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const navigateToLogin = () => {
-    base44.auth.redirectToLogin();
+    redirectToLogin(window.location.href).catch(error => {
+      console.error('Login redirect failed:', error);
+    });
   };
 
   return (

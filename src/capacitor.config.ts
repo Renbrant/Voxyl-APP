@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.voxyl.app',
+  appId: 'com.renbrant.voxyl',
   appName: 'Voxyl',
   webDir: 'dist',
   bundledWebRuntime: false,

@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import '@/index.css'
+import { initializeNativeAuthCallback } from '@/lib/nativeAuthCallback'
 
 
 
@@ -20,6 +21,10 @@ if (savedTheme === 'auto') {
 } else {
   root.classList.add(savedTheme === 'light' ? 'light' : 'dark');
 }
+
+initializeNativeAuthCallback().catch(error => {
+  console.error('Failed to initialize native auth callback:', error);
+});
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <App />

@@ -5,6 +5,7 @@ import { fetchRSSFeed, parseDurationToSeconds } from '@/lib/rssUtils';
 import { Play, Share2, Headphones, Star, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import { redirectToLogin } from '@/lib/authRedirect';
 
 const GRADIENT_COLORS = [
   'from-purple-600 to-cyan-400',
@@ -93,7 +94,7 @@ export default function PlaylistPreview() {
     // Save the pending playlist ID + creator info to localStorage so after signup we auto-follow it
     localStorage.setItem('voxyl_pending_playlist', id);
     localStorage.setItem('voxyl_pending_creator_id', playlist?.creator_id);
-    base44.auth.redirectToLogin(`/playlist/${id}`);
+    redirectToLogin(`${window.location.origin}/playlist/${id}`).catch(() => {});
   };
 
   const handleShare = async () => {
