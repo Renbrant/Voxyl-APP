@@ -6,6 +6,12 @@ import '@/index.css'
 // Apply saved theme before render to avoid flash
 const savedTheme = localStorage.getItem('theme') || 'dark';
 const root = document.documentElement;
+const nativePlatform = window.Capacitor?.getPlatform?.();
+
+if (nativePlatform === 'android') {
+  root.classList.add('native-android');
+}
+
 if (savedTheme === 'auto') {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   root.classList.add(prefersDark ? 'dark' : 'light');
