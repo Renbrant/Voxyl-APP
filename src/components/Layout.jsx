@@ -60,8 +60,11 @@ export default function Layout() {
   return (
     <div className="flex flex-col bg-background max-w-md mx-auto relative" style={{ height: '100dvh' }}>
       <main
-        className="flex-1 overflow-y-auto pb-20"
-        style={{ WebkitOverflowScrolling: 'touch', paddingBottom: 'calc(5rem + var(--app-safe-area-bottom))' }}
+        className="flex-1 overflow-y-auto"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          paddingBottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))'
+        }}
       >
         <Outlet />
       </main>
@@ -71,9 +74,14 @@ export default function Layout() {
 
       <nav
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
-        style={{ paddingBottom: 'var(--app-safe-area-bottom)', userSelect: 'none', WebkitUserSelect: 'none', background: 'hsl(var(--card))' }}
+        style={{
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          background: 'hsl(var(--card))',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        }}
       >
-        <div className="flex items-center justify-around px-2 pt-3 pb-2">
+        <div className="flex items-center justify-around px-2 py-3">
           {getNavItems().map(({ icon: Icon, label, path }) => {
             // For protected tabs, redirect to login if not authed
             const isProtected = path === '/playlists' || path === '/profile';
