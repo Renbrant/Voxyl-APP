@@ -2,7 +2,8 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 
-const WEB_CALLBACK_ORIGIN = 'https://voxyl-app.base44.app';
+const WEB_CALLBACK_ORIGIN = 'https://voxyl.renbrant.com';
+const WEB_CALLBACK_PATH = '/auth/callback';
 const HANDLED_URL_KEY = 'voxyl_last_auth_callback';
 const POST_AUTH_PATH_KEY = 'voxyl_post_auth_path';
 
@@ -18,7 +19,8 @@ const getTokenFromUrl = (url) => {
 const isSupportedCallback = (url) => {
   try {
     const parsedUrl = new URL(url);
-    const isWebCallback = parsedUrl.origin === WEB_CALLBACK_ORIGIN;
+    const isWebCallback = parsedUrl.origin === WEB_CALLBACK_ORIGIN
+      && parsedUrl.pathname === WEB_CALLBACK_PATH;
     const isCustomCallback = parsedUrl.protocol === 'com.renbrant.voxyl:'
       && parsedUrl.hostname === 'auth'
       && parsedUrl.pathname === '/callback';

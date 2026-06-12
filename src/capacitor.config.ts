@@ -18,8 +18,8 @@ const config: CapacitorConfig = {
     //    for every page load since assets are proxied through the live server.
     //
     // PREFERRED ALTERNATIVE: Keep hostname as localhost and use Android App Links
-    // to intercept the https://voxyl-app.base44.app?access_token=... callback in
-    // Chrome and re-open the APK with the token. See android-auth-setup.md.
+    // to intercept https://voxyl.renbrant.com/auth/callback in Chrome and
+    // re-open the APK with the token. See android-auth-setup.md.
     //
     // Uncomment the line below ONLY if you want to always load from the live server:
     // url: 'https://voxyl-app.base44.app',

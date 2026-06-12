@@ -30,7 +30,8 @@
 
                 <data
                     android:scheme="https"
-                    android:host="voxyl-app.base44.app" />
+                    android:host="voxyl.renbrant.com"
+                    android:path="/auth/callback" />
             </intent-filter>
 
             <intent-filter>

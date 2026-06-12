@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { base44 } from '@/api/base44Client';
 import { appParams } from '@/lib/app-params';
 
-const NATIVE_CALLBACK_URL = 'https://voxyl-app.base44.app/';
+const NATIVE_CALLBACK_URL = 'https://voxyl.renbrant.com/auth/callback';
 const POST_AUTH_PATH_KEY = 'voxyl_post_auth_path';
 
 /**
