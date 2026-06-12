@@ -87,19 +87,7 @@ export default function PlaylistDetail() {
         });
         // Auto-follow the creator if they came from a share link
         if (pendingCreatorId && pendingCreatorId !== u.id) {
-          base44.entities.Follow.filter({ follower_id: u.id, following_id: pendingCreatorId })
-            .then(existing => {
-              if (existing.length === 0) {
-                base44.entities.Follow.create({
-                  follower_id: u.id,
-                  follower_email: u.email,
-                  follower_name: u.full_name || u.email.split('@')[0],
-                  follower_username: u.username || '',
-                  following_id: pendingCreatorId,
-                  status: 'accepted'
-                });
-              }
-            });
+          base44.functions.invoke('requestFollow', { targetUserId: pendingCreatorId }).catch(() => {});
         }
       }
     }).catch(() => {});
@@ -122,17 +110,9 @@ export default function PlaylistDetail() {
     setFollowing(v => !v);
     try {
       if (prevFollowing) {
-        const records = await base44.entities.Follow.filter({ follower_id: user.id, following_id: playlist.creator_id });
-        if (records[0]) await base44.entities.Follow.delete(records[0].id);
+        await base44.functions.invoke('cancelFollowRequest', { targetUserId: playlist.creator_id });
       } else {
-        await base44.entities.Follow.create({
-          follower_id: user.id,
-          follower_email: user.email,
-          follower_name: user.full_name || user.email.split('@')[0],
-          follower_username: user.username || '',
-          following_id: playlist.creator_id,
-          status: 'accepted'
-        });
+        await base44.functions.invoke('requestFollow', { targetUserId: playlist.creator_id });
       }
     } catch {
       setFollowing(prevFollowing); // revert on failure

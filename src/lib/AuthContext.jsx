@@ -99,18 +99,8 @@ export const AuthProvider = ({ children }) => {
     if (localStorage.getItem(storageKey)) return;
     localStorage.setItem(storageKey, '1');
 
-    // Auto-follow the referrer
-    const existing = await base44.entities.Follow.filter({ follower_id: currentUser.id, following_id: referrerId }).catch(() => []);
-    if (existing.length === 0) {
-      await base44.entities.Follow.create({
-        follower_id: currentUser.id,
-        follower_email: currentUser.email,
-        follower_name: currentUser.full_name || currentUser.email.split('@')[0],
-        follower_username: currentUser.username || '',
-        following_id: referrerId,
-        status: 'accepted',
-      }).catch(() => {});
-    }
+    // Auto-follow the referrer via secure server function
+    await base44.functions.invoke('requestFollow', { targetUserId: referrerId }).catch(() => {});
 
     // Update referral record if exists
     const referrals = await base44.entities.Referral.filter({ inviter_id: referrerId, invitee_email: currentUser.email }).catch(() => []);

@@ -14,28 +14,12 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
     setLoading(true);
 
     if (followStatus === 'accepted' || followStatus === 'pending') {
-      // Unfollow / cancel request
-      const follows = await base44.entities.Follow.filter({
-        follower_id: currentUserId,
-        following_id: targetUserId,
-      });
-      if (follows.length > 0) {
-        await base44.entities.Follow.delete(follows[0].id);
-      }
+      // Unfollow / cancel request via secure server function
+      await base44.functions.invoke('cancelFollowRequest', { targetUserId }).catch(() => {});
       onStatusChange?.(null);
     } else {
-      // Send follow request (pending)
-      // Fetch current user's username to store in Follow record
-      const me = await base44.auth.me().catch(() => null);
-      await base44.entities.Follow.create({
-        follower_id: currentUserId,
-        follower_email: currentUserEmail,
-        follower_name: currentUserName || '',
-        follower_username: me?.username || '',
-        following_id: targetUserId,
-        following_email: targetUserEmail,
-        status: 'pending',
-      });
+      // Send follow request via secure server function
+      await base44.functions.invoke('requestFollow', { targetUserId }).catch(() => {});
       onStatusChange?.('pending');
     }
 
