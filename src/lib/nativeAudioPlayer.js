@@ -277,6 +277,11 @@ class NativeAudioPlayer {
     return this._duration;
   }
 
+  // ── Public readiness check (use this instead of reading _ready directly) ──
+  isReady() {
+    return this._ready === true;
+  }
+
   // ── Cleanup listeners ────────────────────────────────────────────────────
   async destroy() {
     clearTimeout(this._seekTimer);
