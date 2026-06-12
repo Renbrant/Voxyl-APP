@@ -2,26 +2,32 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 
-// Only two events are supported by @capacitor/browser v8:
-//   - browserFinished  (user closed the browser)
-//   - browserPageLoaded (initial URL finished loading — NOT subsequent navigations)
-// There is NO browserUrlChanged event. Do not add it.
+// @capacitor/browser v8 only supports two events:
+//   - browserFinished  (user closed browser)
+//   - browserPageLoaded (initial URL loaded — NOT subsequent navigations, no URL exposed)
+// There is NO browserUrlChanged event.
 
-const WEB_CALLBACK_ORIGIN = 'https://voxyl.renbrant.com';
-const WEB_CALLBACK_PATH = '/auth/callback';
+// Custom scheme handled by Android intent filter in AndroidManifest.xml
+// Intent filter required:
+//   <intent-filter android:autoVerify="false">
+//     <action android:name="android.intent.action.VIEW" />
+//     <category android:name="android.intent.category.DEFAULT" />
+//     <category android:name="android.intent.category.BROWSABLE" />
+//     <data android:scheme="com.renbrant.voxyl" android:host="auth" android:path="/callback" />
+//   </intent-filter>
+
+const CUSTOM_SCHEME = 'com.renbrant.voxyl:';
 const HANDLED_URL_KEY = 'voxyl_last_auth_callback';
 const POST_AUTH_PATH_KEY = 'voxyl_post_auth_path';
 
 const log = (...args) => console.log('[AUTH]', ...args);
 const err = (...args) => console.error('[AUTH]', ...args);
 
-// ── Token extraction ────────────────────────────────────────────────────────
 const getTokenFromUrl = (url) => {
   log('Parsing token from URL:', url);
   try {
     const parsedUrl = new URL(url);
     const qp = parsedUrl.searchParams;
-
     const qpToken = qp.get('access_token') || qp.get('access_tc') || qp.get('token');
     if (qpToken) { log('Token found in query params'); return qpToken; }
 
@@ -33,7 +39,6 @@ const getTokenFromUrl = (url) => {
     }
 
     log('All query params:', Object.fromEntries(qp.entries()));
-    log('Hash string:', hashString || '(empty)');
     log('No token found in URL');
     return null;
   } catch (e) {
@@ -42,26 +47,19 @@ const getTokenFromUrl = (url) => {
   }
 };
 
-// ── URL match check ─────────────────────────────────────────────────────────
-const isCallbackUrl = (url) => {
+const isCustomSchemeCallback = (url) => {
   try {
     const p = new URL(url);
-    const isWebCallback = p.origin === WEB_CALLBACK_ORIGIN && p.pathname === WEB_CALLBACK_PATH;
-    const isCustomScheme = p.protocol === 'com.renbrant.voxyl:'
-      && p.hostname === 'auth' && p.pathname === '/callback';
-    log('URL check — isWebCallback:', isWebCallback, '| isCustomScheme:', isCustomScheme, '| url:', url);
-    return isWebCallback || isCustomScheme;
-  } catch (e) {
-    err('isCallbackUrl parse error:', e?.message);
+    return p.protocol === CUSTOM_SCHEME && p.hostname === 'auth' && p.pathname === '/callback';
+  } catch {
     return false;
   }
 };
 
-// ── Core handler ────────────────────────────────────────────────────────────
 export const handleNativeAuthCallback = async (url) => {
   log('handleNativeAuthCallback called with url:', url);
   if (!url) { log('No URL, skipping'); return false; }
-  if (!isCallbackUrl(url)) { log('Not a callback URL, skipping:', url); return false; }
+  if (!isCustomSchemeCallback(url)) { log('Not a custom scheme callback, skipping:', url); return false; }
 
   const token = getTokenFromUrl(url);
   if (!token) {
@@ -96,29 +94,24 @@ export const handleNativeAuthCallback = async (url) => {
   return true;
 };
 
-// ── Initialization ──────────────────────────────────────────────────────────
 export const initializeNativeAuthCallback = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
-  // appUrlOpen fires when Android intercepts a verified App Link URL.
-  // This is the ONLY reliable way to capture the callback with @capacitor/browser.
   log('Registering appUrlOpen listener');
   await CapacitorApp.addListener('appUrlOpen', ({ url }) => {
     log('appUrlOpen fired! url:', url);
     handleNativeAuthCallback(url).catch(e => err('appUrlOpen handler threw:', e?.message));
   });
 
-  // browserFinished fires when user manually closes the browser (no token).
-  // Log it so we can tell in logcat whether the browser closed naturally or via redirect.
   try {
     await Browser.addListener('browserFinished', () => {
-      log('browserFinished fired — browser closed (by user or redirect)');
+      log('browserFinished fired — browser closed');
     });
   } catch (e) {
     log('browserFinished listener failed:', e?.message);
   }
 
-  // Check cold-start launch URL (app opened directly via App Link while not running)
+  // Cold-start: app launched directly via custom scheme URL
   log('Checking launch URL');
   const launchUrl = await CapacitorApp.getLaunchUrl();
   log('getLaunchUrl result:', JSON.stringify(launchUrl));
