@@ -74,6 +74,8 @@ export default function Layout() {
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)', userSelect: 'none', WebkitUserSelect: 'none', background: 'hsl(var(--card))' }}
       >
+        {/* Fill the gap below the nav bar on Android gesture nav / Samsung devices */}
+        <div className="absolute bottom-0 left-0 right-0 bg-card" style={{ height: 'env(safe-area-inset-bottom, 0px)', transform: 'translateY(100%)' }} />
         <div className="flex items-center justify-around px-2 py-3">
           {getNavItems().map(({ icon: Icon, label, path }) => {
             // For protected tabs, redirect to login if not authed
