@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import { t, isEn } from '@/lib/i18n';
 
-const REQUIRED_TEXT_VALUE = () => isEn ? 'DELETE MY ACCOUNT' : 'EXCLUIR MINHA CONTA';
+const REQUIRED_TEXT_VALUE = () => isEn ? 'DEACTIVATE MY ACCOUNT' : 'DESATIVAR MINHA CONTA';
 
 // Multi-step deletion with 3 confirmation stages
 const STEPS = () => [
@@ -48,27 +48,11 @@ export default function DeleteAccountModal({ user, onClose }) {
   const handleDelete = async () => {
     if (!canDelete) return;
     setLoading(true);
-    try {
-      // Anonymize playlists — keep them but remove user identity
-      const playlists = await base44.entities.Playlist.filter({ creator_id: user.id });
-      await Promise.all(playlists.map(p =>
-        base44.entities.Playlist.update(p.id, {
-          creator_name: t('deletedUser'),
-          creator_username: '',
-          creator_email: '',
-          creator_id: 'deleted',
-          creator_picture: '',
-          creator_hidden: true,
-        })
-      ));
-
-      // Delete likes and follows
-      const likes = await base44.entities.PlaylistLike.filter({ user_id: user.id });
-      await Promise.all(likes.map(l => base44.entities.PlaylistLike.delete(l.id)));
-      const follows = await base44.entities.Follow.filter({ follower_id: user.id });
-      await Promise.all(follows.map(f => base44.entities.Follow.delete(f.id)));
-    } catch {
-      // continue to logout even if cleanup partially fails
+    const res = await base44.functions.invoke('deleteAccount', {});
+    const data = res.data;
+    if (!data?.success && data?.errors?.length > 0) {
+      // Partial failure — still log out but show errors in console for debugging
+      console.error('[deleteAccount] partial errors:', data.errors);
     }
     base44.auth.logout('/');
   };
