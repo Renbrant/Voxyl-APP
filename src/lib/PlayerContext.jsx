@@ -69,8 +69,9 @@ export function PlayerProvider({ children }) {
     if (!audioUrl) return;
     finishedUrlsRef.current = new Set([...finishedUrlsRef.current, audioUrl]);
     setFinishedUrls(new Set(finishedUrlsRef.current));
-    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
-    const dur = isNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
+    const useNative = isNative && nativeAudioPlayer.isReady();
+    const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = useNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
     setCachedProgress(audioUrl, pos, dur, true);
     const u = userRef.current;
     if (u) saveProgressToDB(base44, u.id, audioUrl).catch(() => {});
@@ -80,8 +81,9 @@ export function PlayerProvider({ children }) {
     const ep = currentEpisodeRef.current;
     if (!ep?.audioUrl) return;
     if (podcastPlayRecordedRef.current.has(ep.audioUrl)) return;
-    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
-    const dur = isNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
+    const useNative = isNative && nativeAudioPlayer.isReady();
+    const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (dur > 0 && pos / dur >= 0.5) {
       podcastPlayRecordedRef.current.add(ep.audioUrl);
       base44.functions.invoke('recordPodcastPlay', {
@@ -100,8 +102,9 @@ export function PlayerProvider({ children }) {
   const saveCurrentProgress = useCallback((forceDB = false) => {
     const ep = currentEpisodeRef.current;
     if (!ep?.audioUrl) return;
-    const pos = isNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
-    const dur = isNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
+    const useNative = isNative && nativeAudioPlayer.isReady();
+    const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+    const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (pos < MIN_SAVE_POSITION) return;
     const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
     setCachedProgress(ep.audioUrl, pos, dur, finished);
@@ -164,14 +167,14 @@ export function PlayerProvider({ children }) {
     const prevUrl = currentEpisodeRef.current?.audioUrl;
     if (prevUrl) {
       finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
-      const dur = isNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
+      const dur = (isNative && nativeAudioPlayer.isReady()) ? nativeDurationRef.current : (audioRef.current?.duration || 0);
       setCachedProgress(prevUrl, dur, dur, true);
     }
 
     currentEpisodeRef.current = nextEpisode;
     currentIndexRef.current = nextIdx;
 
-    if (isNative) {
+    if (isNative && nativeAudioPlayer.isReady()) {
       // ── Native path ──
       setCurrentEpisode(nextEpisode);
       setIsLoading(true);
@@ -274,14 +277,41 @@ export function PlayerProvider({ children }) {
   }, [tryAdvance]); // eslint-disable-line react-hooks/exhaustive-deps
   monitorPlaybackRef.current = monitorPlayback;
 
+  // ── Global unhandled promise rejection logger ─────────────────────────────
   useEffect(() => {
-    if (isNative) return; // native path handles its own audio
+    const handler = (event) => {
+      console.error('[VOXYL] Unhandled Promise rejection:',
+        'name:', event.reason?.name,
+        'message:', event.reason?.message,
+        event.reason
+      );
+    };
+    window.addEventListener('unhandledrejection', handler);
+    return () => window.removeEventListener('unhandledrejection', handler);
+  }, []);
+
+  useEffect(() => {
+    // Create the web HTMLAudioElement unless the native plugin is confirmed ready.
+    // If isNative=true but the plugin failed to init, we still need audioRef for fallback.
+    if (isNative && nativeAudioPlayer.isReady()) return;
 
     const audio = new Audio();
     audio.preload = 'auto';
     // Do NOT set crossOrigin = 'anonymous' — many podcast CDNs reject CORS preflight
     // and the audio element works fine without it for playback.
     audioRef.current = audio;
+
+    // ── Audio error diagnostics ───────────────────────────────────────────
+    audio.addEventListener('error', () => {
+      console.error('[AUDIO ERROR]',
+        'code:', audio.error?.code,
+        'message:', audio.error?.message,
+        'src:', audio.src,
+        'currentSrc:', audio.currentSrc,
+        'networkState:', audio.networkState,
+        'readyState:', audio.readyState
+      );
+    });
 
     audio.addEventListener('timeupdate', () => {
       setCurrentTime(audio.currentTime);
@@ -390,6 +420,34 @@ export function PlayerProvider({ children }) {
   // ── MOUNT: user, SW, progress ────────────────────────────────────────────
   // =========================================================================
 
+  // ── Android WebView audio unlock on first user gesture ───────────────────
+  // WebView requires a user gesture before any audio plays. This silently
+  // unlocks the audio context on the first tap anywhere in the app.
+  useEffect(() => {
+    // Skip audio unlock only when native plugin is confirmed ready.
+    // In fallback mode (isNative=true but plugin not ready), web audio still needs unlock.
+    if (isNative && nativeAudioPlayer.isReady()) return;
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      unlocked = true;
+      const silent = new Audio();
+      silent.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+      silent.volume = 0;
+      silent.play().then(() => {
+        console.log('[AUDIO UNLOCK] Web audio unlocked on first gesture');
+      }).catch(() => {});
+      document.removeEventListener('touchstart', unlock, true);
+      document.removeEventListener('click', unlock, true);
+    };
+    document.addEventListener('touchstart', unlock, true);
+    document.addEventListener('click', unlock, true);
+    return () => {
+      document.removeEventListener('touchstart', unlock, true);
+      document.removeEventListener('click', unlock, true);
+    };
+  }, []);
+
   useEffect(() => {
     base44.auth.me().then(async u => {
       setUser(u);
@@ -456,7 +514,10 @@ export function PlayerProvider({ children }) {
       ? savedProgress.position_seconds
       : (episode.skip_start_seconds || 0);
 
-    if (isNative) {
+    const pluginReady = isNative && nativeAudioPlayer.isReady();
+    console.log('[PlayerContext] playEpisodeInternal — isNative:', isNative, 'pluginReady:', pluginReady, 'url:', episode.audioUrl);
+
+    if (pluginReady) {
       // ── Native path ──
       await nativeAudioPlayer.play(episode, resumeAt);
       const dur = nativeAudioPlayer.getDuration();
@@ -466,15 +527,24 @@ export function PlayerProvider({ children }) {
       setIsPlaying(true);
       setIsLoading(false);
     } else {
+      if (isNative) {
+        console.warn('[PlayerContext] isNative=true but plugin NOT ready — falling back to web Audio element');
+      }
       // ── Web path ──
       const audio = audioRef.current;
       cancelAnimationFrame(rafRef.current);
       audio.src = episode.audioUrl;
 
       const doPlay = () => {
+        console.log('[WEB AUDIO] about to play()',
+          'src:', audio.src,
+          'currentSrc:', audio.currentSrc,
+          'readyState:', audio.readyState,
+          'networkState:', audio.networkState
+        );
         audio.play()
           .then(() => { setIsPlaying(true); })
-          .catch(e => console.error('[play] rejected:', e));
+          .catch(e => console.error('[WEB AUDIO] play() rejected —', 'name:', e?.name, 'message:', e?.message, e));
       };
 
       if (resumeAt > 0) {
@@ -500,7 +570,7 @@ export function PlayerProvider({ children }) {
 
     if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
       // Resume same episode
-      if (isNative) nativeAudioPlayer.resume();
+      if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.resume();
       else audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
       return;
     }
@@ -509,7 +579,7 @@ export function PlayerProvider({ children }) {
   }, [playEpisodeInternal]);
 
   const togglePlay = useCallback(() => {
-    if (isNative) {
+    if (isNative && nativeAudioPlayer.isReady()) {
       // Let onStateChange (fired by native) be the source of truth for isPlaying.
       // We optimistically update UI immediately, but native corrects it if needed.
       if (isPlaying) {
@@ -523,12 +593,18 @@ export function PlayerProvider({ children }) {
       const audio = audioRef.current;
       if (!audio) return;
       if (isPlaying) { audio.pause(); setIsPlaying(false); }
-      else { audio.play().then(() => setIsPlaying(true)).catch(() => {}); }
+      else {
+        console.log('[WEB AUDIO] togglePlay — play() call',
+          'src:', audio.src, 'readyState:', audio.readyState);
+        audio.play().then(() => setIsPlaying(true)).catch(e =>
+          console.error('[WEB AUDIO] togglePlay play() rejected —', 'name:', e?.name, 'message:', e?.message)
+        );
+      }
     }
   }, [isPlaying]);
 
   const seek = useCallback((time) => {
-    if (isNative) {
+    if (isNative && nativeAudioPlayer.isReady()) {
       nativeAudioPlayer.seek(time);
       nativeCurrentTimeRef.current = time;
       setCurrentTime(time);
