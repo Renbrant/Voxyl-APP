@@ -80,7 +80,7 @@ export default function PlaylistCard({ playlist, onLike, liked, compact = false,
               ) : (
                 <ReportBlockMenu
                   currentUser={currentUser}
-                  targetUser={{ id: playlist.creator_id, email: playlist.creator_email, name: playlist.creator_name }}
+                  targetUser={{ id: playlist.creator_id, name: playlist.creator_name }}
                   contentType="playlist"
                   contentId={playlist.id}
                   contentTitle={playlist.name}

@@ -234,14 +234,12 @@ export default function Explore() {
       const followers = followersList.map(f => ({
         id: f.follower_id,
         username: f.follower_username,
-        email: f.follower_email,
         full_name: f.follower_name,
         type: 'follower',
       }));
       const following = followingList.map(f => ({
         id: f.following_id,
         username: f._profile?.username || f.following_username || null,
-        email: f.following_email,
         full_name: f._profile?.full_name || f.following_name || '',
         type: 'following',
       }));
@@ -251,7 +249,6 @@ export default function Explore() {
       return pendingList.map(f => ({
         id: f.following_id,
         username: f._profile?.username || f.following_username || null,
-        email: f.following_email,
         full_name: f._profile?.full_name || f.following_name || '',
         type: 'pending',
       }));
@@ -429,7 +426,6 @@ export default function Explore() {
                             user={{
                               id: f.follower_id,
                               username: f.follower_username,
-                              email: f.follower_email,
                               full_name: f.follower_name,
                             }}
                             index={i}
@@ -452,11 +448,10 @@ export default function Explore() {
                           <UserSearchCard
                             key={f.following_id}
                             user={{
-                              id: f.following_id,
-                              username: f._profile?.username || f.following_username || null,
-                              email: f.following_email,
-                              full_name: f._profile?.full_name || f.following_name || '',
-                            }}
+                               id: f.following_id,
+                               username: f._profile?.username || f.following_username || null,
+                               full_name: f._profile?.full_name || f.following_name || '',
+                             }}
                             index={i}
                             currentUser={user}
                             followStatus={followStatuses[f.following_id] || null}
@@ -476,11 +471,10 @@ export default function Explore() {
                     <UserSearchCard
                       key={f.following_id}
                       user={{
-                        id: f.following_id,
-                        username: f._profile?.username || f.following_username || null,
-                        email: f.following_email,
-                        full_name: f._profile?.full_name || f.following_name || '',
-                      }}
+                         id: f.following_id,
+                         username: f._profile?.username || f.following_username || null,
+                         full_name: f._profile?.full_name || f.following_name || '',
+                       }}
                       index={i}
                       currentUser={user}
                       followStatus={followStatuses[f.following_id] || null}

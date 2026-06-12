@@ -229,7 +229,7 @@ export default function PlaylistDetail() {
           {!isOwner && playlist && (
             <ReportBlockMenu
               currentUser={user}
-              targetUser={{ id: playlist.creator_id, email: playlist.creator_email, name: playlist.creator_name }}
+              targetUser={{ id: playlist.creator_id, name: playlist.creator_name }}
               contentType="playlist"
               contentId={playlist.id}
               contentTitle={playlist.name}
