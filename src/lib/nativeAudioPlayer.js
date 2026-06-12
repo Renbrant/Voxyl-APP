@@ -1,6 +1,9 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { App } from '@capacitor/app';
-import { NativeAudio } from '@capgo/capacitor-native-audio';
+
+// Resolve plugins at runtime to avoid Vite build errors on web.
+// These packages are only available inside the native WebView.
+const getNativeAudio = () => window?.Capacitor?.Plugins?.NativeAudio ?? null;
+const getApp = () => window?.Capacitor?.Plugins?.App ?? null;
 
 /**
  * NativeAudioPlayer — wrapper around @capgo/capacitor-native-audio
@@ -45,7 +48,11 @@ class NativeAudioPlayer {
 
     console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
     try {
-      this._plugin = NativeAudio;
+      this._plugin = getNativeAudio();
+      if (!this._plugin) {
+        console.error('[NativeAudioPlayer] NativeAudio plugin not found in Capacitor.Plugins');
+        return;
+      }
 
       console.log('[NativeAudioPlayer] calling configure()...');
       await this._plugin.configure({
@@ -75,6 +82,7 @@ class NativeAudioPlayer {
       });
 
       // Capacitor App state — sync playing state when returning from background
+      const App = getApp();
       if (App) {
         this._appStateListener = await App.addListener('appStateChange', async (state) => {
           if (state.isActive && this._currentUrl) {
