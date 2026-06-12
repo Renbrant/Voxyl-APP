@@ -7,6 +7,7 @@ const config: CapacitorConfig = {
   bundledWebRuntime: false,
   android: {
     allowMixedContent: true,
+    backgroundColor: '#0f0d0b',
   },
   ios: {
     // Required for App Store: allow background audio session to stay active
