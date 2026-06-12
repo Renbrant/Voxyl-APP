@@ -2,8 +2,24 @@ const isNode = typeof window === 'undefined';
 const windowObj = isNode ? { localStorage: new Map() } : window;
 const storage = windowObj.localStorage;
 
+const DEFAULT_BASE44_APP_ID = '69e2ae13aa773b21002b1fe4';
+const DEFAULT_BASE44_API_URL = 'https://base44.app';
+const DEFAULT_BASE44_APP_BASE_URL = 'https://voxyl-app.base44.app';
+const DEFAULT_BASE44_FUNCTIONS_VERSION = 'prod';
+
 const toSnakeCase = (str) => {
 	return str.replace(/([A-Z])/g, '_$1').toLowerCase();
+}
+
+const cleanValue = (value) => {
+	if (typeof value !== 'string') return value;
+	const trimmed = value.trim();
+	return trimmed && trimmed !== 'null' && trimmed !== 'undefined' ? trimmed : null;
+}
+
+const cleanBaseUrl = (value, fallback) => {
+	const cleaned = cleanValue(value) || fallback;
+	return cleaned.replace(/\/+$/, '');
 }
 
 const getAppParamValue = (paramName, { defaultValue = undefined, removeFromUrl = false } = {}) => {
@@ -39,12 +55,31 @@ const getAppParams = () => {
 		storage.removeItem('base44_access_token');
 		storage.removeItem('token');
 	}
+	const appId = cleanValue(getAppParamValue("app_id", {
+		defaultValue: import.meta.env.VITE_BASE44_APP_ID || DEFAULT_BASE44_APP_ID
+	}));
+	const serverUrl = cleanBaseUrl(
+		getAppParamValue("server_url", {
+			defaultValue: import.meta.env.VITE_BASE44_API_URL || DEFAULT_BASE44_API_URL
+		}),
+		DEFAULT_BASE44_API_URL
+	);
+	const appBaseUrl = cleanBaseUrl(
+		getAppParamValue("app_base_url", {
+			defaultValue: import.meta.env.VITE_BASE44_APP_BASE_URL || DEFAULT_BASE44_APP_BASE_URL
+		}),
+		DEFAULT_BASE44_APP_BASE_URL
+	);
+
 	return {
-		appId: getAppParamValue("app_id", { defaultValue: import.meta.env.VITE_BASE44_APP_ID }),
+		appId,
 		token: getAppParamValue("access_token", { removeFromUrl: true }),
 		fromUrl: getAppParamValue("from_url", { defaultValue: window.location.href }),
-		functionsVersion: getAppParamValue("functions_version", { defaultValue: import.meta.env.VITE_BASE44_FUNCTIONS_VERSION }),
-		appBaseUrl: getAppParamValue("app_base_url", { defaultValue: import.meta.env.VITE_BASE44_APP_BASE_URL }),
+		functionsVersion: cleanValue(getAppParamValue("functions_version", {
+			defaultValue: import.meta.env.VITE_BASE44_FUNCTIONS_VERSION || DEFAULT_BASE44_FUNCTIONS_VERSION
+		})),
+		appBaseUrl,
+		serverUrl,
 	}
 }
 
@@ -52,3 +87,9 @@ const getAppParams = () => {
 export const appParams = {
 	...getAppParams()
 }
+
+export const base44ConfigError = !appParams.appId
+	? 'VITE_BASE44_APP_ID is missing.'
+	: null;
+
+export const isBase44Configured = !base44ConfigError;

@@ -4,6 +4,7 @@
  * - DB is synced asynchronously (every 10s while playing, on pause/stop)
  * - Records older than 60 days are ignored on load
  */
+import { asArray } from '@/lib/arrayUtils';
 
 const STORAGE_KEY = 'voxyl_ep_progress';
 const TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
@@ -82,7 +83,7 @@ let dbRecordMap = {}; // audioUrl → { id, ...fields }
 
 /** Load all progress records from DB into local map and seed local cache */
 export async function loadProgressFromDB(base44, userId) {
-  const records = await base44.entities.EpisodeProgress.filter({ user_id: userId });
+  const records = asArray(await base44.entities.EpisodeProgress.filter({ user_id: userId }));
   dbRecordMap = {};
   const cache = readCache();
   const now = Date.now();

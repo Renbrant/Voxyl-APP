@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { asArray } from '@/lib/arrayUtils';
 import { X, UserCheck, UserX, UserCircle2, Loader2, Ban, ChevronDown, ChevronUp, ListMusic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -12,7 +13,7 @@ function RequesterPlaylists({ userId }) {
   useEffect(() => {
     base44.entities.Playlist.filter({ creator_id: userId }, '-created_date', 6)
       .then(data => {
-        setPlaylists(data.filter(p => !p.visibility || p.visibility === 'public'));
+        setPlaylists(asArray(data).filter(p => !p.visibility || p.visibility === 'public'));
         setLoading(false);
       })
       .catch(() => setLoading(false));

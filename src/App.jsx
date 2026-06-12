@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Component, useEffect } from 'react';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
@@ -19,6 +19,47 @@ import UserProfile from '@/pages/UserProfile';
 import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
 import PodcastDetail from '@/pages/PodcastDetail';
+import { base44ConfigError, isBase44Configured } from '@/lib/app-params';
+
+const AppErrorScreen = ({ title, message }) => (
+  <div className="fixed inset-0 flex items-center justify-center bg-[#0f0d0b] px-6 text-white">
+    <div className="w-full max-w-sm rounded-2xl border border-orange-500/30 bg-[#191411] p-6 text-center shadow-2xl">
+      <h1 className="text-xl font-semibold text-orange-500">{title}</h1>
+      <p className="mt-3 text-sm leading-relaxed text-white/70">{message}</p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="mt-5 rounded-full bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white"
+      >
+        Tentar novamente
+      </button>
+    </div>
+  </div>
+);
+
+class AppErrorBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('Voxyl startup error:', error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <AppErrorScreen
+          title="Nao foi possivel iniciar o Voxyl"
+          message="O aplicativo recebeu uma resposta inesperada. Verifique sua conexao e tente novamente."
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const BackButtonHandler = () => {
   const navigate = useNavigate();
@@ -85,17 +126,28 @@ const AuthenticatedApp = () => {
 };
 
 function App() {
+  if (!isBase44Configured) {
+    return (
+      <AppErrorScreen
+        title="Configuração do aplicativo ausente"
+        message={base44ConfigError}
+      />
+    );
+  }
+
   return (
-    <AuthProvider>
-      <QueryClientProvider client={queryClientInstance}>
-        <PlayerProvider>
-          <Router>
-            <AuthenticatedApp />
-          </Router>
-          <Toaster />
-        </PlayerProvider>
-      </QueryClientProvider>
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <QueryClientProvider client={queryClientInstance}>
+          <PlayerProvider>
+            <Router>
+              <AuthenticatedApp />
+            </Router>
+            <Toaster />
+          </PlayerProvider>
+        </QueryClientProvider>
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }
 

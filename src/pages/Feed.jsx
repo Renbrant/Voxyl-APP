@@ -13,6 +13,7 @@ import { motion } from 'framer-motion';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
 import { t } from '@/lib/i18n';
+import { asArray } from '@/lib/arrayUtils';
 
 export default function Feed() {
   const [user, setUser] = useState(null);
@@ -35,13 +36,13 @@ export default function Feed() {
         base44.entities.Block.filter({ blocked_id: u.id }),
       ]).then(([myBlocks, theirBlocks]) => {
         const ids = [
-          ...myBlocks.map(b => b.blocked_id),
-          ...theirBlocks.map(b => b.blocker_id),
+          ...asArray(myBlocks).map(b => b.blocked_id),
+          ...asArray(theirBlocks).map(b => b.blocker_id),
         ];
         setBlockedIds([...new Set(ids)]);
       }).catch(() => {});
       base44.entities.Follow.filter({ follower_id: u.id, status: 'accepted' })
-        .then(follows => setFollowingIds(new Set(follows.map(f => f.following_id))))
+        .then(follows => setFollowingIds(new Set(asArray(follows).map(f => f.following_id))))
         .catch(() => {});
     }).catch(() => {}); // guest mode — user stays null
   }, []);
@@ -64,8 +65,8 @@ export default function Feed() {
     queryKey: ['feed-playlists'],
     queryFn: async () => {
       const cached = getCache('feed-playlists');
-      if (cached) return cached;
-      const data = await base44.entities.Playlist.list('-plays_count', 100);
+      if (Array.isArray(cached)) return cached;
+      const data = asArray(await base44.entities.Playlist.list('-plays_count', 100));
       setCache('feed-playlists', data, TTL_5MIN);
       return data;
     },
@@ -79,7 +80,7 @@ export default function Feed() {
       const cacheKey = `my-likes-${user.id}`;
       const cached = getCache(cacheKey);
       if (cached) { setLikes(cached); return cached; }
-      const l = await base44.entities.PlaylistLike.filter({ user_id: user.id });
+      const l = asArray(await base44.entities.PlaylistLike.filter({ user_id: user.id }));
       const ids = l.map(x => x.playlist_id);
       setLikes(ids);
       setCache(cacheKey, ids, TTL_5MIN);
@@ -117,7 +118,7 @@ export default function Feed() {
     }
   });
 
-  const visiblePlaylists = playlists.filter(p => {
+  const visiblePlaylists = asArray(playlists).filter(p => {
     if (blockedIds.includes(p.creator_id)) return false;
     if (!p.visibility || p.visibility === 'public') return true;
     if (p.visibility === 'friends_only') return user && followingIds.has(p.creator_id);
