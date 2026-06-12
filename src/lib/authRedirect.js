@@ -4,10 +4,10 @@ import { base44 } from '@/api/base44Client';
 import { appParams } from '@/lib/app-params';
 
 // Base44 will redirect here after login — it's on Base44's own domain so it passes
-// the "allowed redirect domain" check. The page then bounces to the custom scheme.
-// native=1 tells AuthCallback.jsx to redirect to the custom scheme instead of web fallback.
-// This is how we detect native context without depending on window.Capacitor inside Chrome Custom Tab.
-const NATIVE_CALLBACK_URL = 'https://voxyl-app.base44.app/auth/callback?native=1';
+// the "allowed redirect domain" check. Uses the root URL (/?native_auth_callback=1)
+// so it never 404s — the published app always serves the root route.
+// main.jsx detects native_auth_callback=1 before React mounts and redirects to the custom scheme.
+const NATIVE_CALLBACK_URL = 'https://voxyl-app.base44.app/?native_auth_callback=1';
 const POST_AUTH_PATH_KEY = 'voxyl_post_auth_path';
 
 const log = (...args) => console.log('[AUTH]', ...args);

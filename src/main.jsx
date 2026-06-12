@@ -4,28 +4,77 @@ import App from '@/App.jsx'
 import '@/index.css'
 import { initializeNativeAuthCallback } from '@/lib/nativeAuthCallback'
 
+// Native auth callback detector.
+// Runs BEFORE React mounts so no routing or auth logic interferes.
+// Base44 redirects to /?native_auth_callback=1&access_token=... after Google login.
+// The root URL always exists on the published app (no 404), unlike a dedicated route.
+// We extract the token and redirect to the custom scheme that Android catches via appUrlOpen.
+function runNativeAuthCallbackCheck() {
+  const search = new URLSearchParams(window.location.search)
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
 
+  if (search.get('native_auth_callback') !== '1') return false
 
-// Apply saved theme before render to avoid flash
-const savedTheme = localStorage.getItem('theme') || 'dark';
-const root = document.documentElement;
-const nativePlatform = window.Capacitor?.getPlatform?.();
+  const log = function() {
+    console.log('[AUTH]', ...arguments)
+  }
 
-if (nativePlatform === 'android') {
-  root.classList.add('native-android');
+  log('AuthCallback detected — URL:', window.location.href)
+  log('Query params:', Object.fromEntries(search.entries()))
+
+  const token =
+    search.get('access_token') ||
+    search.get('access_tc') ||
+    search.get('token') ||
+    hash.get('access_token') ||
+    hash.get('access_tc') ||
+    hash.get('token')
+
+  log('Token found:', token ? 'YES' : 'NO')
+
+  if (token) {
+    const customSchemeUrl = 'com.renbrant.voxyl://auth/callback?access_token=' + encodeURIComponent(token)
+    log('Redirecting to custom scheme:', customSchemeUrl)
+    window.location.href = customSchemeUrl
+    return true
+  }
+
+  log('No token found — rendering debug screen')
+  document.getElementById('root').innerHTML =
+    '<div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f0d0b;color:#fff;padding:24px;font-family:monospace;gap:12px;text-align:center;">' +
+    '<div style="font-size:18px;font-weight:bold;color:#f97316;">Native Login Callback Reached</div>' +
+    '<div style="color:#ef4444;">No token found</div>' +
+    '<div style="font-size:11px;color:#888;word-break:break-all;max-width:360px;">URL: ' + window.location.href + '</div>' +
+    '<div style="font-size:11px;color:#888;word-break:break-all;max-width:360px;">Query: ' + (window.location.search || '(none)') + '</div>' +
+    '<div style="font-size:11px;color:#888;word-break:break-all;max-width:360px;">Hash: ' + (window.location.hash || '(none)') + '</div>' +
+    '</div>'
+  return true
 }
 
-if (savedTheme === 'auto') {
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  root.classList.add(prefersDark ? 'dark' : 'light');
-} else {
-  root.classList.add(savedTheme === 'light' ? 'light' : 'dark');
+const nativeCallbackHandled = runNativeAuthCallbackCheck()
+
+if (!nativeCallbackHandled) {
+  // Apply saved theme before render to avoid flash
+  const savedTheme = localStorage.getItem('theme') || 'dark'
+  const root = document.documentElement
+  const nativePlatform = window.Capacitor?.getPlatform?.()
+
+  if (nativePlatform === 'android') {
+    root.classList.add('native-android')
+  }
+
+  if (savedTheme === 'auto') {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    root.classList.add(prefersDark ? 'dark' : 'light')
+  } else {
+    root.classList.add(savedTheme === 'light' ? 'light' : 'dark')
+  }
+
+  initializeNativeAuthCallback().catch(error => {
+    console.error('Failed to initialize native auth callback:', error)
+  })
+
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <App />
+  )
 }
-
-initializeNativeAuthCallback().catch(error => {
-  console.error('Failed to initialize native auth callback:', error);
-});
-
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <App />
-)
