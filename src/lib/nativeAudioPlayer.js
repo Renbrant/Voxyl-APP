@@ -45,21 +45,29 @@ class NativeAudioPlayer {
     this._onEnded = onEnded;
     this._onStateChange = onStateChange;
 
+    console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
+    console.log('[NativeAudioPlayer] Capacitor.Plugins keys:', Object.keys(window.Capacitor?.Plugins ?? {}));
+
     try {
       // Access plugin via Capacitor's global registry — zero static/dynamic imports
       // The plugin registers itself on window.Capacitor.Plugins when loaded natively
       const NativeAudio = window.Capacitor?.Plugins?.NativeAudio ?? null;
       if (!NativeAudio) {
-        console.warn('[NativeAudioPlayer] NativeAudio plugin not found in Capacitor.Plugins');
+        console.error('[NativeAudioPlayer] FATAL: NativeAudio plugin not found in Capacitor.Plugins. ' +
+          'Run "npx cap sync android" and rebuild the APK. ' +
+          'Available plugins:', Object.keys(window.Capacitor?.Plugins ?? {}));
         return;
       }
+      console.log('[NativeAudioPlayer] NativeAudio plugin found:', !!NativeAudio);
       this._plugin = NativeAudio;
 
+      console.log('[NativeAudioPlayer] calling configure()...');
       await this._plugin.configure({
         fade: false,
         focus: true,          // Request audio focus (Android) / AVAudioSession (iOS)
         backgroundAudio: true, // Keep playback alive when screen locks / app backgrounds
       });
+      console.log('[NativeAudioPlayer] configure() succeeded');
 
       // currentTime events — fired every ~100ms while playing
       this._timeListener = await this._plugin.addListener('currentTime', (data) => {
@@ -122,21 +130,36 @@ class NativeAudioPlayer {
       }
 
       this._ready = true;
-      console.log('[NativeAudioPlayer] initialized');
+      console.log('[NativeAudioPlayer] initialized successfully ✓');
     } catch (err) {
-      console.warn('[NativeAudioPlayer] init failed:', err?.message);
+      console.error('[NativeAudioPlayer] init FAILED:', err?.message, err);
     }
   }
 
   // ── Load + Play ───────────────────────────────────────────────────────────
   async play(episode, resumeAt = 0) {
-    if (!isNative || !this._ready) return;
+    console.log('[NativeAudioPlayer] play() called — isNative:', isNative, '_ready:', this._ready, 'url:', episode?.audioUrl);
+    if (!isNative || !this._ready) {
+      console.warn('[NativeAudioPlayer] play() skipped — isNative:', isNative, '_ready:', this._ready);
+      return;
+    }
 
     const url = episode.audioUrl;
+    if (!url) {
+      console.error('[NativeAudioPlayer] play() — episode has no audioUrl!', episode);
+      return;
+    }
+    // Warn if URL looks relative (would resolve to localhost in WebView)
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      console.error('[NativeAudioPlayer] play() — audioUrl is NOT absolute HTTPS!', url);
+    }
+
+    console.log('[NativeAudioPlayer] loading URL:', url, '| resumeAt:', resumeAt);
 
     try {
       // Unload previous asset if URL changed
       if (this._currentUrl && this._currentUrl !== url) {
+        console.log('[NativeAudioPlayer] unloading previous asset:', this._currentUrl);
         await this._plugin.unload({ assetId: ASSET_ID }).catch(() => {});
       }
 
@@ -144,6 +167,7 @@ class NativeAudioPlayer {
       this._duration = 0;
 
       // Preload (registers the asset with the native engine)
+      console.log('[NativeAudioPlayer] calling preload()...');
       await this._plugin.preload({
         assetId: ASSET_ID,
         assetPath: url,
@@ -158,15 +182,17 @@ class NativeAudioPlayer {
         prevEnabled: true,
       });
 
+      console.log('[NativeAudioPlayer] preload() succeeded, calling play()...');
       await this._plugin.play({ assetId: ASSET_ID });
       this._isPlaying = true;
+      console.log('[NativeAudioPlayer] play() succeeded ✓');
 
       // iOS AVPlayer populates duration asynchronously after play() starts.
       // Poll until we get a valid value (up to ~6s).
       this._pollDuration(url, resumeAt);
 
     } catch (err) {
-      console.error('[NativeAudioPlayer] play() failed:', err?.message);
+      console.error('[NativeAudioPlayer] play() FAILED:', err?.message, err);
     }
   }
 
