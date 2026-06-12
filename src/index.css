@@ -7,7 +7,6 @@
 @layer base {
   /* Dark theme (default) */
   :root {
-    --app-safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --background: 20 15% 6%;
     --foreground: 30 10% 95%;
     --card: 20 13% 9%;
@@ -31,11 +30,6 @@
     --neon: 25 95% 53%;
     --neon-cyan: 38 95% 55%;
     --surface: 20 13% 11%;
-  }
-
-  /* Android already keeps the WebView above the system navigation bar. */
-  .native-android {
-    --app-safe-area-bottom: 0px;
   }
 
   /* Dark theme explicit class */
@@ -99,8 +93,9 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  body, #root {
+  html, body, #root {
     @apply bg-background text-foreground font-inter;
+    background: #0f0d0b;
     overscroll-behavior: none;
     touch-action: pan-y;
     -webkit-text-size-adjust: 100%;
@@ -156,6 +151,6 @@
     -webkit-backdrop-filter: blur(12px);
   }
   .bottom-nav-safe {
-    padding-bottom: var(--app-safe-area-bottom);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }

@@ -33,9 +33,15 @@ export default function BottomNav() {
   return (
     <nav
       className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
-      style={{ paddingBottom: 'var(--app-safe-area-bottom)', userSelect: 'none', WebkitUserSelect: 'none', background: 'hsl(var(--card))' }}
+      style={{
+        height: 'calc(4rem + env(safe-area-inset-bottom, 0px))',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        background: 'hsl(var(--card))',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
     >
-      <div className="flex items-center justify-around px-2 pt-3 pb-2">
+      <div className="h-16 flex items-center justify-around px-2">
         {getNavItems().map(({ icon: Icon, label, path }) => {
           const isProtected = path === '/playlists' || path === '/profile';
           const active = location.pathname === path ||

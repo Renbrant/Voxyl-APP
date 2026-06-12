@@ -24,7 +24,7 @@ export default function AudioPlayer() {
 
   return (
     <div className="fixed left-1/2 -translate-x-1/2 w-full max-w-md z-40 px-3 animate-slide-up select-none"
-      style={{ bottom: 'calc(var(--app-safe-area-bottom) + 4rem)' }}
+      style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
     >
       <div className="bg-card border border-border rounded-2xl shadow-2xl overflow-hidden cursor-pointer" onClick={handlePlayerClick}>
         {/* Progress bar always visible */}
