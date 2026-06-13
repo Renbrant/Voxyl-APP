@@ -39,3 +39,4 @@ dist-ssr
 !.env.production.example
 voxyl-auth-only-log.txt
 voxyl-audio-log.txt
+voxyl-auth-restore-log.txt
