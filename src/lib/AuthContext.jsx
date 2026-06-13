@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
       // On native platforms, attempt to restore session from stored token BEFORE
       // hitting the server. This ensures cold-start logins survive app restarts.
       if (isNativePlatform()) {
-        const hasToken = !!getStoredNativeToken();
+        const hasToken = !!(await getStoredNativeToken());
         console.log('[AUTH] startup token exists:', hasToken);
         if (hasToken) {
           const restoredUser = await restoreNativeAuthSession();
@@ -171,7 +171,7 @@ export const AuthProvider = ({ children }) => {
         // Definitively invalid token — clear it so we don't retry forever.
         if (isNativePlatform()) {
           console.log('[AUTH] stored token invalid, clearing session');
-          clearStoredNativeToken();
+          await clearStoredNativeToken();
         }
         setAuthError({
           type: 'auth_required',
@@ -183,13 +183,13 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = (shouldRedirect = true) => {
+  const logout = async (shouldRedirect = true) => {
     console.log('[AUTH] logout requested, clearing stored token');
     setUser(null);
     setIsAuthenticated(false);
     // Clear the persisted native token so the next cold start doesn't restore it.
     if (isNativePlatform()) {
-      clearStoredNativeToken();
+      await clearStoredNativeToken();
     }
     if (shouldRedirect) {
       base44.auth.logout(window.location.href);

@@ -1,18 +1,19 @@
 /**
  * nativeAuthSession.js
  *
- * Manages persistent token storage and Base44 SDK session restoration
- * for native (Android/iOS) Capacitor builds.
+ * Manages persistent token storage using BOTH Capacitor Preferences (native)
+ * and localStorage (web fallback / SDK read path).
  *
- * The Base44 SDK client is initialized once at module load time with whatever
- * token exists in localStorage at that moment. On a cold start after login,
- * the token must already be in localStorage BEFORE the SDK client is created.
- *
- * Storage key: 'base44_access_token' — matches what app-params.js reads.
+ * Strategy:
+ *  - setStoredNativeToken: writes to localStorage + Capacitor Preferences (async)
+ *  - getStoredNativeToken: reads localStorage first; if empty, falls back to Preferences
+ *  - hydrateLocalStorageFromPreferences: called in main.jsx BEFORE React mounts
+ *    so that app-params.js and base44Client.js see the token at init time
  */
 
-import { base44 } from '@/api/base44Client';
+import { Preferences } from '@capacitor/preferences';
 import { Capacitor } from '@capacitor/core';
+import { base44 } from '@/api/base44Client';
 
 const TOKEN_KEY = 'base44_access_token';
 
@@ -22,74 +23,120 @@ export const isNativePlatform = () => Capacitor.isNativePlatform();
 
 // ── Token storage helpers ─────────────────────────────────────────────────────
 
-export function getStoredNativeToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || null;
-  } catch {
-    return null;
-  }
-}
-
-export function setStoredNativeToken(token) {
+export async function setStoredNativeToken(token) {
   if (!token) return;
+  log('saving token to localStorage and Preferences');
   try {
     localStorage.setItem(TOKEN_KEY, token);
-    // 'token' is a legacy alias some SDK versions also check
     localStorage.setItem('token', token);
-    log('startup token stored: true');
+    log('localStorage verify after save:', !!localStorage.getItem(TOKEN_KEY));
   } catch (e) {
-    console.error('[AUTH] Failed to store token:', e?.message);
+    console.error('[AUTH] localStorage write failed:', e?.message);
+  }
+  try {
+    await Preferences.set({ key: TOKEN_KEY, value: token });
+    const verify = await Preferences.get({ key: TOKEN_KEY });
+    log('Preferences verify after save:', !!verify?.value);
+    log('token saved successfully');
+  } catch (e) {
+    console.error('[AUTH] Preferences write failed:', e?.message);
   }
 }
 
-export function clearStoredNativeToken() {
+export async function clearStoredNativeToken() {
+  log('clearing stored token from localStorage and Preferences');
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem('token');
-    log('logout requested, clearing stored token');
   } catch {}
+  try {
+    await Preferences.remove({ key: TOKEN_KEY });
+  } catch (e) {
+    console.error('[AUTH] Preferences remove failed:', e?.message);
+  }
+}
+
+/**
+ * Reads token from localStorage, falling back to Capacitor Preferences.
+ * If Preferences has a token but localStorage doesn't, hydrates localStorage.
+ * Returns the token string or null.
+ */
+export async function getStoredNativeToken() {
+  const lsToken = (() => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } })();
+  log('localStorage token exists:', !!lsToken);
+
+  if (lsToken) return lsToken;
+
+  try {
+    const result = await Preferences.get({ key: TOKEN_KEY });
+    const prefToken = result?.value || null;
+    log('native Preferences token exists:', !!prefToken);
+
+    if (prefToken) {
+      log('hydrated localStorage from native Preferences');
+      try {
+        localStorage.setItem(TOKEN_KEY, prefToken);
+        localStorage.setItem('token', prefToken);
+      } catch {}
+      return prefToken;
+    }
+  } catch (e) {
+    console.error('[AUTH] Preferences read failed:', e?.message);
+  }
+
+  return null;
+}
+
+/**
+ * Called in main.jsx BEFORE React mounts.
+ * Ensures localStorage is populated from Preferences so that app-params.js
+ * and the Base44 SDK client pick up the token at module initialization time.
+ */
+export async function hydrateLocalStorageFromPreferences() {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    const lsToken = localStorage.getItem(TOKEN_KEY);
+    log('localStorage token exists:', !!lsToken);
+    if (lsToken) return; // already there, nothing to do
+
+    const result = await Preferences.get({ key: TOKEN_KEY });
+    const prefToken = result?.value || null;
+    log('native Preferences token exists:', !!prefToken);
+
+    if (prefToken) {
+      log('hydrating localStorage from Preferences');
+      localStorage.setItem(TOKEN_KEY, prefToken);
+      localStorage.setItem('token', prefToken);
+    }
+  } catch (e) {
+    console.error('[AUTH] hydrateLocalStorageFromPreferences failed:', e?.message);
+  }
 }
 
 // ── Session restoration ───────────────────────────────────────────────────────
 
 /**
- * Attempts to inject the stored token into the live Base44 SDK client
- * and verify it by calling base44.auth.me().
- *
- * The SDK client reads appParams.token at creation time. If the app cold-starts
- * with a token already in localStorage, appParams.token will be set correctly
- * and the client will be authenticated. This function handles the case where
- * the SDK client instance needs to be told about the token explicitly.
- *
- * Returns the user object if the session is valid, null otherwise.
- * Does NOT clear the stored token on network errors — only on definitive 401/403.
+ * Verifies the stored token by calling base44.auth.me().
+ * Returns the user object if valid, null otherwise.
+ * Only clears the token on definitive 401/403 — never on network errors.
  */
 export async function restoreNativeAuthSession() {
-  const token = getStoredNativeToken();
-  log('startup token exists:', !!token);
+  const token = await getStoredNativeToken();
+  log('startup token restored:', !!token);
 
   if (!token) return null;
 
   log('restoring native auth session');
 
-  // Inject token into the SDK client if it doesn't already have it.
-  // The SDK exposes setToken() or similar — check via duck-typing.
+  // Try to inject token into SDK client if it doesn't already have it
   try {
     if (typeof base44.auth?.setToken === 'function') {
       base44.auth.setToken(token);
-      log('Base44 client initialized with stored token');
     } else if (base44._client?.setToken) {
       base44._client.setToken(token);
-      log('Base44 client initialized with stored token');
-    } else {
-      // SDK reads from localStorage on each request — already there, no injection needed.
-      log('Base44 client initialized with stored token');
     }
-  } catch (e) {
-    log('Token injection skipped (SDK may read localStorage directly):', e?.message);
-  }
+  } catch {}
 
-  // Verify the token is still valid
   try {
     const user = await base44.auth.me();
     if (user) {
@@ -100,11 +147,9 @@ export async function restoreNativeAuthSession() {
   } catch (error) {
     const status = error?.status || error?.response?.status;
     if (status === 401 || status === 403) {
-      log('stored token invalid, clearing session');
-      clearStoredNativeToken();
+      log('stored token invalid (401/403), clearing session');
+      await clearStoredNativeToken();
     } else {
-      // Network error, server error, etc. — do NOT clear token.
-      // The user is probably just offline. Keep them "logged in" optimistically.
       log('session restore failed (network/server error), keeping token:', error?.message);
     }
     return null;

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import '@/index.css'
 import { initializeNativeAuthCallback } from '@/lib/nativeAuthCallback'
+import { hydrateLocalStorageFromPreferences } from '@/lib/nativeAuthSession'
 
 // Native auth callback detector.
 // Runs BEFORE React mounts so no routing or auth logic interferes.
@@ -51,10 +52,12 @@ function runNativeAuthCallbackCheck() {
   return true
 }
 
-const nativeCallbackHandled = runNativeAuthCallbackCheck()
+async function bootstrap() {
+  // 1. Handle native OAuth callback redirect (synchronous — no async needed)
+  const nativeCallbackHandled = runNativeAuthCallbackCheck()
+  if (nativeCallbackHandled) return
 
-if (!nativeCallbackHandled) {
-  // Apply saved theme before render to avoid flash
+  // 2. Apply saved theme before render to avoid flash
   const savedTheme = localStorage.getItem('theme') || 'dark'
   const root = document.documentElement
   const nativePlatform = window.Capacitor?.getPlatform?.()
@@ -70,11 +73,28 @@ if (!nativeCallbackHandled) {
     root.classList.add(savedTheme === 'light' ? 'light' : 'dark')
   }
 
+  // 3. On native platforms, hydrate localStorage from Capacitor Preferences BEFORE
+  //    React mounts. This ensures app-params.js and base44Client.js read the token
+  //    correctly at module initialization time on a cold start.
+  if (nativePlatform === 'android' || nativePlatform === 'ios') {
+    await hydrateLocalStorageFromPreferences()
+  }
+
+  // 4. Register native auth callback listener (appUrlOpen, launch URL check)
   initializeNativeAuthCallback().catch(error => {
     console.error('Failed to initialize native auth callback:', error)
   })
 
+  // 5. Mount React
   ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   )
 }
+
+bootstrap().catch(error => {
+  console.error('Bootstrap failed:', error)
+  // Fallback: mount app anyway so the user isn't stuck on a blank screen
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <App />
+  )
+})

@@ -74,7 +74,7 @@ export const handleNativeAuthCallback = async (url) => {
   }
   sessionStorage.setItem(HANDLED_URL_KEY, url);
 
-  setStoredNativeToken(token);
+  await setStoredNativeToken(token);
 
   log('Calling Browser.close()');
   try {
