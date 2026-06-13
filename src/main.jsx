@@ -1,24 +1,20 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from '@/App.jsx'
 import '@/index.css'
-import { initializeNativeAuthCallback } from '@/lib/nativeAuthCallback'
-import { hydrateLocalStorageFromPreferences } from '@/lib/nativeAuthSession'
+// ONLY import the lightweight storage helper here — it has NO base44/SDK imports.
+// Everything else (App, AuthContext, base44Client) is dynamically imported AFTER hydration.
+import { hydrateLocalStorageFromPreferences } from '@/lib/nativeTokenStorage'
 
 // Native auth callback detector.
-// Runs BEFORE React mounts so no routing or auth logic interferes.
+// Runs synchronously BEFORE any async work so no routing or auth logic interferes.
 // Base44 redirects to /?native_auth_callback=1&access_token=... after Google login.
-// The root URL always exists on the published app (no 404), unlike a dedicated route.
-// We extract the token and redirect to the custom scheme that Android catches via appUrlOpen.
 function runNativeAuthCallbackCheck() {
   const search = new URLSearchParams(window.location.search)
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
 
   if (search.get('native_auth_callback') !== '1') return false
 
-  const log = function() {
-    console.log('[AUTH]', ...arguments)
-  }
+  const log = (...args) => console.log('[AUTH]', ...args)
 
   log('AuthCallback detected — URL:', window.location.href)
   log('Query params:', Object.fromEntries(search.entries()))
@@ -53,7 +49,9 @@ function runNativeAuthCallbackCheck() {
 }
 
 async function bootstrap() {
-  // 1. Handle native OAuth callback redirect (synchronous — no async needed)
+  console.log('[AUTH] bootstrap start')
+
+  // 1. Handle native OAuth callback redirect — no hydration needed here
   const nativeCallbackHandled = runNativeAuthCallbackCheck()
   if (nativeCallbackHandled) return
 
@@ -62,39 +60,44 @@ async function bootstrap() {
   const root = document.documentElement
   const nativePlatform = window.Capacitor?.getPlatform?.()
 
-  if (nativePlatform === 'android') {
-    root.classList.add('native-android')
-  }
+  if (nativePlatform === 'android') root.classList.add('native-android')
 
   if (savedTheme === 'auto') {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    root.classList.add(prefersDark ? 'dark' : 'light')
+    root.classList.add(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   } else {
     root.classList.add(savedTheme === 'light' ? 'light' : 'dark')
   }
 
-  // 3. On native platforms, hydrate localStorage from Capacitor Preferences BEFORE
-  //    React mounts. This ensures app-params.js and base44Client.js read the token
-  //    correctly at module initialization time on a cold start.
+  // 3. Hydrate localStorage from Capacitor Preferences BEFORE importing anything
+  //    that touches base44Client / app-params. This is the critical step that ensures
+  //    the SDK sees the token at module initialization time on cold start.
   if (nativePlatform === 'android' || nativePlatform === 'ios') {
     await hydrateLocalStorageFromPreferences()
   }
 
-  // 4. Register native auth callback listener (appUrlOpen, launch URL check)
+  // 4. NOW dynamically import App and auth callback — base44Client/app-params
+  //    will initialize with the token already in localStorage.
+  console.log('[AUTH] importing App after token hydration')
+  const [{ default: App }, { initializeNativeAuthCallback }] = await Promise.all([
+    import('@/App.jsx'),
+    import('@/lib/nativeAuthCallback'),
+  ])
+
+  // 5. Register native auth callback listener (appUrlOpen, launch URL check)
   initializeNativeAuthCallback().catch(error => {
     console.error('Failed to initialize native auth callback:', error)
   })
 
-  // 5. Mount React
+  // 6. Mount React
   ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   )
 }
 
 bootstrap().catch(error => {
-  console.error('Bootstrap failed:', error)
-  // Fallback: mount app anyway so the user isn't stuck on a blank screen
-  ReactDOM.createRoot(document.getElementById('root')).render(
-    <App />
-  )
+  console.error('[AUTH] bootstrap failed:', error)
+  // Fallback: attempt to mount app anyway so the user isn't stuck on a blank screen
+  import('@/App.jsx').then(({ default: App }) => {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />)
+  })
 })

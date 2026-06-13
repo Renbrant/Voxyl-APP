@@ -1,7 +1,8 @@
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
-import { setStoredNativeToken } from '@/lib/nativeAuthSession';
+// Import from storage-only file — no base44/SDK imports triggered here
+import { setStoredNativeToken } from '@/lib/nativeTokenStorage';
 
 // @capacitor/browser v8 only supports two events:
 //   - browserFinished  (user closed browser)
