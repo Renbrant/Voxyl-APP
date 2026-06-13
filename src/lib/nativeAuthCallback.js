@@ -1,6 +1,7 @@
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
+import { setStoredNativeToken } from '@/lib/nativeAuthSession';
 
 // @capacitor/browser v8 only supports two events:
 //   - browserFinished  (user closed browser)
@@ -73,9 +74,7 @@ export const handleNativeAuthCallback = async (url) => {
   }
   sessionStorage.setItem(HANDLED_URL_KEY, url);
 
-  log('Storing token to localStorage');
-  localStorage.setItem('base44_access_token', token);
-  localStorage.setItem('token', token);
+  setStoredNativeToken(token);
 
   log('Calling Browser.close()');
   try {

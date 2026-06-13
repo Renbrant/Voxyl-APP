@@ -3,6 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { appParams, base44ConfigError } from '@/lib/app-params';
 import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
 import { redirectToLogin } from '@/lib/authRedirect';
+import { clearStoredNativeToken, getStoredNativeToken, isNativePlatform, restoreNativeAuthSession } from '@/lib/nativeAuthSession';
 
 const AuthContext = createContext();
 
@@ -32,6 +33,29 @@ export const AuthProvider = ({ children }) => {
         setIsLoadingPublicSettings(false);
         setIsLoadingAuth(false);
         return;
+      }
+
+      // On native platforms, attempt to restore session from stored token BEFORE
+      // hitting the server. This ensures cold-start logins survive app restarts.
+      if (isNativePlatform()) {
+        const hasToken = !!getStoredNativeToken();
+        console.log('[AUTH] startup token exists:', hasToken);
+        if (hasToken) {
+          const restoredUser = await restoreNativeAuthSession();
+          if (restoredUser) {
+            setUser(restoredUser);
+            setIsAuthenticated(true);
+            setIsLoadingAuth(false);
+            setIsLoadingPublicSettings(false);
+            setAuthChecked(true);
+            // processReferral is defined later in the component but is in the same
+            // closure scope — safe to call here after all hooks are initialized.
+            setTimeout(() => processReferral(restoredUser).catch(() => {}), 0);
+            return;
+          }
+          // Token was invalid (401/403) — clearStoredNativeToken already called inside restoreNativeAuthSession.
+          // Fall through to normal auth check.
+        }
       }
       
       // First, check app public settings (with token if available)
@@ -142,25 +166,34 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(false);
       setAuthChecked(true);
       
-      // If user auth fails, it might be an expired token
-      if (error.status === 401 || error.status === 403) {
+      const status = error?.status || error?.response?.status;
+      if (status === 401 || status === 403) {
+        // Definitively invalid token — clear it so we don't retry forever.
+        if (isNativePlatform()) {
+          console.log('[AUTH] stored token invalid, clearing session');
+          clearStoredNativeToken();
+        }
         setAuthError({
           type: 'auth_required',
           message: 'Authentication required'
         });
       }
+      // On network/server errors, do NOT set auth_required — keep the user's
+      // session intact so a temporary connectivity issue doesn't force re-login.
     }
   };
 
   const logout = (shouldRedirect = true) => {
+    console.log('[AUTH] logout requested, clearing stored token');
     setUser(null);
     setIsAuthenticated(false);
-    
+    // Clear the persisted native token so the next cold start doesn't restore it.
+    if (isNativePlatform()) {
+      clearStoredNativeToken();
+    }
     if (shouldRedirect) {
-      // Use the SDK's logout method which handles token cleanup and redirect
       base44.auth.logout(window.location.href);
     } else {
-      // Just remove the token without redirect
       base44.auth.logout();
     }
   };
