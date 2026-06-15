@@ -23,9 +23,7 @@ export default function AudioPlayer() {
   const progress = duration ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="fixed left-1/2 -translate-x-1/2 w-full max-w-md z-40 px-3 animate-slide-up select-none"
-      style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
-    >
+    <div className="fixed left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 w-full max-w-md md:max-w-sm z-40 px-3 md:px-0 animate-slide-up select-none [bottom:calc(4rem+env(safe-area-inset-bottom,0px))] md:[bottom:1.5rem]">
       <div className="bg-card border border-border rounded-2xl shadow-2xl overflow-hidden cursor-pointer" onClick={handlePlayerClick}>
         {/* Progress bar always visible */}
         <div className="h-1 bg-border relative overflow-hidden">

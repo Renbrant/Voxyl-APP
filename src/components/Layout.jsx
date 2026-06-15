@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import AudioPlayer from './player/AudioPlayer';
 import { usePlayer } from '@/lib/PlayerContext';
 import FollowRequestsBell from '@/components/notifications/FollowRequestsBell';
+import Sidebar from '@/components/common/Sidebar';
 import { base44 } from '@/api/base44Client';
 import { redirectToLogin } from '@/lib/authRedirect';
 import { t } from '@/lib/i18n';
@@ -59,9 +60,12 @@ export default function Layout() {
 
   return (
     <div
-      className="flex flex-col bg-background max-w-md mx-auto relative"
+      className="flex bg-background relative"
       style={{ height: '100dvh', background: '#0f0d0b' }}
     >
+      <Sidebar />
+
+      <div className="flex flex-col flex-1 min-w-0 relative max-w-md md:max-w-none mx-auto md:mx-0">
       <main
         className="flex-1 overflow-y-auto"
         style={{
@@ -69,14 +73,16 @@ export default function Layout() {
           paddingBottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))'
         }}
       >
-        <Outlet />
+        <div className="md:max-w-5xl md:mx-auto md:w-full md:px-2">
+          <Outlet />
+        </div>
       </main>
 
       {currentEpisode && <AudioPlayer />}
       <FollowRequestsBell />
 
       <nav
-        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
+        className="md:hidden fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md border-t border-border z-50"
         style={{
           userSelect: 'none',
           WebkitUserSelect: 'none',
@@ -127,6 +133,7 @@ export default function Layout() {
           })}
         </div>
       </nav>
+      </div>
     </div>
   );
 }

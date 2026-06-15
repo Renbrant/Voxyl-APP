@@ -1,5 +1,17 @@
 # Changelog — Voxyl
 
+## v2.5 — Junho 2026
+
+### Melhorias
+
+#### Interface responsiva para desktop e tablet
+- Em telas médias e grandes (≥ 768px), a navegação inferior dá lugar a uma barra lateral fixa com logo e menu
+- O conteúdo agora aproveita a largura disponível, com grades de 3 a 4 colunas em vez da largura fixa de celular
+- Os destaques (hero) ficam maiores em telas grandes e o mini-player flutua no canto inferior direito
+- A versão mobile permanece exatamente como estava
+
+---
+
 ## v2.4.1 — Junho 2026
 
 ### Correções
