@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Heart, Share2, Lock, MoreVertical } from 'lucide-react';
+import { Heart, Share2, MoreVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
@@ -91,32 +91,13 @@ export default function PlaylistCard({ playlist, onLike, liked, compact = false,
           </>
         ) : (
           <>
-            <div className={cn("h-36 bg-gradient-to-br relative", gradient)}>
+            <div className={cn("aspect-square bg-gradient-to-br relative", gradient)}>
               {coverImage && (
                 <img src={coverImage} alt="" className="absolute inset-0 w-full h-full object-cover" />
               )}
-              <div className="absolute inset-0 bg-black/20" />
+              <div className="absolute inset-0 bg-black/10" />
               <div className="absolute top-2 right-2">
                 <VisibilityBadge visibility={playlist.visibility || 'public'} />
-              </div>
-              <div className="absolute bottom-3 left-3 right-3">
-                <div className="flex items-center justify-between">
-                  <div className="w-10 h-10 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                    <Play size={18} fill="white" className="text-white ml-0.5" />
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={handleShare} className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white">
-                      <Share2 size={14} />
-                    </button>
-                    <button
-                      onClick={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
-                      onTouchEnd={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
-                      className={cn("w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center", liked ? "text-red-400" : "text-white")}
-                    >
-                      <Heart size={14} fill={liked ? "currentColor" : "none"} />
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
             <div className="p-3">
