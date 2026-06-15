@@ -65,7 +65,7 @@ export default function Layout() {
     >
       <Sidebar />
 
-      <div className="flex flex-col flex-1 min-w-0 relative max-w-md md:max-w-none mx-auto md:mx-0">
+      <div className="flex flex-col flex-1 min-w-0 relative">
       <main
         className="flex-1 overflow-y-auto"
         style={{
