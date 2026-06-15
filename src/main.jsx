@@ -31,7 +31,7 @@ function runNativeAuthCallbackCheck() {
 
   if (token) {
     const customSchemeUrl = 'com.renbrant.voxyl://auth/callback?access_token=' + encodeURIComponent(token)
-    log('Redirecting to custom scheme:', customSchemeUrl)
+    log('Redirecting to custom scheme')
     window.location.href = customSchemeUrl
     return true
   }

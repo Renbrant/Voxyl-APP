@@ -59,11 +59,15 @@ const isCustomSchemeCallback = (url) => {
 };
 
 export const handleNativeAuthCallback = async (url) => {
-  log('handleNativeAuthCallback called with url:', url);
+  log('handleNativeAuthCallback called');
+  log('is custom scheme callback:', isCustomSchemeCallback(url) ? 'true' : 'false');
+  
   if (!url) { log('No URL, skipping'); return false; }
   if (!isCustomSchemeCallback(url)) { log('Not a custom scheme callback, skipping:', url); return false; }
 
   const token = getTokenFromUrl(url);
+  log('token found in custom scheme URL:', token ? 'true' : 'false');
+  
   if (!token) {
     err('NO TOKEN in callback URL:', url);
     return false;
