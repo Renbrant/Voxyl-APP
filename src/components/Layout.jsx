@@ -73,7 +73,7 @@ export default function Layout() {
           paddingBottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))'
         }}
       >
-        <div className="md:max-w-5xl md:mx-auto md:w-full md:px-2">
+        <div className="md:w-full md:px-6">
           <Outlet />
         </div>
       </main>
