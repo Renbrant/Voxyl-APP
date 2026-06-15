@@ -85,14 +85,17 @@ export default function AudioPlayer() {
                 </div>
                 <div className="flex justify-between mt-0.5">
                   <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(currentTime))}</span>
-                  <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>
+                  <span className="text-xs text-muted-foreground">-{formatDuration(Math.max(0, Math.floor(duration - currentTime)))}</span>
                 </div>
               </div>
 
               <div className="flex flex-col items-end gap-1">
-                <button onClick={() => setMinimized(true)} className="p-1 text-muted-foreground">
-                  <ChevronDown size={16} />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-foreground tabular-nums">{formatDuration(Math.floor(currentTime))}</span>
+                  <button onClick={() => setMinimized(true)} className="p-1 text-muted-foreground">
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
                 <div className="flex items-center gap-1">
                   <button onClick={playPrev} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors">
                     <SkipBack size={16} />
