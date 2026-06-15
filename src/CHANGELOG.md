@@ -1,5 +1,21 @@
 # Changelog — Voxyl
 
+## v2.4.0 — Junho 2026
+
+### Estabilidade e correções
+
+#### Persistência de sessão no Android
+- Corrigido bug crítico onde o app deslogava o usuário ao sair e voltar para o app
+- Adicionado listener de `appStateChange` do Capacitor para re-hidratar o token ao retornar ao foreground
+- `localStorage` agora é restaurado a partir do `Capacitor Preferences` (persistente) quando o Android destrói o WebView em background
+- Token injetado explicitamente no SDK via `base44.auth.setToken()` ao retomar sessão
+
+#### Callback OAuth nativo
+- Fluxo de login Google via esquema customizado `com.renbrant.voxyl://auth/callback` estabilizado
+- Detecção de callback nativo movida para `main.jsx` para execução antes da montagem do React
+
+---
+
 ## v0.2 — Abril 2026
 
 ### Melhorias e correções
