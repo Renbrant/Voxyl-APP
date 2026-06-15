@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, Share2, MoreVertical } from 'lucide-react';
+import { Play, Heart, Share2, MoreVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
@@ -108,10 +108,26 @@ export default function PlaylistCard({ playlist, onLike, liked, compact = false,
               {playlist.description && (
                 <p className="text-xs text-muted-foreground line-clamp-2">{playlist.description}</p>
               )}
-              <div className="flex items-center gap-3 mt-2">
-                <span className="text-xs text-muted-foreground">{playlist.rss_feeds?.length || 0} feeds</span>
-                <span className="text-xs text-muted-foreground">{playlist.likes_count || 0} ♥</span>
-                <span className="text-xs text-muted-foreground">{playlist.plays_count || 0} ▶</span>
+              <div className="flex items-center justify-between mt-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>{playlist.rss_feeds?.length || 0} feeds</span>
+                  <span>{playlist.plays_count || 0} ▶</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-7 h-7 rounded-full gradient-primary flex items-center justify-center">
+                    <Play size={13} fill="white" className="text-white ml-0.5" />
+                  </div>
+                  <button onClick={handleShare} className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
+                    <Share2 size={13} />
+                  </button>
+                  <button
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
+                    onTouchEnd={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
+                    className={cn("w-7 h-7 rounded-full bg-secondary flex items-center justify-center", liked ? "text-red-400" : "text-muted-foreground")}
+                  >
+                    <Heart size={13} fill={liked ? "currentColor" : "none"} />
+                  </button>
+                </div>
               </div>
             </div>
           </>
