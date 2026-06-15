@@ -102,7 +102,7 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
       {sortedMyPlaylists.length > 0 && (
         <div className="mb-8">
           <h2 className="text-base font-semibold mb-3 text-foreground">Ouvidas recentemente</h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {sortedMyPlaylists.map((pl, i) => (
               <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
                 <PlaylistCard
@@ -123,7 +123,7 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
           <h2 className="text-base font-semibold mb-3 text-foreground">
             {t('feedLastPlayedPodcasts')}
           </h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {lastPlayedPodcasts.map((play, i) => {
               const gradient = GRADIENT_COLORS[play.feed_url?.charCodeAt(0) % GRADIENT_COLORS.length];
               return (
