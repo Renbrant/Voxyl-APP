@@ -3,8 +3,19 @@ const INDEX_KEY = 'voxyl_feed_index';
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_CACHE_ENTRIES = 100;
 
+// Deterministic 32-bit hash (djb2) — guarantees a unique key per distinct URL.
+// Truncating a base64 string (old approach) caused collisions where two
+// different feeds shared the same cache key, showing the wrong podcast's metadata.
+function hashUrl(url) {
+  let hash = 5381;
+  for (let i = 0; i < url.length; i++) {
+    hash = ((hash << 5) + hash + url.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
 function getCacheKey(url) {
-  return CACHE_KEY_PREFIX + btoa(url).replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
+  return CACHE_KEY_PREFIX + hashUrl(url) + '_' + url.length.toString(36);
 }
 
 function getIndex() {

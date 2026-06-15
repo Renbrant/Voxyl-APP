@@ -1,5 +1,16 @@
 # Changelog — Voxyl
 
+## v2.4.1 — Junho 2026
+
+### Correções
+
+#### Metadados de podcast incorretos
+- Corrigido bug onde, ao abrir um podcast recém-buscado, o nome, autor e foto exibidos eram de outro podcast (os episódios apareciam corretos)
+- Causa raiz: a chave de cache de feeds era gerada truncando o base64 da URL em 40 caracteres, fazendo URLs distintas colidirem na mesma chave
+- Nova chave de cache usa hash djb2 + comprimento da URL, garantindo unicidade por feed
+
+---
+
 ## v2.4.0 — Junho 2026
 
 ### Estabilidade e correções
