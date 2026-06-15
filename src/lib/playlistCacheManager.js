@@ -217,7 +217,16 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist) {
         .filter(r => r?.items)
         .flatMap(r => r.items);
       
-      episodesToUse = processEpisodes(rawEpisodes, playlist);
+      // DEDUPLICATE: Remove duplicate episodes by audioUrl
+      const seenUrls = new Set();
+      const deduplicatedEpisodes = rawEpisodes.filter(ep => {
+        if (!ep.audioUrl) return true; // Keep episodes without audioUrl
+        if (seenUrls.has(ep.audioUrl)) return false; // Skip duplicates
+        seenUrls.add(ep.audioUrl);
+        return true;
+      });
+      
+      episodesToUse = processEpisodes(deduplicatedEpisodes, playlist);
       sourceUsed = 'rss';
     } else if (cloudCache?.episodes?.length) {
       // No fresh RSS, use cloud cache if available and newer than local
