@@ -21,6 +21,12 @@ export const isNative = Capacitor.isNativePlatform();
 const ASSET_ID = 'voxyl_current'; // single-slot player
 const BackgroundAudioService = registerPlugin('BackgroundAudioService');
 
+// Native-side auto-advance bridge. The NATIVE foreground service is expected to
+// implement setQueue / clearQueue so it can start the next episode on ExoPlayer
+// STATE_ENDED WITHOUT waking the JS WebView (survives Android Doze).
+// If the native side does not implement these (older builds / web), the calls
+// are wrapped in try/catch and the JS-side fallback in PlayerContext still runs.
+
 class NativeAudioPlayer {
   constructor() {
     this._plugin = null;         // @capgo/capacitor-native-audio NativeAudio
@@ -35,16 +41,19 @@ class NativeAudioPlayer {
     this._stateListener = null;
     this._completeListener = null;
     this._appStateListener = null;
+    this._trackChangeListener = null;
+    this._onNativeTrackChanged = null;
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────
-  async initialize({ onTimeUpdate, onEnded, onStateChange }) {
+  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged }) {
     if (!isNative) return;
     if (this._ready) return;
 
     this._onTimeUpdate = onTimeUpdate;
     this._onEnded = onEnded;
     this._onStateChange = onStateChange;
+    this._onNativeTrackChanged = onNativeTrackChanged;
 
     console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
     try {
@@ -90,6 +99,21 @@ class NativeAudioPlayer {
         }
         this._onStateChange?.(this._isPlaying);
       });
+
+      // NATIVE auto-advance signal. Emitted by the foreground service when IT
+      // moves to the next queue item on ExoPlayer STATE_ENDED while the WebView
+      // is frozen. JS uses this to sync currentEpisode/index WITHOUT triggering
+      // another play() (which would double-play on resume).
+      try {
+        this._trackChangeListener = await BackgroundAudioService.addListener('nativeTrackChanged', (data) => {
+          console.log('[AUDIO_NEXT] native foreground service advanced track', data);
+          this._currentUrl = data?.url ?? this._currentUrl;
+          this._duration = 0;
+          this._onNativeTrackChanged?.(data);
+        });
+      } catch (_) {
+        // Older native build without queue support — JS fallback handles it.
+      }
 
       // Capacitor App state — sync playing state when returning from background
       const App = getApp();
@@ -268,6 +292,39 @@ class NativeAudioPlayer {
     return this._isPlaying;
   }
 
+  // ── Native-side queue handoff ─────────────────────────────────────────────
+  // Pushes the WHOLE upcoming queue to the native foreground service so it can
+  // auto-advance on ExoPlayer STATE_ENDED while the WebView/JS is frozen (Doze).
+  // The native BackgroundAudioService must implement `setQueue`. If it doesn't,
+  // this no-ops gracefully and the JS fallback handles advancing on resume.
+  async setNativeQueue(episodes, startIndex) {
+    if (!isNative) return;
+    try {
+      const items = (episodes || []).slice(startIndex).map(ep => ({
+        url: ep.audioUrl,
+        title: ep.title || '',
+        artist: ep.feedTitle || 'Voxyl',
+        album: 'Voxyl',
+        artworkUrl: ep.image || '',
+        skipStartSeconds: ep.skip_start_seconds || 0,
+        skipEndSeconds: ep.skip_end_seconds || 0,
+      }));
+      console.log('[AUDIO_NEXT] pushing native queue', { count: items.length, startIndex });
+      await BackgroundAudioService.setQueue({ items });
+      console.log('[AUDIO_NEXT] native queue accepted by foreground service');
+    } catch (err) {
+      console.warn('[AUDIO_NEXT] native setQueue unavailable — JS fallback will handle next', err?.message);
+    }
+  }
+
+  async clearNativeQueue() {
+    if (!isNative) return;
+    try {
+      await BackgroundAudioService.clearQueue();
+      console.log('[AUDIO_NEXT] native queue cleared');
+    } catch (_) {}
+  }
+
   // ── Stop / cleanup ───────────────────────────────────────────────────────
   async stop() {
     if (!isNative || !this._ready) return;
@@ -313,6 +370,7 @@ class NativeAudioPlayer {
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
     await this._appStateListener?.remove?.();
+    await this._trackChangeListener?.remove?.();
     await this.stop();
   }
 }
