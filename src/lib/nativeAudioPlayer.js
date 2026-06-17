@@ -31,20 +31,29 @@ class NativeAudioPlayer {
     this._onTimeUpdate = null;   // (posSeconds, durSeconds) => void
     this._onEnded = null;        // () => void
     this._onStateChange = null;  // (playing: boolean) => void
+    this._onNativeTrackChanged = null;
+    this._onPlaybackError = null;
+    this._onQueueCompleted = null;
     this._timeListener = null;
     this._stateListener = null;
     this._completeListener = null;
+    this._nativeTrackChangedListener = null;
+    this._playbackErrorListener = null;
+    this._queueCompletedListener = null;
     this._appStateListener = null;
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────
-  async initialize({ onTimeUpdate, onEnded, onStateChange }) {
+  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged, onPlaybackError, onQueueCompleted }) {
     if (!isNative) return;
     if (this._ready) return;
 
     this._onTimeUpdate = onTimeUpdate;
     this._onEnded = onEnded;
     this._onStateChange = onStateChange;
+    this._onNativeTrackChanged = onNativeTrackChanged;
+    this._onPlaybackError = onPlaybackError;
+    this._onQueueCompleted = onQueueCompleted;
 
     console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
     try {
@@ -89,6 +98,29 @@ class NativeAudioPlayer {
           });
         }
         this._onStateChange?.(this._isPlaying);
+      });
+
+      this._nativeTrackChangedListener = await this._plugin.addListener('nativeTrackChanged', (data) => {
+        console.log('[AUDIO_NEXT] nativeTrackChanged', data);
+        this._currentUrl = data?.url || data?.audioUrl || this._currentUrl;
+        this._duration = 0;
+        this._isPlaying = true;
+        this._onNativeTrackChanged?.(data);
+        this._onStateChange?.(true);
+      });
+
+      this._playbackErrorListener = await this._plugin.addListener('playbackError', (data) => {
+        console.error('[AUDIO_NEXT] playbackError', data);
+        this._isPlaying = false;
+        this._onPlaybackError?.(data);
+        this._onStateChange?.(false);
+      });
+
+      this._queueCompletedListener = await this._plugin.addListener('queueCompleted', (data) => {
+        console.log('[AUDIO_NEXT] queueCompleted', data);
+        this._isPlaying = false;
+        this._onQueueCompleted?.(data);
+        this._onStateChange?.(false);
       });
 
       // Capacitor App state — sync playing state when returning from background
@@ -211,6 +243,59 @@ class NativeAudioPlayer {
     }
   }
 
+  _toNativeQueueItem(episode, index) {
+    return {
+      id: episode?.id || episode?.episodeId || episode?.audioUrl || '',
+      title: episode?.title || '',
+      podcastTitle: episode?.podcastTitle || episode?.feedTitle || episode?.showTitle || '',
+      feedTitle: episode?.feedTitle || episode?.podcastTitle || episode?.showTitle || '',
+      audioUrl: episode?.audioUrl || episode?.url || '',
+      url: episode?.audioUrl || episode?.url || '',
+      artworkUrl: episode?.artworkUrl || episode?.image || episode?.podcastImage || '',
+      image: episode?.image || episode?.artworkUrl || episode?.podcastImage || '',
+      playlistId: episode?.playlistId || episode?.playlist_id || '',
+      index,
+    };
+  }
+
+  async setQueue(queue = [], startIndex = 0, autoplay = true) {
+    if (!isNative || !this._ready || !this._plugin?.setQueue) return;
+    const nativeQueue = queue.map((episode, index) => this._toNativeQueueItem(episode, index));
+    await this._plugin.setQueue({ queue: nativeQueue, startIndex, autoplay }).catch((error) => {
+      console.error('[AUDIO_NEXT] setQueue failed', error?.message, error);
+    });
+  }
+
+  async updateQueue(queue = [], currentIndex = 0, autoplay = true) {
+    if (!isNative || !this._ready || !this._plugin?.updateQueue) return;
+    const nativeQueue = queue.map((episode, index) => this._toNativeQueueItem(episode, index));
+    await this._plugin.updateQueue({ queue: nativeQueue, currentIndex, autoplay }).catch((error) => {
+      console.error('[AUDIO_NEXT] updateQueue failed', error?.message, error);
+    });
+  }
+
+  async clearQueue() {
+    if (!isNative || !this._ready || !this._plugin?.clearQueue) return;
+    await this._plugin.clearQueue().catch((error) => {
+      console.error('[AUDIO_NEXT] clearQueue failed', error?.message, error);
+    });
+  }
+
+  async playQueueIndex(index) {
+    if (!isNative || !this._ready || !this._plugin?.playQueueIndex) return;
+    await this._plugin.playQueueIndex({ index });
+  }
+
+  async playNext() {
+    if (!isNative || !this._ready || !this._plugin?.playNext) return;
+    await this._plugin.playNext();
+  }
+
+  async playPrevious() {
+    if (!isNative || !this._ready || !this._plugin?.playPrevious) return;
+    await this._plugin.playPrevious();
+  }
+
   // ── Duration polling (iOS AVPlayer needs time after play()) ──────────────
   async _pollDuration(urlAtStart, resumeAt) {
     const MAX_ATTEMPTS = 30; // 30 × 200ms = 6s max
@@ -312,6 +397,9 @@ class NativeAudioPlayer {
     await this._timeListener?.remove?.();
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
+    await this._nativeTrackChangedListener?.remove?.();
+    await this._playbackErrorListener?.remove?.();
+    await this._queueCompletedListener?.remove?.();
     await this._appStateListener?.remove?.();
     await this.stop();
   }

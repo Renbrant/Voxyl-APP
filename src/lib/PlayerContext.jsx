@@ -279,6 +279,7 @@ export function PlayerProvider({ children }) {
 
     try {
       if (isNative && nativeAudioPlayer.isReady()) {
+        await nativeAudioPlayer.updateQueue(currentQueue, nextIdx, autoplayRef.current);
         await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
         setIsPlaying(true);
         clearLoadingState();
@@ -371,6 +372,32 @@ export function PlayerProvider({ children }) {
         setIsPlaying(playing);
         if (playing) startSaveTimers();
         else { stopSaveTimers(); saveCurrentProgress(true); }
+      },
+      onNativeTrackChanged: (track) => {
+        const index = Number.isInteger(track?.index) ? track.index : queueRef.current.findIndex(e => e.audioUrl === (track?.url || track?.audioUrl));
+        const nextEpisode = index >= 0 ? queueRef.current[index] : queueRef.current.find(e => e.audioUrl === (track?.url || track?.audioUrl));
+        if (!nextEpisode) return;
+
+        currentEpisodeRef.current = nextEpisode;
+        currentIndexRef.current = index;
+        setCurrentEpisode(nextEpisode);
+        setCurrentTime(0);
+        setDuration(0);
+        nativeCurrentTimeRef.current = 0;
+        nativeDurationRef.current = 0;
+        setIsPlaying(true);
+        clearLoadingState();
+      },
+      onPlaybackError: (error) => {
+        console.error('[AUDIO_NEXT] native playback error', error);
+        clearLoadingState();
+        setIsPlaying(false);
+        transitioningRef.current = false;
+      },
+      onQueueCompleted: () => {
+        clearLoadingState();
+        setIsPlaying(false);
+        transitioningRef.current = false;
       },
     });
 
@@ -646,6 +673,7 @@ export function PlayerProvider({ children }) {
 
     if (pluginReady) {
       try {
+        await nativeAudioPlayer.updateQueue(q, idx, autoplayRef.current);
         await nativeAudioPlayer.play(episode, resumeAt);
         const dur = nativeAudioPlayer.getDuration();
         if (dur > 0) { setDuration(dur); nativeDurationRef.current = dur; }
