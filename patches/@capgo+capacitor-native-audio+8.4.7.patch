@@ -1,0 +1,343 @@
+diff --git a/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/NativeAudio.java b/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/NativeAudio.java
+index 8f0986f..b4b133b 100644
+--- a/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/NativeAudio.java
++++ b/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/NativeAudio.java
+@@ -48,6 +48,7 @@ import android.util.Log;
+ import androidx.core.app.NotificationCompat;
+ import androidx.core.app.NotificationManagerCompat;
+ import androidx.media3.common.util.UnstableApi;
++import com.getcapacitor.JSArray;
+ import com.getcapacitor.JSObject;
+ import com.getcapacitor.Plugin;
+ import com.getcapacitor.PluginCall;
+@@ -69,6 +70,7 @@ import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.CopyOnWriteArrayList;
++import org.json.JSONObject;
+ 
+ @UnstableApi
+ @CapacitorPlugin(
+@@ -86,6 +88,9 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
+     public static final String TAG = "NativeAudio";
+     private static final Logger logger = new Logger(TAG);
+     public static boolean debugEnabled = false;
++    private static final String AUDIO_NEXT_PREFIX = "[AUDIO_NEXT]";
++    private static final String VOXYL_QUEUE_ASSET_ID = "voxyl_current";
++    private static final long SEEK_ENDED_SUPPRESSION_MS = 1200L;
+ 
+     private static ConcurrentHashMap<String, AudioAsset> audioAssetList = new ConcurrentHashMap<>();
+     private static CopyOnWriteArrayList<AudioAsset> resumeList;
+@@ -115,6 +120,36 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
+     // Background playback support
+     private boolean backgroundPlayback = false;
+ 
++    private final ArrayList<QueueItem> queueItems = new ArrayList<>();
++    private int currentQueueIndex = -1;
++    private boolean queueAutoplayEnabled = true;
++    private long suppressQueueEndedUntilMs = 0L;
++
++    private static class QueueItem {
++        String id;
++        String title;
++        String podcastTitle;
++        String audioUrl;
++        String artworkUrl;
++        String playlistId;
++        int index;
++
++        JSObject toTrackChangedPayload(int queueIndex) {
++            JSObject payload = new JSObject();
++            payload.put("index", queueIndex);
++            payload.put("url", audioUrl);
++            payload.put("audioUrl", audioUrl);
++            payload.put("title", title);
++            payload.put("id", id);
++            payload.put("podcastTitle", podcastTitle);
++            payload.put("feedTitle", podcastTitle);
++            payload.put("artworkUrl", artworkUrl);
++            payload.put("image", artworkUrl);
++            payload.put("playlistId", playlistId);
++            return payload;
++        }
++    }
++
+     /**
+      * Initializes plugin runtime state by obtaining the system {@link AudioManager}, preparing the asset map,
+      * and recording the device's original audio mode without requesting audio focus.
+@@ -294,6 +329,224 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
+         call.resolve();
+     }
+ 
++    @PluginMethod
++    public void setQueue(PluginCall call) {
++        JSArray queue = call.getArray("queue");
++        int startIndex = call.getInt("startIndex", call.getInt("currentIndex", 0));
++        boolean autoplay = call.getBoolean("autoplay", true);
++        replaceQueue(queue, startIndex, autoplay, "queue received");
++        call.resolve(new JSObject().put("index", currentQueueIndex).put("size", queueItems.size()));
++    }
++
++    @PluginMethod
++    public void updateQueue(PluginCall call) {
++        JSArray queue = call.getArray("queue");
++        int index = call.getInt("currentIndex", call.getInt("startIndex", currentQueueIndex));
++        boolean autoplay = call.getBoolean("autoplay", queueAutoplayEnabled);
++        replaceQueue(queue, index, autoplay, "queue received");
++        call.resolve(new JSObject().put("index", currentQueueIndex).put("size", queueItems.size()));
++    }
++
++    @PluginMethod
++    public void clearQueue(PluginCall call) {
++        synchronized (queueItems) {
++            queueItems.clear();
++            currentQueueIndex = -1;
++        }
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " queue cleared");
++        call.resolve();
++    }
++
++    @PluginMethod
++    public void playQueueIndex(PluginCall call) {
++        int index = call.getInt("index", -1);
++        runOnMainThread(() -> {
++            if (playQueueIndexInternal(index, false)) {
++                call.resolve(new JSObject().put("index", currentQueueIndex));
++            } else {
++                call.reject("Queue index unavailable: " + index);
++            }
++        });
++    }
++
++    @PluginMethod
++    public void playNext(PluginCall call) {
++        runOnMainThread(() -> {
++            int nextIndex = currentQueueIndex + 1;
++            if (playQueueIndexInternal(nextIndex, false)) {
++                call.resolve(new JSObject().put("index", currentQueueIndex));
++            } else {
++                emitQueueCompleted();
++                call.resolve(new JSObject().put("completed", true));
++            }
++        });
++    }
++
++    @PluginMethod
++    public void playPrevious(PluginCall call) {
++        runOnMainThread(() -> {
++            int previousIndex = currentQueueIndex - 1;
++            if (playQueueIndexInternal(previousIndex, false)) {
++                call.resolve(new JSObject().put("index", currentQueueIndex));
++            } else {
++                call.reject("Previous queue item unavailable");
++            }
++        });
++    }
++
++    private void replaceQueue(JSArray queue, int requestedIndex, boolean autoplay, String reason) {
++        synchronized (queueItems) {
++            queueItems.clear();
++            if (queue != null) {
++                for (int i = 0; i < queue.length(); i++) {
++                    JSONObject item = queue.optJSONObject(i);
++                    QueueItem queueItem = parseQueueItem(item, i);
++                    if (queueItem != null && isStringValid(queueItem.audioUrl)) {
++                        queueItems.add(queueItem);
++                    } else {
++                        Log.e(TAG, AUDIO_NEXT_PREFIX + " any error invalid queue item at index " + i);
++                    }
++                }
++            }
++            queueAutoplayEnabled = autoplay;
++            if (queueItems.isEmpty()) {
++                currentQueueIndex = -1;
++            } else {
++                currentQueueIndex = Math.max(0, Math.min(requestedIndex, queueItems.size() - 1));
++            }
++        }
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " " + reason + " size=" + queueItems.size() + " autoplay=" + queueAutoplayEnabled);
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " current index set " + currentQueueIndex);
++    }
++
++    private QueueItem parseQueueItem(JSONObject item, int fallbackIndex) {
++        if (item == null) {
++            return null;
++        }
++
++        QueueItem queueItem = new QueueItem();
++        queueItem.id = optString(item, "id", optString(item, "episodeId", ""));
++        queueItem.title = optString(item, "title", "");
++        queueItem.podcastTitle = optString(item, "podcastTitle", optString(item, "feedTitle", optString(item, "showTitle", "")));
++        queueItem.audioUrl = optString(item, "audioUrl", optString(item, "url", optString(item, "assetPath", "")));
++        queueItem.artworkUrl = optString(item, "artworkUrl", optString(item, "image", optString(item, "podcastImage", "")));
++        queueItem.playlistId = optString(item, "playlistId", optString(item, "playlist_id", ""));
++        queueItem.index = item.optInt("index", fallbackIndex);
++        return queueItem;
++    }
++
++    private String optString(JSONObject item, String key, String fallback) {
++        String value = item.optString(key, null);
++        return value == null || "null".equals(value) ? fallback : value;
++    }
++
++    private boolean handleQueuePlaybackEnded(String assetId) {
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " STATE_ENDED assetId=" + assetId);
++        if (!VOXYL_QUEUE_ASSET_ID.equals(assetId)) {
++            return false;
++        }
++
++        long nowMs = SystemClock.elapsedRealtime();
++        if (nowMs < suppressQueueEndedUntilMs) {
++            Log.d(
++                TAG,
++                AUDIO_NEXT_PREFIX +
++                    " suppressing an immediate ended event caused by seek remainingMs=" +
++                    (suppressQueueEndedUntilMs - nowMs)
++            );
++            return true;
++        }
++
++        if (!queueAutoplayEnabled) {
++            Log.d(TAG, AUDIO_NEXT_PREFIX + " queue completed autoplay disabled");
++            emitQueueCompleted();
++            return false;
++        }
++
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " genuine ended accepted for native auto-next");
++        int nextIndex = currentQueueIndex + 1;
++        if (playQueueIndexInternal(nextIndex, true)) {
++            return true;
++        }
++
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " queue completed");
++        emitQueueCompleted();
++        return false;
++    }
++
++    private boolean playQueueIndexInternal(int index, boolean fromEnded) {
++        QueueItem item;
++        synchronized (queueItems) {
++            if (index < 0 || index >= queueItems.size()) {
++                return false;
++            }
++            currentQueueIndex = index;
++            item = queueItems.get(index);
++        }
++
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " current index set " + currentQueueIndex);
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " next episode selected " + item.title);
++        Log.d(TAG, AUDIO_NEXT_PREFIX + " next episode URL " + item.audioUrl);
++
++        try {
++            cancelPendingPlay(VOXYL_QUEUE_ASSET_ID);
++            clearFadeOutToStopTimer(VOXYL_QUEUE_ASSET_ID);
++            suppressQueueEndedUntilMs = 0L;
++
++            AudioAsset existingAsset = audioAssetList.get(VOXYL_QUEUE_ASSET_ID);
++            if (existingAsset != null) {
++                existingAsset.unload();
++                audioAssetList.remove(VOXYL_QUEUE_ASSET_ID);
++                clearTrackedPlaybackState(VOXYL_QUEUE_ASSET_ID);
++            }
++
++            Map<String, String> metadataMap = new HashMap<>();
++            metadataMap.put("title", item.title != null ? item.title : "");
++            metadataMap.put("artist", item.podcastTitle != null ? item.podcastTitle : "Voxyl");
++            metadataMap.put("album", "Voxyl");
++            if (isStringValid(item.artworkUrl)) {
++                metadataMap.put("artworkUrl", item.artworkUrl);
++            }
++            notificationMetadataMap.put(VOXYL_QUEUE_ASSET_ID, metadataMap);
++
++            AudioAsset nextAsset = loadAudioAsset(VOXYL_QUEUE_ASSET_ID, item.audioUrl, true, 1F, 1, null);
++            if (nextAsset == null) {
++                throw new Exception("Failed to load next queue item");
++            }
++            nextAsset.setCompletionListener(this::dispatchComplete);
++            audioAssetList.put(VOXYL_QUEUE_ASSET_ID, nextAsset);
++            Log.d(TAG, AUDIO_NEXT_PREFIX + " next episode MediaItem loaded");
++
++            nextAsset.play(0.0, 1F);
++            updateTrackedPlaybackState(VOXYL_QUEUE_ASSET_ID, PlaybackStateCompat.STATE_PLAYING);
++            if (showNotification) {
++                currentlyPlayingAssetId = VOXYL_QUEUE_ASSET_ID;
++                updateNotification(VOXYL_QUEUE_ASSET_ID);
++            }
++            notifyPlaybackState(VOXYL_QUEUE_ASSET_ID, fromEnded ? "nativeAutoNext" : "nativeQueueIndex");
++            notifyListeners("nativeTrackChanged", item.toTrackChangedPayload(index));
++            Log.d(TAG, AUDIO_NEXT_PREFIX + " next episode playback started");
++            return true;
++        } catch (Exception ex) {
++            Log.e(TAG, AUDIO_NEXT_PREFIX + " any error " + ex.getMessage(), ex);
++            JSObject error = new JSObject();
++            error.put("index", index);
++            error.put("url", item.audioUrl);
++            error.put("title", item.title);
++            error.put("id", item.id);
++            error.put("message", ex.getMessage());
++            notifyListeners("playbackError", error);
++            return false;
++        }
++    }
++
++    private void emitQueueCompleted() {
++        JSObject payload = new JSObject();
++        payload.put("index", currentQueueIndex);
++        payload.put("size", queueItems.size());
++        notifyListeners("queueCompleted", payload);
++    }
++
+     @PluginMethod
+     public void isPreloaded(final PluginCall call) {
+         new Thread(
+@@ -997,6 +1250,19 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
+             if (audioAssetList.containsKey(audioId)) {
+                 AudioAsset asset = audioAssetList.get(audioId);
+                 if (asset != null) {
++                    if (VOXYL_QUEUE_ASSET_ID.equals(audioId)) {
++                        suppressQueueEndedUntilMs = SystemClock.elapsedRealtime() + SEEK_ENDED_SUPPRESSION_MS;
++                    }
++                    Log.d(
++                        TAG,
++                        AUDIO_NEXT_PREFIX +
++                            " manual seek/setCurrentTime received assetId=" +
++                            audioId +
++                            " time=" +
++                            time +
++                            " suppressUntilMs=" +
++                            suppressQueueEndedUntilMs
++                    );
+                     this.getActivity().runOnUiThread(
+                         new Runnable() {
+                             @Override
+@@ -1022,6 +1288,10 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
+     }
+ 
+     public void dispatchComplete(String assetId) {
++        if (handleQueuePlaybackEnded(assetId)) {
++            return;
++        }
++
+         JSObject ret = new JSObject();
+         ret.put("assetId", assetId);
+         notifyListeners("complete", ret);
+diff --git a/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/RemoteAudioAsset.java b/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/RemoteAudioAsset.java
+index 18d7d97..4b293cc 100644
+--- a/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/RemoteAudioAsset.java
++++ b/node_modules/@capgo/capacitor-native-audio/android/src/main/java/ee/forgr/audio/RemoteAudioAsset.java
+@@ -131,6 +131,7 @@ public class RemoteAudioAsset extends AudioAsset {
+                             owner.notifyDurationAvailable(assetId, durationSec);
+                         }
+                     } else if (playbackState == Player.STATE_ENDED) {
++                        Log.d(TAG, "[AUDIO_NEXT] STATE_ENDED assetId=" + assetId);
+                         notifyCompletion();
+                     }
+                 }
+@@ -192,6 +193,7 @@ public class RemoteAudioAsset extends AudioAsset {
+                                                 Log.e(TAG, "Error playing after prepare", e);
+                                             }
+                                         } else if (playbackState == Player.STATE_ENDED) {
++                                            Log.d(TAG, "[AUDIO_NEXT] STATE_ENDED assetId=" + assetId);
+                                             notifyCompletion();
+                                         }
+                                     }
