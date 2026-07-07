@@ -1,6 +1,7 @@
 #env
 .env
 .env.*
+!.env.production.example
 
 # Logs
 /logs
@@ -34,9 +35,9 @@ dist-ssr
 .env
 .vite
 
-# Public production configuration used by Capacitor builds.
+# Public production configuration used by Capacitor builds. This file contains
+# public Base44 build identifiers, not private secrets.
 !.env.production
-!.env.production.example
 voxyl-auth-only-log.txt
 voxyl-audio-log.txt
 voxyl-auth-restore-log.txt

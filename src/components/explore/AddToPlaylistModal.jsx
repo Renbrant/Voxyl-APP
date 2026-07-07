@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { X, Plus, Loader2, CheckCircle2, ListMusic, Mic } from 'lucide-react';
+import { X, Plus, Loader2, CheckCircle2, ListMusic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { generateShareToken } from '@/lib/rssUtils';
 import { motion } from 'framer-motion';

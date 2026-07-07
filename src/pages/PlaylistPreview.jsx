@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
-import { fetchRSSFeed, parseDurationToSeconds } from '@/lib/rssUtils';
-import { Play, Share2, Headphones, Star, Lock } from 'lucide-react';
+import { parseDurationToSeconds } from '@/lib/rssUtils';
+import { Share2, Headphones, Star, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { redirectToLogin } from '@/lib/authRedirect';

@@ -1,15 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { t } from '@/lib/i18n';
 import { useQuery } from '@tanstack/react-query';
-import VoxylHeader from '@/components/common/VoxylHeader';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
 import InviteFriendModal from '@/components/profile/InviteFriendModal';
 import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import ShareAppModal from '@/components/profile/ShareAppModal';
-import { UserCircle2, Mail, Users, ListMusic, Trash2, Share2, Shield, LogOut, Bell, AtSign, EyeOff, Eye, Pencil, Settings, Camera, RefreshCw, Loader2, LogIn } from 'lucide-react';
+import { UserCircle2, Users, ListMusic, Share2, Bell, EyeOff, Eye, Pencil, Settings, Camera, RefreshCw, Loader2, LogIn } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { redirectToLogin } from '@/lib/authRedirect';
-import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import FollowRequestsModal from '@/components/profile/FollowRequestsModal';

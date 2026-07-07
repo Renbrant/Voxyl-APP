@@ -68,7 +68,7 @@ export default function UserProfile() {
         }
       })
       .catch(() => setLoading(false));
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   useEffect(() => {
     if (!currentUser) return;

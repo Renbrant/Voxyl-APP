@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import { CheckCircle2, Link } from 'lucide-react';
 
 const providers = [

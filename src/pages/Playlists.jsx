@@ -15,7 +15,7 @@ import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import DownloadedEpisodeCard from '@/components/downloads/DownloadedEpisodeCard';
 import { getDownloads } from '@/lib/downloads';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
-import { getCachedContent, setCachedContent, clearAllContentCache, isCacheExpired } from '@/lib/savedContentCache';
+import { getCachedContent, setCachedContent, clearAllContentCache } from '@/lib/savedContentCache';
 
 const TABS = () => [
 { key: 'playlists', label: t('playlistsTabPlaylists'), icon: ListMusic },

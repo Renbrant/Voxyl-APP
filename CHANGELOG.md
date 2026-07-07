@@ -1,6 +1,6 @@
-# Changelog — Voxyl
+# Changelog - Voxyl
 
-## v2.5 — Junho 2026
+## v2.5 - Junho 2026
 
 ### Melhorias
 
@@ -12,7 +12,7 @@
 
 ---
 
-## v2.4.1 — Junho 2026
+## v2.4.1 - Junho 2026
 
 ### Correções
 
@@ -23,7 +23,7 @@
 
 ---
 
-## v2.4.0 — Junho 2026
+## v2.4.0 - Junho 2026
 
 ### Estabilidade e correções
 
@@ -39,7 +39,7 @@
 
 ---
 
-## v0.2 — Abril 2026
+## v0.2 - Abril 2026
 
 ### Melhorias e correções
 
@@ -61,7 +61,7 @@
 
 ---
 
-## v0.1 — Abril 2026
+## v0.1 - Abril 2026
 
 ### Lançamento inicial
 
