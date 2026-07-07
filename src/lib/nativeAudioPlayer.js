@@ -1,52 +1,37 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
-// Resolve plugins at runtime to avoid Vite build errors on web.
-// These packages are only available inside the native WebView.
 const getNativeAudio = () => window?.Capacitor?.Plugins?.NativeAudio ?? null;
 const getApp = () => window?.Capacitor?.Plugins?.App ?? null;
 
-/**
- * NativeAudioPlayer — wrapper around @capgo/capacitor-native-audio
- *
- * Architecture:
- *   Web/PWA  → this module is a no-op; PlayerContext uses HTML Audio
- *   Android  → ExoPlayer via @capgo/capacitor-native-audio
- *   iOS      → AVPlayer via @capgo/capacitor-native-audio
- *
- * The plugin provides a web implementation, so importing it directly is safe.
- */
-
 export const isNative = Capacitor.isNativePlatform();
 
-const ASSET_ID = 'voxyl_current'; // single-slot player
+const ASSET_ID = 'voxyl_current';
 const BackgroundAudioService = registerPlugin('BackgroundAudioService');
-
-// Native-side auto-advance bridge. The NATIVE foreground service is expected to
-// implement setQueue / clearQueue so it can start the next episode on ExoPlayer
-// STATE_ENDED WITHOUT waking the JS WebView (survives Android Doze).
-// If the native side does not implement these (older builds / web), the calls
-// are wrapped in try/catch and the JS-side fallback in PlayerContext still runs.
 
 class NativeAudioPlayer {
   constructor() {
-    this._plugin = null;         // @capgo/capacitor-native-audio NativeAudio
+    this._plugin = null;
     this._ready = false;
     this._currentUrl = null;
     this._duration = 0;
-    this._isPlaying = false;     // ground-truth playing state
-    this._onTimeUpdate = null;   // (posSeconds, durSeconds) => void
-    this._onEnded = null;        // () => void
-    this._onStateChange = null;  // (playing: boolean) => void
+    this._isPlaying = false;
+    this._onTimeUpdate = null;
+    this._onEnded = null;
+    this._onStateChange = null;
+    this._onNativeTrackChanged = null;
+    this._onPlaybackError = null;
+    this._onQueueCompleted = null;
     this._timeListener = null;
     this._stateListener = null;
     this._completeListener = null;
+    this._nativeTrackChangedListener = null;
+    this._playbackErrorListener = null;
+    this._queueCompletedListener = null;
     this._appStateListener = null;
     this._trackChangeListener = null;
-    this._onNativeTrackChanged = null;
   }
 
-  // ── Init ─────────────────────────────────────────────────────────────────
-  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged }) {
+  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged, onPlaybackError, onQueueCompleted }) {
     if (!isNative) return;
     if (this._ready) return;
 
@@ -54,8 +39,10 @@ class NativeAudioPlayer {
     this._onEnded = onEnded;
     this._onStateChange = onStateChange;
     this._onNativeTrackChanged = onNativeTrackChanged;
+    this._onPlaybackError = onPlaybackError;
+    this._onQueueCompleted = onQueueCompleted;
 
-    console.log('[NativeAudioPlayer] initialize() — isNative:', isNative);
+    console.log('[NativeAudioPlayer] initialize() - isNative:', isNative);
     try {
       this._plugin = getNativeAudio();
       if (!this._plugin) {
@@ -71,13 +58,11 @@ class NativeAudioPlayer {
       });
       console.log('[NativeAudioPlayer] configure() succeeded');
 
-      // currentTime events — fired every ~100ms while playing
       this._timeListener = await this._plugin.addListener('currentTime', (data) => {
         const posSec = data.currentTime ?? 0;
         this._onTimeUpdate?.(posSec, this._duration);
       });
 
-      // Track completed
       this._completeListener = await this._plugin.addListener('complete', (data) => {
         if (data.assetId === ASSET_ID) {
           console.log('[PLAYLIST] ended fired', {
@@ -88,7 +73,6 @@ class NativeAudioPlayer {
         }
       });
 
-      // Playback state — fired by lock screen, BT controls, notification, interruptions
       this._stateListener = await this._plugin.addListener('playbackState', (data) => {
         this._isPlaying = !!data.isPlaying;
         if (this._isPlaying) {
@@ -100,32 +84,48 @@ class NativeAudioPlayer {
         this._onStateChange?.(this._isPlaying);
       });
 
-      // NATIVE auto-advance signal. Emitted by the foreground service when IT
-      // moves to the next queue item on ExoPlayer STATE_ENDED while the WebView
-      // is frozen. JS uses this to sync currentEpisode/index WITHOUT triggering
-      // another play() (which would double-play on resume).
+      this._nativeTrackChangedListener = await this._plugin.addListener('nativeTrackChanged', (data) => {
+        console.log('[AUDIO_NEXT] nativeTrackChanged', data);
+        this._currentUrl = data?.url || data?.audioUrl || this._currentUrl;
+        this._duration = 0;
+        this._isPlaying = true;
+        this._onNativeTrackChanged?.(data);
+        this._onStateChange?.(true);
+      });
+
+      this._playbackErrorListener = await this._plugin.addListener('playbackError', (data) => {
+        console.error('[AUDIO_NEXT] playbackError', data);
+        this._isPlaying = false;
+        this._onPlaybackError?.(data);
+        this._onStateChange?.(false);
+      });
+
+      this._queueCompletedListener = await this._plugin.addListener('queueCompleted', (data) => {
+        console.log('[AUDIO_NEXT] queueCompleted', data);
+        this._isPlaying = false;
+        this._onQueueCompleted?.(data);
+        this._onStateChange?.(false);
+      });
+
       try {
         this._trackChangeListener = await BackgroundAudioService.addListener('nativeTrackChanged', (data) => {
           console.log('[AUDIO_NEXT] native foreground service advanced track', data);
-          this._currentUrl = data?.url ?? this._currentUrl;
+          this._currentUrl = data?.url || data?.audioUrl || this._currentUrl;
           this._duration = 0;
+          this._isPlaying = true;
           this._onNativeTrackChanged?.(data);
+          this._onStateChange?.(true);
         });
       } catch (_) {
-        // Older native build without queue support — JS fallback handles it.
+        // Older native builds may not emit this compatibility event.
       }
 
-      // Capacitor App state — sync playing state when returning from background
       const App = getApp();
       if (App) {
         this._appStateListener = await App.addListener('appStateChange', async (state) => {
           if (state.isActive && this._currentUrl) {
-            // Re-sync actual playing state from the native engine
             try {
               const { currentTime } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
-              // If we think we're playing but native stopped (e.g. iOS killed session),
-              // fire onStateChange so the UI reflects reality.
-              // We detect a stall by comparing last known time vs now after 500ms.
               const timeBefore = currentTime ?? 0;
               await new Promise(r => setTimeout(r, 500));
               const { currentTime: currentTime2 } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
@@ -141,15 +141,14 @@ class NativeAudioPlayer {
       }
 
       this._ready = true;
-      console.log('[NativeAudioPlayer] initialized successfully ✓');
+      console.log('[NativeAudioPlayer] initialized successfully');
     } catch (err) {
       console.error('[NativeAudioPlayer] init FAILED:', err?.message, err);
     }
   }
 
-  // ── Load + Play ───────────────────────────────────────────────────────────
   async play(episode, resumeAt = 0) {
-    console.log('[NativeAudioPlayer] play() called — isNative:', isNative, '_ready:', this._ready, 'url:', episode?.audioUrl);
+    console.log('[NativeAudioPlayer] play() called - isNative:', isNative, '_ready:', this._ready, 'url:', episode?.audioUrl);
     if (!isNative || !this._ready) {
       throw new Error(`Native audio is unavailable (native=${isNative}, ready=${this._ready})`);
     }
@@ -158,9 +157,8 @@ class NativeAudioPlayer {
     if (!url) {
       throw new Error('Episode has no audio URL');
     }
-    // Warn if URL looks relative (would resolve to localhost in WebView)
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      console.error('[NativeAudioPlayer] play() — audioUrl is NOT absolute HTTPS!', url);
+      console.error('[NativeAudioPlayer] play() - audioUrl is NOT absolute HTTPS!', url);
     }
 
     console.log('[NativeAudioPlayer] loading URL:', url, '| resumeAt:', resumeAt);
@@ -170,7 +168,6 @@ class NativeAudioPlayer {
         console.warn('[NativeAudioPlayer] foreground service start failed:', error?.message);
       });
 
-      // Unload previous asset if URL changed
       if (this._currentUrl && this._currentUrl !== url) {
         console.log('[NativeAudioPlayer] unloading previous asset:', this._currentUrl);
         await this._plugin.unload({ assetId: ASSET_ID }).catch(() => {});
@@ -179,7 +176,6 @@ class NativeAudioPlayer {
       this._currentUrl = url;
       this._duration = 0;
 
-      // Preload (registers the asset with the native engine)
       console.log('[NativeAudioPlayer] calling preload()...');
       console.log('[PLAYLIST] audio src changed', {
         source: 'native',
@@ -217,10 +213,7 @@ class NativeAudioPlayer {
         url,
       });
 
-      // iOS AVPlayer populates duration asynchronously after play() starts.
-      // Poll until we get a valid value (up to ~6s).
       this._pollDuration(url, resumeAt);
-
     } catch (err) {
       console.error('[PLAYLIST] play() rejected', {
         source: 'native',
@@ -235,11 +228,73 @@ class NativeAudioPlayer {
     }
   }
 
-  // ── Duration polling (iOS AVPlayer needs time after play()) ──────────────
+  _toNativeQueueItem(episode, index) {
+    return {
+      id: episode?.id || episode?.episodeId || episode?.audioUrl || '',
+      title: episode?.title || '',
+      podcastTitle: episode?.podcastTitle || episode?.feedTitle || episode?.showTitle || '',
+      feedTitle: episode?.feedTitle || episode?.podcastTitle || episode?.showTitle || '',
+      audioUrl: episode?.audioUrl || episode?.url || '',
+      url: episode?.audioUrl || episode?.url || '',
+      artworkUrl: episode?.artworkUrl || episode?.image || episode?.podcastImage || '',
+      image: episode?.image || episode?.artworkUrl || episode?.podcastImage || '',
+      playlistId: episode?.playlistId || episode?.playlist_id || '',
+      index,
+    };
+  }
+
+  async setQueue(queue = [], startIndex = 0, autoplay = true) {
+    if (!isNative || !this._ready || !this._plugin?.setQueue) return;
+    const nativeQueue = queue.map((episode, index) => this._toNativeQueueItem(episode, index));
+    await this._plugin.setQueue({ queue: nativeQueue, startIndex, autoplay }).catch((error) => {
+      console.error('[AUDIO_NEXT] setQueue failed', error?.message, error);
+    });
+  }
+
+  async updateQueue(queue = [], currentIndex = 0, autoplay = true) {
+    if (!isNative || !this._ready || !this._plugin?.updateQueue) return;
+    const nativeQueue = queue.map((episode, index) => this._toNativeQueueItem(episode, index));
+    await this._plugin.updateQueue({ queue: nativeQueue, currentIndex, autoplay }).catch((error) => {
+      console.error('[AUDIO_NEXT] updateQueue failed', error?.message, error);
+    });
+  }
+
+  async clearQueue() {
+    if (!isNative || !this._ready || !this._plugin?.clearQueue) return;
+    await this._plugin.clearQueue().catch((error) => {
+      console.error('[AUDIO_NEXT] clearQueue failed', error?.message, error);
+    });
+  }
+
+  async playQueueIndex(index) {
+    if (!isNative || !this._ready || !this._plugin?.playQueueIndex) return;
+    await this._plugin.playQueueIndex({ index });
+  }
+
+  async playNext() {
+    if (!isNative || !this._ready || !this._plugin?.playNext) return;
+    await this._plugin.playNext();
+  }
+
+  async playPrevious() {
+    if (!isNative || !this._ready || !this._plugin?.playPrevious) return;
+    await this._plugin.playPrevious();
+  }
+
+  async setNativeQueue(episodes, startIndex, autoplay = true) {
+    console.log('[AUDIO_NEXT] pushing native queue', { count: episodes?.length || 0, startIndex });
+    await this.updateQueue(episodes || [], startIndex, autoplay);
+    console.log('[AUDIO_NEXT] native queue accepted');
+  }
+
+  async clearNativeQueue() {
+    await this.clearQueue();
+    console.log('[AUDIO_NEXT] native queue cleared');
+  }
+
   async _pollDuration(urlAtStart, resumeAt) {
-    const MAX_ATTEMPTS = 30; // 30 × 200ms = 6s max
+    const MAX_ATTEMPTS = 30;
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      // Stop if the track changed while we were polling
       if (this._currentUrl !== urlAtStart) return;
       await new Promise(r => setTimeout(r, 200));
       try {
@@ -247,7 +302,6 @@ class NativeAudioPlayer {
         const durSec = duration ?? 0;
         if (durSec > 0) {
           this._duration = durSec;
-          // Now that duration is known, seek to resume position
           if (resumeAt > 0 && this._currentUrl === urlAtStart) {
             await this._plugin.setCurrentTime({
               assetId: ASSET_ID,
@@ -260,25 +314,20 @@ class NativeAudioPlayer {
     }
   }
 
-  // ── Pause ────────────────────────────────────────────────────────────────
   async pause() {
     if (!isNative || !this._ready) return;
     await this._plugin.pause({ assetId: ASSET_ID }).catch(() => {});
     this._isPlaying = false;
   }
 
-  // ── Resume ───────────────────────────────────────────────────────────────
   async resume() {
     if (!isNative || !this._ready) return;
     await this._plugin.resume({ assetId: ASSET_ID }).catch(() => {});
     this._isPlaying = true;
   }
 
-  // ── Seek — debounced to prevent rapid-fire during scrubber drag ───────────
   seek(seconds) {
     if (!isNative || !this._ready) return;
-    // Cancel any pending seek and schedule a new one 80ms later.
-    // This prevents flooding the native bridge during seek bar dragging.
     clearTimeout(this._seekTimer);
     this._seekTimer = setTimeout(() => {
       this._plugin.setCurrentTime({
@@ -292,40 +341,6 @@ class NativeAudioPlayer {
     return this._isPlaying;
   }
 
-  // ── Native-side queue handoff ─────────────────────────────────────────────
-  // Pushes the WHOLE upcoming queue to the native foreground service so it can
-  // auto-advance on ExoPlayer STATE_ENDED while the WebView/JS is frozen (Doze).
-  // The native BackgroundAudioService must implement `setQueue`. If it doesn't,
-  // this no-ops gracefully and the JS fallback handles advancing on resume.
-  async setNativeQueue(episodes, startIndex) {
-    if (!isNative) return;
-    try {
-      const items = (episodes || []).slice(startIndex).map(ep => ({
-        url: ep.audioUrl,
-        title: ep.title || '',
-        artist: ep.feedTitle || 'Voxyl',
-        album: 'Voxyl',
-        artworkUrl: ep.image || '',
-        skipStartSeconds: ep.skip_start_seconds || 0,
-        skipEndSeconds: ep.skip_end_seconds || 0,
-      }));
-      console.log('[AUDIO_NEXT] pushing native queue', { count: items.length, startIndex });
-      await BackgroundAudioService.setQueue({ items });
-      console.log('[AUDIO_NEXT] native queue accepted by foreground service');
-    } catch (err) {
-      console.warn('[AUDIO_NEXT] native setQueue unavailable — JS fallback will handle next', err?.message);
-    }
-  }
-
-  async clearNativeQueue() {
-    if (!isNative) return;
-    try {
-      await BackgroundAudioService.clearQueue();
-      console.log('[AUDIO_NEXT] native queue cleared');
-    } catch (_) {}
-  }
-
-  // ── Stop / cleanup ───────────────────────────────────────────────────────
   async stop() {
     if (!isNative || !this._ready) return;
     await this._plugin.stop({ assetId: ASSET_ID }).catch(() => {});
@@ -335,7 +350,6 @@ class NativeAudioPlayer {
     this._duration = 0;
   }
 
-  // ── Current position (polling fallback) ──────────────────────────────────
   async getCurrentTime() {
     if (!isNative || !this._ready) return 0;
     try {
@@ -350,7 +364,6 @@ class NativeAudioPlayer {
     return this._duration;
   }
 
-  // ── Public readiness check (use this instead of reading _ready directly) ──
   isReady() {
     return this._ready === true;
   }
@@ -363,12 +376,14 @@ class NativeAudioPlayer {
     return this._ready;
   }
 
-  // ── Cleanup listeners ────────────────────────────────────────────────────
   async destroy() {
     clearTimeout(this._seekTimer);
     await this._timeListener?.remove?.();
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
+    await this._nativeTrackChangedListener?.remove?.();
+    await this._playbackErrorListener?.remove?.();
+    await this._queueCompletedListener?.remove?.();
     await this._appStateListener?.remove?.();
     await this._trackChangeListener?.remove?.();
     await this.stop();

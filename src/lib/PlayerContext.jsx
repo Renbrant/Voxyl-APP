@@ -286,11 +286,12 @@ export function PlayerProvider({ children }) {
 
     try {
       if (isNative && nativeAudioPlayer.isReady()) {
+        await nativeAudioPlayer.updateQueue(currentQueue, nextIdx, autoplayRef.current);
         console.log('[AUDIO_NEXT] next episode load/preload started (native)', { url: nextEpisode.audioUrl });
         await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
         // Refresh the native queue so the foreground service can keep advancing
         // past THIS episode while backgrounded.
-        nativeAudioPlayer.setNativeQueue(currentQueue, nextIdx).catch(() => {});
+        nativeAudioPlayer.setNativeQueue(currentQueue, nextIdx, autoplayRef.current).catch(() => {});
         console.log('[AUDIO_NEXT] next episode playback started (native)', { title: nextEpisode.title });
         setIsPlaying(true);
         clearLoadingState();
@@ -381,32 +382,44 @@ export function PlayerProvider({ children }) {
       },
       // Fired when the NATIVE foreground service auto-advanced on its own while
       // backgrounded. Sync UI/index to reality — do NOT call play() again.
-      onNativeTrackChanged: ({ url, index } = {}) => {
-        if (!url) return;
+      onStateChange: (playing) => {
+        setIsPlaying(playing);
+        if (playing) startSaveTimers();
+        else { stopSaveTimers(); saveCurrentProgress(true); }
+      },
+      onNativeTrackChanged: (track = {}) => {
+        const url = track?.url || track?.audioUrl;
+        const index = Number.isInteger(track?.index) ? track.index : queueRef.current.findIndex(e => e.audioUrl === url);
+        const nextEpisode = index >= 0 ? queueRef.current[index] : queueRef.current.find(e => e.audioUrl === url);
+        if (!nextEpisode) return;
+
         console.log('[AUDIO_NEXT] syncing JS state to natively-advanced track', { url, index });
-        // Mark previous as finished
         const prevUrl = currentEpisodeRef.current?.audioUrl;
         if (prevUrl && prevUrl !== url) {
           finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
           setFinishedUrls(new Set(finishedUrlsRef.current));
         }
-        const q = queueRef.current;
-        const foundIdx = typeof index === 'number' && q[index]?.audioUrl === url
-          ? index
-          : q.findIndex(e => e.audioUrl === url);
-        if (foundIdx >= 0) {
-          currentIndexRef.current = foundIdx;
-          currentEpisodeRef.current = q[foundIdx];
-          setCurrentEpisode(q[foundIdx]);
-          setCurrentTime(0);
-          setDuration(0);
-        }
+
+        currentEpisodeRef.current = nextEpisode;
+        currentIndexRef.current = index;
+        setCurrentEpisode(nextEpisode);
+        setCurrentTime(0);
+        setDuration(0);
+        nativeCurrentTimeRef.current = 0;
+        nativeDurationRef.current = 0;
+        setIsPlaying(true);
+        clearLoadingState();
+      },
+      onPlaybackError: (error) => {
+        console.error('[AUDIO_NEXT] native playback error', error);
+        clearLoadingState();
+        setIsPlaying(false);
         transitioningRef.current = false;
       },
-      onStateChange: (playing) => {
-        setIsPlaying(playing);
-        if (playing) startSaveTimers();
-        else { stopSaveTimers(); saveCurrentProgress(true); }
+      onQueueCompleted: () => {
+        clearLoadingState();
+        setIsPlaying(false);
+        transitioningRef.current = false;
       },
     });
 
@@ -650,7 +663,7 @@ export function PlayerProvider({ children }) {
     // only auto-advances natively when autoplay is on.
     if (isNative && nativeAudioPlayer.isReady()) {
       if (autoplay) {
-        nativeAudioPlayer.setNativeQueue(queueRef.current, Math.max(0, currentIndexRef.current)).catch(() => {});
+        nativeAudioPlayer.setNativeQueue(queueRef.current, Math.max(0, currentIndexRef.current), true).catch(() => {});
       } else {
         nativeAudioPlayer.clearNativeQueue().catch(() => {});
       }
@@ -691,10 +704,11 @@ export function PlayerProvider({ children }) {
 
     if (pluginReady) {
       try {
+        await nativeAudioPlayer.updateQueue(q, idx, autoplayRef.current);
         await nativeAudioPlayer.play(episode, resumeAt);
         // Hand the full upcoming queue to the native foreground service so it can
         // auto-advance natively (survives Doze / locked screen).
-        nativeAudioPlayer.setNativeQueue(q, idx >= 0 ? idx : 0).catch(() => {});
+        nativeAudioPlayer.setNativeQueue(q, idx >= 0 ? idx : 0, autoplayRef.current).catch(() => {});
         const dur = nativeAudioPlayer.getDuration();
         if (dur > 0) { setDuration(dur); nativeDurationRef.current = dur; }
         setCurrentTime(resumeAt);
@@ -818,6 +832,10 @@ export function PlayerProvider({ children }) {
   }, []);
 
   const playNext = useCallback(() => {
+    if (isNative && nativeAudioPlayer.isReady()) {
+      nativeAudioPlayer.playNext().catch(() => tryAdvance('MANUAL NEXT'));
+      return;
+    }
     tryAdvance('MANUAL NEXT');
   }, [tryAdvance]);
 
@@ -825,7 +843,12 @@ export function PlayerProvider({ children }) {
   const playPrev = useCallback(() => {
     const idx = currentIndexRef.current;
     const q = queueRef.current;
-    if (idx > 0) playEpisodeInternal(q[idx - 1], q);
+    if (idx <= 0) return;
+    if (isNative && nativeAudioPlayer.isReady()) {
+      nativeAudioPlayer.playPrevious().catch(() => playEpisodeInternal(q[idx - 1], q));
+      return;
+    }
+    playEpisodeInternal(q[idx - 1], q);
   }, [playEpisodeInternal]);
   playPrevRef.current = playPrev;
 
