@@ -4,3 +4,8 @@ compatibility_date = "2026-07-07"
 routes = [
   { pattern = "api.voxyl.renbrant.com", custom_domain = true }
 ]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "voxyl-db"
+database_id = "7f54b56f-9df1-4c12-b685-9fc7af29f094"
