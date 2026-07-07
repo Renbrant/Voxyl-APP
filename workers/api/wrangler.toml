@@ -9,3 +9,7 @@ routes = [
 binding = "DB"
 database_name = "voxyl-db"
 database_id = "7f54b56f-9df1-4c12-b685-9fc7af29f094"
+
+[[kv_namespaces]]
+binding = "VOXYL_CACHE"
+id = "f343ebdd13a74e0881985824de684671"
