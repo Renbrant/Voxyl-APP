@@ -41,3 +41,7 @@ dist-ssr
 voxyl-auth-only-log.txt
 voxyl-audio-log.txt
 voxyl-auth-restore-log.txt
+
+# Cloudflare Wrangler local state
+.wrangler/
+workers/**/.wrangler/
