@@ -9,6 +9,18 @@ const notFoundResponse = {
   error: "Not found",
 };
 
+const unauthorizedResponse = {
+  ok: false,
+  error: "Unauthorized",
+};
+
+interface Env {
+  DB: D1Database;
+  VOXYL_CACHE: KVNamespace;
+  VOXYL_MEDIA: R2Bucket;
+  DIAGNOSTICS_TOKEN: string;
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -18,12 +30,108 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function getDiagnosticsToken(request: Request): string | null {
+  const authorization = request.headers.get("authorization");
+
+  if (authorization?.startsWith("Bearer ")) {
+    return authorization.slice("Bearer ".length).trim();
+  }
+
+  return request.headers.get("x-diagnostics-token");
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const encoder = new TextEncoder();
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let diff = leftBytes.length ^ rightBytes.length;
+
+  for (let index = 0; index < length; index += 1) {
+    diff |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+
+  return diff === 0;
+}
+
+function isDiagnosticsAuthorized(request: Request, env: Env): boolean {
+  const providedToken = getDiagnosticsToken(request);
+
+  if (!providedToken || !env.DIAGNOSTICS_TOKEN) {
+    return false;
+  }
+
+  return constantTimeEqual(providedToken, env.DIAGNOSTICS_TOKEN);
+}
+
+async function checkDb(env: Env): Promise<true | string> {
+  try {
+    const result = await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
+    return result?.ok === 1 ? true : "D1 check failed";
+  } catch {
+    return "D1 check failed";
+  }
+}
+
+async function checkKv(env: Env): Promise<true | string> {
+  const key = `diagnostics/${crypto.randomUUID()}`;
+  const value = "ok";
+
+  try {
+    await env.VOXYL_CACHE.put(key, value, { expirationTtl: 60 });
+    const cachedValue = await env.VOXYL_CACHE.get(key);
+    await env.VOXYL_CACHE.delete(key);
+
+    return cachedValue === value ? true : "KV check failed";
+  } catch {
+    return "KV check failed";
+  }
+}
+
+async function checkR2(env: Env): Promise<true | string> {
+  const key = `diagnostics/${crypto.randomUUID()}.txt`;
+
+  try {
+    await env.VOXYL_MEDIA.put(key, "ok");
+    const object = await env.VOXYL_MEDIA.head(key);
+    await env.VOXYL_MEDIA.delete(key);
+
+    return object ? true : "R2 check failed";
+  } catch {
+    return "R2 check failed";
+  }
+}
+
+async function diagnosticsResponse(env: Env): Promise<Response> {
+  const checks = {
+    db: await checkDb(env),
+    kv: await checkKv(env),
+    r2: await checkR2(env),
+  };
+  const ok = checks.db === true && checks.kv === true && checks.r2 === true;
+
+  return jsonResponse({
+    ok,
+    service: healthResponse.service,
+    version: healthResponse.version,
+    checks,
+  });
+}
+
 export default {
-  fetch(request: Request): Response {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
 
     if (request.method === "GET" && (pathname === "/health" || pathname === "/api/health")) {
       return jsonResponse(healthResponse);
+    }
+
+    if (request.method === "GET" && (pathname === "/diagnostics" || pathname === "/api/diagnostics")) {
+      if (!isDiagnosticsAuthorized(request, env)) {
+        return jsonResponse(unauthorizedResponse, 401);
+      }
+
+      return diagnosticsResponse(env);
     }
 
     return jsonResponse(notFoundResponse, 404);
