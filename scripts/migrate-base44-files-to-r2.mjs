@@ -197,20 +197,8 @@ function publicUrl(publicBaseUrl, key) {
   return `${publicBaseUrl.replace(/\/+$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
-function windowsCommandQuote(value) {
-  const text = String(value);
-  if (text.includes('"')) {
-    throw new Error(`Cannot safely pass value containing a double quote to cmd.exe: ${text}`);
-  }
-  return `"${text}"`;
-}
-
-function windowsCommandToken(value, label) {
-  const text = String(value);
-  if (/\s|"/.test(text)) {
-    throw new Error(`Cannot safely pass ${label} to cmd.exe without quotes: ${text}`);
-  }
-  return text;
+function powershellSingleQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 async function downloadFile(url, outputDir) {
@@ -263,23 +251,28 @@ function runWranglerUpload({ bucket, key, localPath, contentType }) {
     '--remote',
   ];
 
+  const powershellCommand = [
+    '&',
+    'npx',
+    'wrangler',
+    'r2',
+    'object',
+    'put',
+    powershellSingleQuote(`${bucket}/${key}`),
+    '--file',
+    powershellSingleQuote(localPath),
+    '--content-type',
+    powershellSingleQuote(contentType),
+    '--remote',
+  ].join(' ');
+
   const result = process.platform === 'win32'
-    ? spawnSync('cmd.exe', [
-      '/d',
-      '/c',
-      [
-        'npx',
-        'wrangler',
-        'r2',
-        'object',
-        'put',
-        windowsCommandToken(`${bucket}/${key}`, 'bucket/key'),
-        '--file',
-        windowsCommandQuote(localPath),
-        '--content-type',
-        windowsCommandToken(contentType, 'content type'),
-        '--remote',
-      ].join(' '),
+    ? spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      powershellCommand,
     ], {
       stdio: 'inherit',
     })
