@@ -45,3 +45,6 @@ voxyl-auth-restore-log.txt
 # Cloudflare Wrangler local state
 .wrangler/
 workers/**/.wrangler/
+
+# Generated Base44 CSV migration artifacts
+migration-output/
