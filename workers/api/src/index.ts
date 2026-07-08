@@ -19,6 +19,7 @@ interface Env {
   VOXYL_CACHE: KVNamespace;
   VOXYL_MEDIA: R2Bucket;
   DIAGNOSTICS_TOKEN: string;
+  CLERK_SECRET_KEY: string;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -118,6 +119,38 @@ async function diagnosticsResponse(env: Env): Promise<Response> {
   });
 }
 
+async function checkClerk(env: Env): Promise<true | string> {
+  try {
+    const response = await fetch("https://api.clerk.com/v1/users?limit=1", {
+      headers: {
+        authorization: `Bearer ${env.CLERK_SECRET_KEY}`,
+        accept: "application/json",
+      },
+    });
+
+    return response.ok ? true : "Clerk check failed";
+  } catch {
+    return "Clerk check failed";
+  }
+}
+
+async function clerkDiagnosticsResponse(env: Env): Promise<Response> {
+  const clerk = await checkClerk(env);
+  const ok = clerk === true;
+
+  return jsonResponse(
+    {
+      ok,
+      service: healthResponse.service,
+      version: healthResponse.version,
+      checks: {
+        clerk,
+      },
+    },
+    ok ? 200 : 502,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -132,6 +165,14 @@ export default {
       }
 
       return diagnosticsResponse(env);
+    }
+
+    if (request.method === "GET" && (pathname === "/clerk/diagnostics" || pathname === "/api/clerk/diagnostics")) {
+      if (!isDiagnosticsAuthorized(request, env)) {
+        return jsonResponse(unauthorizedResponse, 401);
+      }
+
+      return clerkDiagnosticsResponse(env);
     }
 
     return jsonResponse(notFoundResponse, 404);
