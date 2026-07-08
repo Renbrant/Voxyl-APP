@@ -198,7 +198,11 @@ function publicUrl(publicBaseUrl, key) {
 }
 
 function windowsCommandQuote(value) {
-  return `"${String(value).replaceAll('"', '\\"')}"`;
+  const text = String(value);
+  if (text.includes('"')) {
+    throw new Error(`Cannot safely pass value containing a double quote to cmd.exe: ${text}`);
+  }
+  return `"${text}"`;
 }
 
 async function downloadFile(url, outputDir) {
@@ -256,7 +260,19 @@ function runWranglerUpload({ bucket, key, localPath, contentType }) {
       '/d',
       '/s',
       '/c',
-      ['npx', ...args].map(windowsCommandQuote).join(' '),
+      [
+        'npx',
+        'wrangler',
+        'r2',
+        'object',
+        'put',
+        windowsCommandQuote(`${bucket}/${key}`),
+        '--file',
+        windowsCommandQuote(localPath),
+        '--content-type',
+        windowsCommandQuote(contentType),
+        '--remote',
+      ].join(' '),
     ], {
       stdio: 'inherit',
     })
