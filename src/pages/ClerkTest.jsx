@@ -17,6 +17,8 @@ function ClerkTestContent() {
   const [tokenReceived, setTokenReceived] = useState(null)
   const [workerDiagnostics, setWorkerDiagnostics] = useState(null)
   const [isTestingWorkerDiagnostics, setIsTestingWorkerDiagnostics] = useState(false)
+  const [meDiagnostics, setMeDiagnostics] = useState(null)
+  const [isTestingMe, setIsTestingMe] = useState(false)
 
   const handleTokenTest = async () => {
     const token = await getToken()
@@ -73,6 +75,50 @@ function ClerkTestContent() {
       })
     } finally {
       setIsTestingWorkerDiagnostics(false)
+    }
+  }
+
+  const handleMeTest = async () => {
+    setIsTestingMe(true)
+    setMeDiagnostics(null)
+
+    try {
+      const token = await getToken()
+
+      if (!token) {
+        setMeDiagnostics({
+          status: null,
+          ok: false,
+          user: null,
+          error: 'No Clerk token received.',
+        })
+        return
+      }
+
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/me`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const contentType = response.headers.get('content-type') || ''
+      const data = contentType.includes('application/json') ? await response.json() : {}
+
+      setMeDiagnostics({
+        status: response.status,
+        ok: Boolean(data.ok),
+        user: data.user || null,
+        error: data.error || null,
+      })
+    } catch (error) {
+      setMeDiagnostics({
+        status: null,
+        ok: false,
+        user: null,
+        error: error instanceof Error ? error.message : '/api/me request failed.',
+      })
+    } finally {
+      setIsTestingMe(false)
     }
   }
 
@@ -139,6 +185,14 @@ function ClerkTestContent() {
               >
                 {isTestingWorkerDiagnostics ? 'Testing Worker auth diagnostics...' : 'Test Worker auth diagnostics'}
               </button>
+              <button
+                type="button"
+                onClick={handleMeTest}
+                disabled={isTestingMe}
+                className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isTestingMe ? 'Testing /api/me...' : 'Test /api/me'}
+              </button>
               <SignOutButton>
                 <button className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold">
                   Sign out
@@ -177,6 +231,70 @@ function ClerkTestContent() {
                   <div>
                     <dt className="text-muted-foreground">error</dt>
                     <dd>{workerDiagnostics.error || 'null'}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+
+            {meDiagnostics && (
+              <div className="rounded-xl border border-border bg-background/60 p-4">
+                <h2 className="mb-3 text-sm font-semibold">/api/me result</h2>
+                <dl className="space-y-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground">HTTP status</dt>
+                    <dd>{meDiagnostics.status ?? 'Unavailable'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">ok</dt>
+                    <dd>{String(meDiagnostics.ok)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.id</dt>
+                    <dd className="break-all font-mono">{meDiagnostics.user?.id || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.clerk_user_id</dt>
+                    <dd className="break-all font-mono">{meDiagnostics.user?.clerk_user_id || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.legacy_base44_user_id</dt>
+                    <dd className="break-all font-mono">{meDiagnostics.user?.legacy_base44_user_id || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.email</dt>
+                    <dd>{meDiagnostics.user?.email || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.name</dt>
+                    <dd>{meDiagnostics.user?.name || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.username</dt>
+                    <dd>{meDiagnostics.user?.username || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.role</dt>
+                    <dd>{meDiagnostics.user?.role || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.profile_picture</dt>
+                    <dd className="break-all">{meDiagnostics.user?.profile_picture || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.profile_hidden</dt>
+                    <dd>{meDiagnostics.user?.profile_hidden ?? 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.created_at</dt>
+                    <dd>{meDiagnostics.user?.created_at || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">user.updated_at</dt>
+                    <dd>{meDiagnostics.user?.updated_at || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">error</dt>
+                    <dd>{meDiagnostics.error || 'null'}</dd>
                   </div>
                 </dl>
               </div>
