@@ -78,8 +78,9 @@ async function bootstrap() {
   // 4. NOW dynamically import App and auth callback — base44Client/app-params
   //    will initialize with the token already in localStorage.
   console.log('[AUTH] importing App after token hydration')
-  const [{ default: App }, { initializeNativeAuthCallback }] = await Promise.all([
+  const [{ default: App }, { default: OptionalClerkProvider }, { initializeNativeAuthCallback }] = await Promise.all([
     import('@/App.jsx'),
+    import('@/lib/OptionalClerkProvider.jsx'),
     import('@/lib/nativeAuthCallback'),
   ])
 
@@ -90,7 +91,9 @@ async function bootstrap() {
 
   // 6. Mount React
   ReactDOM.createRoot(document.getElementById('root')).render(
-    <App />
+    <OptionalClerkProvider>
+      <App />
+    </OptionalClerkProvider>
   )
 }
 
