@@ -115,6 +115,38 @@ function isMeRoute(pathname: string): boolean {
   return pathname === "/me" || pathname === "/api/me";
 }
 
+function isPlaylistsRoute(pathname: string): boolean {
+  return pathname === "/playlists" || pathname === "/api/playlists";
+}
+
+function getPlaylistId(pathname: string): string | null {
+  const prefixes = ["/playlists/", "/api/playlists/"];
+
+  for (const prefix of prefixes) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+
+    const encodedId = pathname.slice(prefix.length);
+
+    if (!encodedId || encodedId.includes("/")) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(encodedId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function isPlaylistRoute(pathname: string): boolean {
+  return isPlaylistsRoute(pathname) || getPlaylistId(pathname) !== null;
+}
+
 async function checkDb(env: Env): Promise<true | string> {
   try {
     const result = await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
@@ -336,11 +368,121 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ ok: true, user }, 200, corsHeaders);
 }
 
+type D1Playlist = {
+  id: string;
+  legacy_base44_playlist_id: string | null;
+  creator_id: string;
+  creator_clerk_user_id: string | null;
+  creator_legacy_base44_user_id: string | null;
+  title: string;
+  description: string | null;
+  cover_image: string | null;
+  visibility: string;
+  rss_feeds: string | null;
+  likes_count: number;
+  plays_count: number;
+  creator_username: string | null;
+  creator_picture: string | null;
+  creator_hidden: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type PublicPlaylist = Omit<D1Playlist, "rss_feeds"> & {
+  name: string;
+  rss_feeds: unknown[];
+};
+
+const playlistSelect = `SELECT id, legacy_base44_playlist_id, creator_id, creator_clerk_user_id,
+  creator_legacy_base44_user_id, title, description, cover_image, visibility, rss_feeds,
+  likes_count, plays_count, creator_username, creator_picture, creator_hidden, created_at,
+  updated_at
+ FROM playlists`;
+
+function parseRssFeeds(value: string | null): unknown[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function toPublicPlaylist(playlist: D1Playlist): PublicPlaylist {
+  return {
+    id: playlist.id,
+    legacy_base44_playlist_id: playlist.legacy_base44_playlist_id,
+    creator_id: playlist.creator_id,
+    creator_clerk_user_id: playlist.creator_clerk_user_id,
+    creator_legacy_base44_user_id: playlist.creator_legacy_base44_user_id,
+    title: playlist.title,
+    name: playlist.title,
+    description: playlist.description,
+    cover_image: playlist.cover_image,
+    visibility: playlist.visibility,
+    rss_feeds: parseRssFeeds(playlist.rss_feeds),
+    likes_count: playlist.likes_count ?? 0,
+    plays_count: playlist.plays_count ?? 0,
+    creator_username: playlist.creator_username,
+    creator_picture: playlist.creator_picture,
+    creator_hidden: playlist.creator_hidden ?? 0,
+    created_at: playlist.created_at,
+    updated_at: playlist.updated_at,
+  };
+}
+
+async function playlistsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const { results } = await env.DB.prepare(
+    `${playlistSelect}
+     WHERE visibility = 'public'
+     ORDER BY created_at DESC
+     LIMIT 50`,
+  ).all<D1Playlist>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      playlists: results.map(toPublicPlaylist),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function playlistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const playlist = await env.DB.prepare(
+    `${playlistSelect}
+     WHERE id = ? AND visibility = 'public'
+     LIMIT 1`,
+  )
+    .bind(playlistId)
+    .first<D1Playlist>();
+
+  if (!playlist) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      playlist: toPublicPlaylist(playlist),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
 
-    if (request.method === "OPTIONS" && (isAuthDiagnosticsRoute(pathname) || isMeRoute(pathname))) {
+    if (request.method === "OPTIONS" && (isAuthDiagnosticsRoute(pathname) || isMeRoute(pathname) || isPlaylistRoute(pathname))) {
       return authDiagnosticsOptionsResponse(request, env);
     }
 
@@ -370,6 +512,16 @@ export default {
 
     if (request.method === "GET" && isMeRoute(pathname)) {
       return meResponse(request, env);
+    }
+
+    if (request.method === "GET" && isPlaylistsRoute(pathname)) {
+      return playlistsResponse(request, env);
+    }
+
+    const playlistId = getPlaylistId(pathname);
+
+    if (request.method === "GET" && playlistId) {
+      return playlistResponse(request, env, playlistId);
     }
 
     return jsonResponse(notFoundResponse, 404);
