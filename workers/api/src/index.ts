@@ -111,6 +111,10 @@ function isAuthDiagnosticsRoute(pathname: string): boolean {
   return pathname === "/auth/diagnostics" || pathname === "/api/auth/diagnostics";
 }
 
+function isMeRoute(pathname: string): boolean {
+  return pathname === "/me" || pathname === "/api/me";
+}
+
 async function checkDb(env: Env): Promise<true | string> {
   try {
     const result = await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
@@ -211,10 +215,44 @@ function getStringClaim(claims: Record<string, unknown>, names: string[]): strin
 
 async function authDiagnosticsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      authenticated: true,
+      userId: claims.userId,
+      sessionId: claims.sessionId,
+      email: claims.email,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+function authDiagnosticsOptionsResponse(request: Request, env: Env): Response {
+  return new Response(null, {
+    status: 204,
+    headers: getCorsHeaders(request, env),
+  });
+}
+
+type ClerkClaims = {
+  userId: string;
+  sessionId: string | null;
+  email: string | null;
+  name: string | null;
+};
+
+async function getVerifiedClerkClaims(request: Request, env: Env): Promise<ClerkClaims | null> {
   const token = getBearerToken(request);
 
   if (!token) {
-    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+    return null;
   }
 
   try {
@@ -227,37 +265,82 @@ async function authDiagnosticsResponse(request: Request, env: Env): Promise<Resp
     const userId = getStringClaim(claims, ["sub"]);
 
     if (!userId) {
-      return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+      return null;
     }
 
-    return jsonResponse(
-      {
-        ok: true,
-        authenticated: true,
-        userId,
-        sessionId: getStringClaim(claims, ["sid", "session_id"]),
-        email: getStringClaim(claims, ["email", "primary_email", "primary_email_address"]),
-      },
-      200,
-      corsHeaders,
-    );
+    return {
+      userId,
+      sessionId: getStringClaim(claims, ["sid", "session_id"]),
+      email: getStringClaim(claims, ["email", "primary_email", "primary_email_address"]),
+      name: getStringClaim(claims, ["name", "full_name"]),
+    };
   } catch {
-    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+    return null;
   }
 }
 
-function authDiagnosticsOptionsResponse(request: Request, env: Env): Response {
-  return new Response(null, {
-    status: 204,
-    headers: getCorsHeaders(request, env),
-  });
+type D1User = {
+  id: string;
+  clerk_user_id: string | null;
+  legacy_base44_user_id: string | null;
+  email: string | null;
+  name: string | null;
+  username: string | null;
+  role: string;
+  profile_picture: string | null;
+  profile_hidden: number;
+  created_at: string;
+  updated_at: string;
+};
+
+async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1User | null> {
+  return env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, created_at, updated_at
+     FROM users
+     WHERE clerk_user_id = ?`,
+  )
+    .bind(clerkUserId)
+    .first<D1User>();
+}
+
+async function createUserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO users (id, clerk_user_id, email, name)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(clerk_user_id) DO NOTHING`,
+  )
+    .bind(claims.userId, claims.userId, claims.email, claims.name)
+    .run();
+}
+
+async function meResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  let user = await getUserByClerkUserId(env, claims.userId);
+
+  if (!user) {
+    await createUserFromClerkClaims(env, claims);
+    user = await getUserByClerkUserId(env, claims.userId);
+  }
+
+  if (!user) {
+    return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
+  }
+
+  return jsonResponse({ ok: true, user }, 200, corsHeaders);
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
 
-    if (request.method === "OPTIONS" && isAuthDiagnosticsRoute(pathname)) {
+    if (request.method === "OPTIONS" && (isAuthDiagnosticsRoute(pathname) || isMeRoute(pathname))) {
       return authDiagnosticsOptionsResponse(request, env);
     }
 
@@ -283,6 +366,10 @@ export default {
 
     if (request.method === "GET" && isAuthDiagnosticsRoute(pathname)) {
       return authDiagnosticsResponse(request, env);
+    }
+
+    if (request.method === "GET" && isMeRoute(pathname)) {
+      return meResponse(request, env);
     }
 
     return jsonResponse(notFoundResponse, 404);
