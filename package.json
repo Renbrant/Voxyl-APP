@@ -21,6 +21,7 @@
     "@capacitor/core": "^8.4.0",
     "@capacitor/preferences": "^8.0.1",
     "@capgo/capacitor-native-audio": "^8.4.7",
+    "@clerk/backend": "^3.11.1",
     "@clerk/clerk-react": "^5.61.8",
     "@hello-pangea/dnd": "^17.0.0",
     "@hookform/resolvers": "^4.1.2",
