@@ -1,3 +1,5 @@
+import { verifyToken } from "@clerk/backend";
+
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
@@ -14,19 +16,28 @@ const unauthorizedResponse = {
   error: "Unauthorized",
 };
 
+const unauthenticatedResponse = {
+  ok: false,
+  authenticated: false,
+  error: "Unauthorized",
+};
+
 interface Env {
   DB: D1Database;
   VOXYL_CACHE: KVNamespace;
   VOXYL_MEDIA: R2Bucket;
   DIAGNOSTICS_TOKEN: string;
   CLERK_SECRET_KEY: string;
+  CLERK_JWT_KEY: string;
+  CLERK_AUTHORIZED_PARTIES: string;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
+      ...headers,
     },
   });
 }
@@ -63,6 +74,41 @@ function isDiagnosticsAuthorized(request: Request, env: Env): boolean {
   }
 
   return constantTimeEqual(providedToken, env.DIAGNOSTICS_TOKEN);
+}
+
+function getBearerToken(request: Request): string | null {
+  const authorization = request.headers.get("authorization");
+
+  if (!authorization?.startsWith("Bearer ")) {
+    return null;
+  }
+
+  return authorization.slice("Bearer ".length).trim() || null;
+}
+
+function getAuthorizedParties(env: Env): string[] {
+  return env.CLERK_AUTHORIZED_PARTIES.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+  const origin = request.headers.get("origin");
+
+  if (!origin || !getAuthorizedParties(env).includes(origin)) {
+    return {};
+  }
+
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "Authorization, Content-Type",
+    "vary": "Origin",
+  };
+}
+
+function isAuthDiagnosticsRoute(pathname: string): boolean {
+  return pathname === "/auth/diagnostics" || pathname === "/api/auth/diagnostics";
 }
 
 async function checkDb(env: Env): Promise<true | string> {
@@ -151,9 +197,69 @@ async function clerkDiagnosticsResponse(env: Env): Promise<Response> {
   );
 }
 
+function getStringClaim(claims: Record<string, unknown>, names: string[]): string | null {
+  for (const name of names) {
+    const value = claims[name];
+
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+async function authDiagnosticsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const token = getBearerToken(request);
+
+  if (!token) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  try {
+    const verifiedToken = await verifyToken(token, {
+      jwtKey: env.CLERK_JWT_KEY,
+      secretKey: env.CLERK_SECRET_KEY,
+      authorizedParties: getAuthorizedParties(env),
+    });
+    const claims = verifiedToken as Record<string, unknown>;
+    const userId = getStringClaim(claims, ["sub"]);
+
+    if (!userId) {
+      return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+    }
+
+    return jsonResponse(
+      {
+        ok: true,
+        authenticated: true,
+        userId,
+        sessionId: getStringClaim(claims, ["sid", "session_id"]),
+        email: getStringClaim(claims, ["email", "primary_email", "primary_email_address"]),
+      },
+      200,
+      corsHeaders,
+    );
+  } catch {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+}
+
+function authDiagnosticsOptionsResponse(request: Request, env: Env): Response {
+  return new Response(null, {
+    status: 204,
+    headers: getCorsHeaders(request, env),
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
+
+    if (request.method === "OPTIONS" && isAuthDiagnosticsRoute(pathname)) {
+      return authDiagnosticsOptionsResponse(request, env);
+    }
 
     if (request.method === "GET" && (pathname === "/health" || pathname === "/api/health")) {
       return jsonResponse(healthResponse);
@@ -173,6 +279,10 @@ export default {
       }
 
       return clerkDiagnosticsResponse(env);
+    }
+
+    if (request.method === "GET" && isAuthDiagnosticsRoute(pathname)) {
+      return authDiagnosticsResponse(request, env);
     }
 
     return jsonResponse(notFoundResponse, 404);
