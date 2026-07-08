@@ -1205,6 +1205,16 @@ function buildSql(rows) {
   return statements.join('\n');
 }
 
+function stripRemoteD1TransactionLines(sql) {
+  return sql
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !/^(BEGIN\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT\s+.+|RELEASE\s+.+);?$/i.test(trimmed);
+    })
+    .join('\n');
+}
+
 function buildReport({ inputDir, manualUsersPath, outputDir, dryRun, counts, rows, users, quarantine, jsonErrors, orphanRefs, reconciliation, dedupeStats }) {
   const visibilityCounts = rows.playlists.reduce((acc, row) => {
     const key = row.visibility || 'unknown';
@@ -1425,11 +1435,15 @@ function main() {
     dedupeStats,
   });
 
+  const remoteSql = stripRemoteD1TransactionLines(sql);
+
   writeFileSync(path.join(outputDir, 'base44-d1-import.sql'), sql, 'utf8');
+  writeFileSync(path.join(outputDir, 'base44-d1-import-remote.sql'), remoteSql, 'utf8');
   writeFileSync(path.join(outputDir, 'validation-report.md'), report, 'utf8');
   writeFileSync(path.join(outputDir, 'quarantine.json'), JSON.stringify({ generated_at: GENERATED_AT, quarantine, orphanRefs, jsonErrors, reconciliation, dedupeStats }, null, 2), 'utf8');
 
   console.log(`Wrote ${path.join(outputDir, 'base44-d1-import.sql')}`);
+  console.log(`Wrote ${path.join(outputDir, 'base44-d1-import-remote.sql')}`);
   console.log(`Wrote ${path.join(outputDir, 'validation-report.md')}`);
   console.log(`Wrote ${path.join(outputDir, 'quarantine.json')}`);
   console.log('Dry run complete. No D1 commands were executed.');
