@@ -8,16 +8,72 @@ import {
   useUser,
 } from '@clerk/clerk-react'
 import { useState } from 'react'
+import { API_BASE_URL } from '@/api/voxylApiClient'
 import { isClerkConfigured } from '@/lib/clerkConfig'
 
 function ClerkTestContent() {
   const { user, isLoaded } = useUser()
   const { getToken, isSignedIn } = useAuth()
   const [tokenReceived, setTokenReceived] = useState(null)
+  const [workerDiagnostics, setWorkerDiagnostics] = useState(null)
+  const [isTestingWorkerDiagnostics, setIsTestingWorkerDiagnostics] = useState(false)
 
   const handleTokenTest = async () => {
     const token = await getToken()
     setTokenReceived(Boolean(token))
+  }
+
+  const handleWorkerDiagnosticsTest = async () => {
+    setIsTestingWorkerDiagnostics(true)
+    setWorkerDiagnostics(null)
+
+    try {
+      const token = await getToken()
+
+      if (!token) {
+        setWorkerDiagnostics({
+          status: null,
+          ok: false,
+          authenticated: false,
+          userId: null,
+          sessionId: null,
+          email: null,
+          error: 'No Clerk token received.',
+        })
+        return
+      }
+
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/auth/diagnostics`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const contentType = response.headers.get('content-type') || ''
+      const data = contentType.includes('application/json') ? await response.json() : {}
+
+      setWorkerDiagnostics({
+        status: response.status,
+        ok: Boolean(data.ok),
+        authenticated: Boolean(data.authenticated),
+        userId: data.userId || null,
+        sessionId: data.sessionId || null,
+        email: data.email || null,
+        error: data.error || null,
+      })
+    } catch (error) {
+      setWorkerDiagnostics({
+        status: null,
+        ok: false,
+        authenticated: false,
+        userId: null,
+        sessionId: null,
+        email: null,
+        error: error instanceof Error ? error.message : 'Worker auth diagnostics request failed.',
+      })
+    } finally {
+      setIsTestingWorkerDiagnostics(false)
+    }
   }
 
   return (
@@ -75,12 +131,56 @@ function ClerkTestContent() {
               >
                 Test Clerk token
               </button>
+              <button
+                type="button"
+                onClick={handleWorkerDiagnosticsTest}
+                disabled={isTestingWorkerDiagnostics}
+                className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isTestingWorkerDiagnostics ? 'Testing Worker auth diagnostics...' : 'Test Worker auth diagnostics'}
+              </button>
               <SignOutButton>
                 <button className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold">
                   Sign out
                 </button>
               </SignOutButton>
             </div>
+
+            {workerDiagnostics && (
+              <div className="rounded-xl border border-border bg-background/60 p-4">
+                <h2 className="mb-3 text-sm font-semibold">Worker auth diagnostics result</h2>
+                <dl className="space-y-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground">HTTP status</dt>
+                    <dd>{workerDiagnostics.status ?? 'Unavailable'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">ok</dt>
+                    <dd>{String(workerDiagnostics.ok)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">authenticated</dt>
+                    <dd>{String(workerDiagnostics.authenticated)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">userId</dt>
+                    <dd className="break-all font-mono">{workerDiagnostics.userId || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">sessionId</dt>
+                    <dd className="break-all font-mono">{workerDiagnostics.sessionId || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">email</dt>
+                    <dd>{workerDiagnostics.email || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">error</dt>
+                    <dd>{workerDiagnostics.error || 'null'}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
           </div>
         </SignedIn>
       </div>
