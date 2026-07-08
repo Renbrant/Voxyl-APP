@@ -197,6 +197,10 @@ function publicUrl(publicBaseUrl, key) {
   return `${publicBaseUrl.replace(/\/+$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+function windowsCommandQuote(value) {
+  return `"${String(value).replaceAll('"', '\\"')}"`;
+}
+
 async function downloadFile(url, outputDir) {
   const response = await fetch(url);
   if (!response.ok || !response.body) {
@@ -234,8 +238,7 @@ async function downloadFile(url, outputDir) {
 }
 
 function runWranglerUpload({ bucket, key, localPath, contentType }) {
-  const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const result = spawnSync(executable, [
+  const args = [
     'wrangler',
     'r2',
     'object',
@@ -246,7 +249,18 @@ function runWranglerUpload({ bucket, key, localPath, contentType }) {
     '--content-type',
     contentType,
     '--remote',
-  ], {
+  ];
+
+  const result = process.platform === 'win32'
+    ? spawnSync('cmd.exe', [
+      '/d',
+      '/s',
+      '/c',
+      ['npx', ...args].map(windowsCommandQuote).join(' '),
+    ], {
+      stdio: 'inherit',
+    })
+    : spawnSync('npx', args, {
     stdio: 'inherit',
   });
 
@@ -310,6 +324,16 @@ async function main() {
   console.log(`Upload target: ${args.dryRun ? 'none (dry-run)' : 'remote Cloudflare R2'}`);
 
   for (const oldUrl of urls) {
+    const row = {
+      old_url: oldUrl,
+      new_url: '',
+      r2_key: '',
+      local_file: '',
+      content_type: '',
+      uploaded: 'no',
+      error: '',
+    };
+
     try {
       const downloaded = await downloadFile(oldUrl, downloadDir);
       downloadedCount += 1;
@@ -317,6 +341,11 @@ async function main() {
       const key = `${R2_PREFIX}/${downloaded.filename}`;
       const newUrl = publicUrl(args.publicBaseUrl, key);
       let uploaded = false;
+
+      row.new_url = newUrl;
+      row.r2_key = key;
+      row.local_file = downloaded.localPath;
+      row.content_type = downloaded.contentType;
 
       if (!args.dryRun) {
         runWranglerUpload({
@@ -329,27 +358,14 @@ async function main() {
         uploadedCount += 1;
       }
 
-      rows.push({
-        old_url: oldUrl,
-        new_url: newUrl,
-        r2_key: key,
-        local_file: downloaded.localPath,
-        content_type: downloaded.contentType,
-        uploaded: uploaded ? 'yes' : 'dry-run',
-        error: '',
-      });
+      row.uploaded = uploaded ? 'yes' : 'dry-run';
     } catch (error) {
       failedCount += 1;
-      rows.push({
-        old_url: oldUrl,
-        new_url: '',
-        r2_key: '',
-        local_file: '',
-        content_type: '',
-        uploaded: 'no',
-        error: error.message,
-      });
+      row.uploaded = 'no';
+      row.error = error.message;
     }
+
+    rows.push(row);
   }
 
   const csvPath = path.join(outputDir, 'base44-r2-url-map.csv');
