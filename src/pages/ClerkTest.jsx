@@ -19,6 +19,8 @@ function ClerkTestContent() {
   const [isTestingWorkerDiagnostics, setIsTestingWorkerDiagnostics] = useState(false)
   const [meDiagnostics, setMeDiagnostics] = useState(null)
   const [isTestingMe, setIsTestingMe] = useState(false)
+  const [playlistsDiagnostics, setPlaylistsDiagnostics] = useState(null)
+  const [isTestingPlaylists, setIsTestingPlaylists] = useState(false)
 
   const handleTokenTest = async () => {
     const token = await getToken()
@@ -122,6 +124,39 @@ function ClerkTestContent() {
     }
   }
 
+  const handlePlaylistsTest = async () => {
+    setIsTestingPlaylists(true)
+    setPlaylistsDiagnostics(null)
+
+    try {
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/playlists`, {
+        method: 'GET',
+      })
+      const contentType = response.headers.get('content-type') || ''
+      const data = contentType.includes('application/json') ? await response.json() : {}
+      const playlists = Array.isArray(data.playlists) ? data.playlists : []
+      const firstPlaylist = playlists[0] || null
+
+      setPlaylistsDiagnostics({
+        status: response.status,
+        ok: Boolean(data.ok),
+        playlistCount: playlists.length,
+        firstPlaylist,
+        error: data.error || null,
+      })
+    } catch (error) {
+      setPlaylistsDiagnostics({
+        status: null,
+        ok: false,
+        playlistCount: 0,
+        firstPlaylist: null,
+        error: error instanceof Error ? error.message : '/api/playlists request failed.',
+      })
+    } finally {
+      setIsTestingPlaylists(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background px-6 py-10 text-foreground">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 rounded-2xl border border-border bg-card p-6">
@@ -192,6 +227,14 @@ function ClerkTestContent() {
                 className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isTestingMe ? 'Testing /api/me...' : 'Test /api/me'}
+              </button>
+              <button
+                type="button"
+                onClick={handlePlaylistsTest}
+                disabled={isTestingPlaylists}
+                className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isTestingPlaylists ? 'Testing /api/playlists...' : 'Test /api/playlists'}
               </button>
               <SignOutButton>
                 <button className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold">
@@ -295,6 +338,42 @@ function ClerkTestContent() {
                   <div>
                     <dt className="text-muted-foreground">error</dt>
                     <dd>{meDiagnostics.error || 'null'}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+
+            {playlistsDiagnostics && (
+              <div className="rounded-xl border border-border bg-background/60 p-4">
+                <h2 className="mb-3 text-sm font-semibold">/api/playlists result</h2>
+                <dl className="space-y-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground">HTTP status</dt>
+                    <dd>{playlistsDiagnostics.status ?? 'Unavailable'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">ok</dt>
+                    <dd>{String(playlistsDiagnostics.ok)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">playlist count</dt>
+                    <dd>{playlistsDiagnostics.playlistCount}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">first playlist id</dt>
+                    <dd className="break-all font-mono">{playlistsDiagnostics.firstPlaylist?.id || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">first playlist title</dt>
+                    <dd>{playlistsDiagnostics.firstPlaylist?.title || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">first playlist name</dt>
+                    <dd>{playlistsDiagnostics.firstPlaylist?.name || 'null'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">error</dt>
+                    <dd>{playlistsDiagnostics.error || 'null'}</dd>
                   </div>
                 </dl>
               </div>
