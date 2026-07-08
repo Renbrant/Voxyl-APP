@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 const DEFAULT_INPUT = 'migration-output/base44-file-url-unique.txt';
 const DEFAULT_OUT_DIR = 'migration-output';
@@ -234,31 +234,29 @@ async function downloadFile(url, outputDir) {
 }
 
 function runWranglerUpload({ bucket, key, localPath, contentType }) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('npx', [
-      'wrangler',
-      'r2',
-      'object',
-      'put',
-      `${bucket}/${key}`,
-      '--file',
-      localPath,
-      '--content-type',
-      contentType,
-    ], {
-      shell: process.platform === 'win32',
-      stdio: 'inherit',
-    });
-
-    child.on('error', reject);
-    child.on('exit', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Wrangler upload failed with exit code ${code}`));
-      }
-    });
+  const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const result = spawnSync(executable, [
+    'wrangler',
+    'r2',
+    'object',
+    'put',
+    `${bucket}/${key}`,
+    '--file',
+    localPath,
+    '--content-type',
+    contentType,
+    '--remote',
+  ], {
+    stdio: 'inherit',
   });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`Wrangler upload failed with exit code ${result.status}`);
+  }
 }
 
 function buildCsv(rows) {
@@ -309,6 +307,8 @@ async function main() {
   let uploadedCount = 0;
   let failedCount = 0;
 
+  console.log(`Upload target: ${args.dryRun ? 'none (dry-run)' : 'remote Cloudflare R2'}`);
+
   for (const oldUrl of urls) {
     try {
       const downloaded = await downloadFile(oldUrl, downloadDir);
@@ -319,7 +319,7 @@ async function main() {
       let uploaded = false;
 
       if (!args.dryRun) {
-        await runWranglerUpload({
+        runWranglerUpload({
           bucket: args.bucket,
           key,
           localPath: downloaded.localPath,
