@@ -20,6 +20,7 @@ import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
 import PodcastDetail from '@/pages/PodcastDetail';
 import AuthCallback from '@/pages/AuthCallback';
+import ClerkTest from '@/pages/ClerkTest';
 import { base44ConfigError, isBase44Configured } from '@/lib/app-params';
 
 const AppErrorScreen = ({ title, message }) => (
@@ -120,6 +121,7 @@ const AuthenticatedApp = () => {
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/podcast/:feedUrl" element={<PodcastDetail />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/clerk-test" element={<ClerkTest />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
     </>
