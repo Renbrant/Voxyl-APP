@@ -205,6 +205,14 @@ function windowsCommandQuote(value) {
   return `"${text}"`;
 }
 
+function windowsCommandToken(value, label) {
+  const text = String(value);
+  if (/\s|"/.test(text)) {
+    throw new Error(`Cannot safely pass ${label} to cmd.exe without quotes: ${text}`);
+  }
+  return text;
+}
+
 async function downloadFile(url, outputDir) {
   const response = await fetch(url);
   if (!response.ok || !response.body) {
@@ -258,7 +266,6 @@ function runWranglerUpload({ bucket, key, localPath, contentType }) {
   const result = process.platform === 'win32'
     ? spawnSync('cmd.exe', [
       '/d',
-      '/s',
       '/c',
       [
         'npx',
@@ -266,11 +273,11 @@ function runWranglerUpload({ bucket, key, localPath, contentType }) {
         'r2',
         'object',
         'put',
-        windowsCommandQuote(`${bucket}/${key}`),
+        windowsCommandToken(`${bucket}/${key}`, 'bucket/key'),
         '--file',
         windowsCommandQuote(localPath),
         '--content-type',
-        windowsCommandQuote(contentType),
+        windowsCommandToken(contentType, 'content type'),
         '--remote',
       ].join(' '),
     ], {
