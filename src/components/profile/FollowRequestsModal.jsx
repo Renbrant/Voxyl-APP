@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { asArray } from '@/lib/arrayUtils';
 import { X, UserCheck, UserX, UserCircle2, Loader2, Ban, ChevronDown, ChevronUp, ListMusic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -11,7 +11,7 @@ function RequesterPlaylists({ userId }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    base44.entities.Playlist.filter({ creator_id: userId }, '-created_date', 6)
+    voxylApi.entities.Playlist.filter({ creator_id: userId }, '-created_date', 6)
       .then(data => {
         setPlaylists(asArray(data).filter(p => !p.visibility || p.visibility === 'public'));
         setLoading(false);
@@ -44,7 +44,7 @@ function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) 
   const displayName = req.follower_username ? `@${req.follower_username}` : (req.follower_name || 'Usuário');
 
   useEffect(() => {
-    base44.functions.invoke('getPublicUserProfile', { userId: req.follower_id })
+    voxylApi.functions.invoke('getPublicUserProfile', { userId: req.follower_id })
       .then(res => setProfilePicture(res.data?.profile_picture))
       .catch(() => {});
   }, [req.follower_id]);
@@ -131,14 +131,14 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
   const [actionLoading, setActionLoading] = useState(null);
 
   useEffect(() => {
-    base44.entities.Follow.filter({ following_id: currentUser.id, status: 'pending' })
+    voxylApi.entities.Follow.filter({ following_id: currentUser.id, status: 'pending' })
       .then(data => { setRequests(data); setLoading(false); })
       .catch(() => setLoading(false));
   }, [currentUser.id]);
 
   const handleAccept = async (follow) => {
     setActionLoading(follow.id);
-    await base44.entities.Follow.update(follow.id, { status: 'accepted' });
+    await voxylApi.entities.Follow.update(follow.id, { status: 'accepted' });
     const updated = requests.filter(r => r.id !== follow.id);
     setRequests(updated);
     onCountChange?.(updated.length);
@@ -147,7 +147,7 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
 
   const handleReject = async (follow) => {
     setActionLoading(follow.id);
-    await base44.entities.Follow.delete(follow.id);
+    await voxylApi.entities.Follow.delete(follow.id);
     const updated = requests.filter(r => r.id !== follow.id);
     setRequests(updated);
     onCountChange?.(updated.length);
@@ -157,9 +157,9 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
   const handleBlock = async (follow) => {
     setActionLoading(follow.id);
     // Delete the follow request
-    await base44.entities.Follow.delete(follow.id);
+    await voxylApi.entities.Follow.delete(follow.id);
     // Create block record
-    await base44.entities.Block.create({
+    await voxylApi.entities.Block.create({
       blocker_id: currentUser.id,
       blocker_email: currentUser.email,
       blocked_id: follow.follower_id,

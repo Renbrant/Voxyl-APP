@@ -30,6 +30,7 @@ interface Env {
   CLERK_SECRET_KEY: string;
   CLERK_JWT_KEY: string;
   CLERK_AUTHORIZED_PARTIES: string;
+  CLERK_ISSUER?: string;
 }
 
 function jsonResponse(body: unknown, status = 200, headers?: Record<string, string>): Response {
@@ -87,24 +88,64 @@ function getBearerToken(request: Request): string | null {
 }
 
 function getAuthorizedParties(env: Env): string[] {
-  return env.CLERK_AUTHORIZED_PARTIES.split(",")
+  return (env.CLERK_AUTHORIZED_PARTIES || "").split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+}
+
+function isAllowedOrigin(origin: string | null, env: Env): origin is string {
+  if (!origin) {
+    return false;
+  }
+
+  if (getAuthorizedParties(env).includes(origin)) {
+    return true;
+  }
+
+  try {
+    const { hostname, protocol } = new URL(origin);
+    return protocol === "https:" && hostname.endsWith(".voxyl-app.pages.dev");
+  } catch {
+    return false;
+  }
 }
 
 function getCorsHeaders(request: Request, env: Env): Record<string, string> {
   const origin = request.headers.get("origin");
 
-  if (!origin || !getAuthorizedParties(env).includes(origin)) {
+  if (!isAllowedOrigin(origin, env)) {
     return {};
   }
 
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
     "access-control-allow-headers": "Authorization, Content-Type",
+    "access-control-max-age": "86400",
     "vary": "Origin",
   };
+}
+
+function withCors(response: Response, request: Request, env: Env): Response {
+  const headers = new Headers(response.headers);
+  const corsHeaders = getCorsHeaders(request, env);
+
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    headers.set(key, value);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function optionsResponse(request: Request, env: Env): Response {
+  return new Response(null, {
+    status: 204,
+    headers: getCorsHeaders(request, env),
+  });
 }
 
 function isAuthDiagnosticsRoute(pathname: string): boolean {
@@ -117,6 +158,18 @@ function isMeRoute(pathname: string): boolean {
 
 function isPlaylistsRoute(pathname: string): boolean {
   return pathname === "/playlists" || pathname === "/api/playlists";
+}
+
+function isEntityPlaylistRoute(pathname: string): boolean {
+  return pathname === "/entities/playlist" || pathname === "/api/entities/playlist";
+}
+
+function isEntityFollowRoute(pathname: string): boolean {
+  return pathname === "/entities/follow" || pathname === "/api/entities/follow";
+}
+
+function isTopPodcastsRoute(pathname: string): boolean {
+  return pathname === "/functions/getTopPodcastsByPlayback" || pathname === "/api/functions/getTopPodcastsByPlayback";
 }
 
 function getPlaylistId(pathname: string): string | null {
@@ -145,6 +198,19 @@ function getPlaylistId(pathname: string): string | null {
 
 function isPlaylistRoute(pathname: string): boolean {
   return isPlaylistsRoute(pathname) || getPlaylistId(pathname) !== null;
+}
+
+function healthCheckResponse(request: Request): Response {
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+      },
+    });
+  }
+
+  return jsonResponse(healthResponse);
 }
 
 async function checkDb(env: Env): Promise<true | string> {
@@ -245,6 +311,155 @@ function getStringClaim(claims: Record<string, unknown>, names: string[]): strin
   return null;
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const payload = token.split(".")[1];
+
+    if (!payload) {
+      return null;
+    }
+
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPart(part: string): Uint8Array {
+  const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function decodeJwtJsonPart(part: string): Record<string, unknown> | null {
+  try {
+    const text = new TextDecoder().decode(decodeJwtPart(part));
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function isExpectedIssuer(issuer: string | null, env: Env): boolean {
+  if (!issuer || !env.CLERK_ISSUER) {
+    return false;
+  }
+
+  return issuer === env.CLERK_ISSUER;
+}
+
+function hasValidAuthorizedParty(claims: Record<string, unknown>, env: Env): boolean {
+  const azp = claims.azp;
+
+  if (typeof azp !== "string") {
+    return true;
+  }
+
+  return getAuthorizedParties(env).includes(azp);
+}
+
+function hasValidTimeClaims(claims: Record<string, unknown>): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = typeof claims.exp === "number" ? claims.exp : null;
+  const nbf = typeof claims.nbf === "number" ? claims.nbf : null;
+
+  if (exp !== null && exp <= now) {
+    return false;
+  }
+
+  if (nbf !== null && nbf > now) {
+    return false;
+  }
+
+  return true;
+}
+
+async function verifyTokenWithPinnedIssuerJwks(token: string, env: Env): Promise<Record<string, unknown> | null> {
+  const parts = token.split(".");
+
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  const header = decodeJwtJsonPart(parts[0]);
+  const claims = decodeJwtJsonPart(parts[1]);
+  const issuer = typeof claims?.iss === "string" ? claims.iss : null;
+
+  if (!header || !claims || !isExpectedIssuer(issuer, env)) {
+    return null;
+  }
+
+  if (header.alg !== "RS256" || typeof header.kid !== "string") {
+    return null;
+  }
+
+  if (!hasValidAuthorizedParty(claims, env) || !hasValidTimeClaims(claims)) {
+    return null;
+  }
+
+  const jwksResponse = await fetch(`${issuer}/.well-known/jwks.json`, {
+    headers: {
+      accept: "application/json",
+    },
+  });
+
+  if (!jwksResponse.ok) {
+    return null;
+  }
+
+  const jwks = (await jwksResponse.json()) as { keys?: JsonWebKey[] };
+  const jwk = jwks.keys?.find((key) => key.kid === header.kid);
+
+  if (!jwk) {
+    return null;
+  }
+
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+    },
+    false,
+    ["verify"],
+  );
+  const signature = decodeJwtPart(parts[2]);
+  const signedData = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+  const verified = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, signedData);
+
+  return verified ? claims : null;
+}
+
+function logAuthVerification(request: Request, env: Env, message: string, error?: unknown): void {
+  const token = getBearerToken(request);
+  const payload = token ? decodeJwtPayload(token) : null;
+  const issuer = typeof payload?.iss === "string" ? payload.iss : null;
+  const authorizedParties = getAuthorizedParties(env);
+
+  console.warn("Clerk auth verification", {
+    message,
+    hasAuthorizationHeader: Boolean(request.headers.get("authorization")),
+    hasBearerToken: Boolean(token),
+    tokenIssuer: issuer,
+    expectedIssuer: env.CLERK_ISSUER || null,
+    allowedOrigin: request.headers.get("origin"),
+    authorizedParties,
+    hasSecretKey: Boolean(env.CLERK_SECRET_KEY),
+    hasJwtKey: Boolean(env.CLERK_JWT_KEY),
+    error: error instanceof Error ? error.message : error ? String(error) : null,
+  });
+}
+
 async function authDiagnosticsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -280,19 +495,38 @@ type ClerkClaims = {
   name: string | null;
 };
 
+type ClerkProfile = {
+  email: string | null;
+  name: string | null;
+};
+
 async function getVerifiedClerkClaims(request: Request, env: Env): Promise<ClerkClaims | null> {
   const token = getBearerToken(request);
 
   if (!token) {
+    logAuthVerification(request, env, "missing bearer token");
     return null;
   }
 
+  let verifiedToken: unknown;
+
   try {
-    const verifiedToken = await verifyToken(token, {
+    verifiedToken = await verifyToken(token, {
       jwtKey: env.CLERK_JWT_KEY,
       secretKey: env.CLERK_SECRET_KEY,
       authorizedParties: getAuthorizedParties(env),
     });
+  } catch (error) {
+    logAuthVerification(request, env, "primary token verification failed, trying pinned issuer JWKS", error);
+    verifiedToken = await verifyTokenWithPinnedIssuerJwks(token, env);
+
+    if (!verifiedToken) {
+      logAuthVerification(request, env, "pinned issuer JWKS verification failed");
+      return null;
+    }
+  }
+
+  try {
     const claims = verifiedToken as Record<string, unknown>;
     const userId = getStringClaim(claims, ["sub"]);
 
@@ -306,8 +540,48 @@ async function getVerifiedClerkClaims(request: Request, env: Env): Promise<Clerk
       email: getStringClaim(claims, ["email", "primary_email", "primary_email_address"]),
       name: getStringClaim(claims, ["name", "full_name"]),
     };
-  } catch {
+  } catch (error) {
+    logAuthVerification(request, env, "verified token claims parsing failed", error);
     return null;
+  }
+}
+
+function normalizeEmail(email: string | null): string | null {
+  return email?.trim().toLowerCase() || null;
+}
+
+async function getClerkProfile(env: Env, clerkUserId: string): Promise<ClerkProfile> {
+  try {
+    const response = await fetch(`https://api.clerk.com/v1/users/${encodeURIComponent(clerkUserId)}`, {
+      headers: {
+        authorization: `Bearer ${env.CLERK_SECRET_KEY}`,
+        accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return { email: null, name: null };
+    }
+
+    const data = (await response.json()) as {
+      first_name?: string | null;
+      last_name?: string | null;
+      full_name?: string | null;
+      primary_email_address_id?: string | null;
+      email_addresses?: Array<{ id?: string | null; email_address?: string | null }>;
+    };
+    const primaryEmail =
+      data.email_addresses?.find((email) => email.id === data.primary_email_address_id)?.email_address ||
+      data.email_addresses?.[0]?.email_address ||
+      null;
+    const name = data.full_name || [data.first_name, data.last_name].filter(Boolean).join(" ").trim() || null;
+
+    return {
+      email: normalizeEmail(primaryEmail),
+      name,
+    };
+  } catch {
+    return { email: null, name: null };
   }
 }
 
@@ -336,14 +610,129 @@ async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1Us
     .first<D1User>();
 }
 
+async function getUserByEmail(env: Env, email: string): Promise<D1User | null> {
+  return env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, created_at, updated_at
+     FROM users
+     WHERE lower(email) = lower(?)
+     ORDER BY imported_at IS NULL, created_at ASC
+     LIMIT 1`,
+  )
+    .bind(email)
+    .first<D1User>();
+}
+
+async function getLegacyUserByEmail(env: Env, email: string, clerkUserId: string): Promise<D1User | null> {
+  return env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, created_at, updated_at
+     FROM users
+     WHERE lower(email) = lower(?)
+       AND legacy_base44_user_id IS NOT NULL
+       AND (clerk_user_id IS NULL OR clerk_user_id = ?)
+     ORDER BY imported_at IS NULL, created_at ASC
+     LIMIT 1`,
+  )
+    .bind(email, clerkUserId)
+    .first<D1User>();
+}
+
 async function createUserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO users (id, clerk_user_id, email, name)
+     `INSERT INTO users (id, clerk_user_id, email, name)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(clerk_user_id) DO NOTHING`,
   )
-    .bind(claims.userId, claims.userId, claims.email, claims.name)
+    .bind(claims.userId, claims.userId, normalizeEmail(claims.email), claims.name)
     .run();
+}
+
+async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkClaims): Promise<void> {
+  const email = normalizeEmail(claims.email || user.email);
+  const name = claims.name || user.name;
+
+  if (user.legacy_base44_user_id) {
+    await env.DB.prepare(
+      `UPDATE users
+       SET clerk_user_id = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE clerk_user_id = ?
+         AND id != ?
+         AND legacy_base44_user_id IS NULL
+         AND lower(COALESCE(email, '')) = lower(?)`,
+    )
+      .bind(claims.userId, user.id, email || "")
+      .run();
+  }
+
+  await env.DB.prepare(
+    `UPDATE users
+     SET clerk_user_id = COALESCE(clerk_user_id, ?),
+         email = COALESCE(email, ?),
+         name = COALESCE(name, ?),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(claims.userId, email, name, user.id)
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE playlists
+     SET creator_clerk_user_id = ?
+     WHERE creator_clerk_user_id IS NULL
+       AND (
+         creator_id = ?
+         OR creator_legacy_base44_user_id = ?
+         OR lower(COALESCE(creator_email, '')) = lower(?)
+       )`,
+  )
+    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE playlist_likes
+     SET clerk_user_id = ?
+     WHERE clerk_user_id IS NULL
+       AND (user_id = ? OR legacy_base44_user_id = ? OR lower(COALESCE(user_email, '')) = lower(?))`,
+  )
+    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE podcast_likes
+     SET clerk_user_id = ?
+     WHERE clerk_user_id IS NULL
+       AND (user_id = ? OR legacy_base44_user_id = ? OR lower(COALESCE(user_email, '')) = lower(?))`,
+  )
+    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE podcast_plays
+     SET clerk_user_id = ?
+     WHERE clerk_user_id IS NULL
+       AND (user_id = ? OR legacy_base44_user_id = ?)`,
+  )
+    .bind(claims.userId, user.id, user.legacy_base44_user_id || "")
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE episode_progress
+     SET clerk_user_id = ?
+     WHERE clerk_user_id IS NULL
+       AND (user_id = ? OR legacy_base44_user_id = ?)`,
+  )
+    .bind(claims.userId, user.id, user.legacy_base44_user_id || "")
+    .run();
+}
+
+function toClientUser(user: D1User): D1User & { full_name: string | null; picture: string | null } {
+  return {
+    ...user,
+    full_name: user.name,
+    picture: user.profile_picture,
+  };
 }
 
 async function meResponse(request: Request, env: Env): Promise<Response> {
@@ -354,18 +743,42 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
   }
 
-  let user = await getUserByClerkUserId(env, claims.userId);
+  const profile = !claims.email || !claims.name ? await getClerkProfile(env, claims.userId) : { email: null, name: null };
+  const enrichedClaims = {
+    ...claims,
+    email: normalizeEmail(claims.email || profile.email),
+    name: claims.name || profile.name,
+  };
+
+  let user = await getUserByClerkUserId(env, enrichedClaims.userId);
+
+  if (user && !user.legacy_base44_user_id && enrichedClaims.email) {
+    const legacyUser = await getLegacyUserByEmail(env, enrichedClaims.email, enrichedClaims.userId);
+
+    if (legacyUser) {
+      user = legacyUser;
+    }
+  }
 
   if (!user) {
-    await createUserFromClerkClaims(env, claims);
-    user = await getUserByClerkUserId(env, claims.userId);
+    user = enrichedClaims.email ? await getUserByEmail(env, enrichedClaims.email) : null;
+  }
+
+  if (user) {
+    await linkClerkUserToLegacyData(env, user, enrichedClaims);
+    user = await getUserByClerkUserId(env, enrichedClaims.userId);
+  }
+
+  if (!user) {
+    await createUserFromClerkClaims(env, enrichedClaims);
+    user = await getUserByClerkUserId(env, enrichedClaims.userId);
   }
 
   if (!user) {
     return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
   }
 
-  return jsonResponse({ ok: true, user }, 200, corsHeaders);
+  return jsonResponse({ ok: true, user: toClientUser(user) }, 200, corsHeaders);
 }
 
 type D1Playlist = {
@@ -391,6 +804,8 @@ type D1Playlist = {
 type PublicPlaylist = Omit<D1Playlist, "rss_feeds"> & {
   name: string;
   rss_feeds: unknown[];
+  created_date: string;
+  updated_date: string;
 };
 
 const playlistSelect = `SELECT id, legacy_base44_playlist_id, creator_id, creator_clerk_user_id,
@@ -432,22 +847,179 @@ function toPublicPlaylist(playlist: D1Playlist): PublicPlaylist {
     creator_hidden: playlist.creator_hidden ?? 0,
     created_at: playlist.created_at,
     updated_at: playlist.updated_at,
+    created_date: playlist.created_at,
+    updated_date: playlist.updated_at,
+  };
+}
+
+type D1Follow = {
+  id: string;
+  legacy_base44_follow_id: string | null;
+  follower_id: string;
+  follower_clerk_user_id: string | null;
+  follower_legacy_base44_user_id: string | null;
+  following_id: string;
+  following_clerk_user_id: string | null;
+  following_legacy_base44_user_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  follower_email: string | null;
+  follower_name: string | null;
+  follower_username: string | null;
+  following_email: string | null;
+  base44_created_date: string | null;
+  base44_updated_date: string | null;
+};
+
+type PublicFollow = D1Follow & {
+  created_date: string;
+  updated_date: string;
+};
+
+const followSelect = `SELECT id, legacy_base44_follow_id, follower_id, follower_clerk_user_id,
+  follower_legacy_base44_user_id, following_id, following_clerk_user_id,
+  following_legacy_base44_user_id, status, created_at, updated_at, follower_email,
+  follower_name, follower_username, following_email, base44_created_date,
+  base44_updated_date
+ FROM follows`;
+
+function toPublicFollow(follow: D1Follow): PublicFollow {
+  return {
+    ...follow,
+    created_date: follow.base44_created_date || follow.created_at,
+    updated_date: follow.base44_updated_date || follow.updated_at,
   };
 }
 
 async function playlistsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
+  const url = new URL(request.url);
+  const creatorId = url.searchParams.get("creator_id");
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
+  const sort = url.searchParams.get("sort") || "-created_date";
+  const orderBy = sort === "-plays_count"
+    ? "plays_count DESC, created_at DESC"
+    : sort === "plays_count"
+      ? "plays_count ASC, created_at DESC"
+      : sort === "created_date" || sort === "created_at"
+        ? "created_at ASC"
+        : "created_at DESC";
+
+  if (creatorId) {
+    const claims = await getVerifiedClerkClaims(request, env);
+
+    if (!claims) {
+      return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+    }
+
+    const user = await getUserByClerkUserId(env, claims.userId);
+
+    if (!user || user.id !== creatorId) {
+      return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+    }
+
+    const { results } = await env.DB.prepare(
+      `${playlistSelect}
+       WHERE creator_id = ?
+       ORDER BY ${orderBy}
+       LIMIT ?`,
+    )
+      .bind(creatorId, limit)
+      .all<D1Playlist>();
+
+    return jsonResponse(
+      {
+        ok: true,
+        playlists: results.map(toPublicPlaylist),
+      },
+      200,
+      corsHeaders,
+    );
+  }
+
   const { results } = await env.DB.prepare(
     `${playlistSelect}
      WHERE visibility = 'public'
-     ORDER BY created_at DESC
-     LIMIT 50`,
-  ).all<D1Playlist>();
+     ORDER BY ${orderBy}
+     LIMIT ?`,
+  )
+    .bind(limit)
+    .all<D1Playlist>();
 
   return jsonResponse(
     {
       ok: true,
       playlists: results.map(toPublicPlaylist),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function followsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const currentUser = await getUserByClerkUserId(env, claims.userId);
+
+  if (!currentUser) {
+    return jsonResponse({ ok: false, error: "User not found" }, 403, corsHeaders);
+  }
+
+  const url = new URL(request.url);
+  const followerId = url.searchParams.get("follower_id");
+  const followingId = url.searchParams.get("following_id");
+  const status = url.searchParams.get("status");
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 100);
+  const allowedUserIds = new Set([
+    currentUser.id,
+    currentUser.clerk_user_id,
+    currentUser.legacy_base44_user_id,
+  ].filter((value): value is string => Boolean(value)));
+  const queryInvolvesCurrentUser =
+    (followerId !== null && allowedUserIds.has(followerId)) ||
+    (followingId !== null && allowedUserIds.has(followingId));
+
+  if (currentUser.role !== "admin" && !queryInvolvesCurrentUser) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
+  const where: string[] = [];
+  const params: string[] = [];
+
+  if (followerId) {
+    where.push("follower_id = ?");
+    params.push(followerId);
+  }
+
+  if (followingId) {
+    where.push("following_id = ?");
+    params.push(followingId);
+  }
+
+  if (status) {
+    where.push("status = ?");
+    params.push(status);
+  }
+
+  const sql = `${followSelect}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY created_at DESC
+    LIMIT ?`;
+  const { results } = await env.DB.prepare(sql)
+    .bind(...params, limit)
+    .all<D1Follow>();
+  const follows = (results || []).map(toPublicFollow);
+
+  return jsonResponse(
+    {
+      ok: true,
+      data: follows,
+      items: follows,
     },
     200,
     corsHeaders,
@@ -478,52 +1050,171 @@ async function playlistResponse(request: Request, env: Env, playlistId: string):
   );
 }
 
+type TopPodcast = {
+  feedUrl: string;
+  title: string | null;
+  author: string | null;
+  image: string | null;
+  description: string | null;
+  playCount: number;
+};
+
+function getFeedUrl(feed: unknown): string | null {
+  if (!feed || typeof feed !== "object") {
+    return null;
+  }
+
+  const value = (feed as { url?: unknown; feed_url?: unknown }).url ?? (feed as { feed_url?: unknown }).feed_url;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function toTopPodcast(feed: unknown, playCount: number): TopPodcast | null {
+  const feedUrl = getFeedUrl(feed);
+
+  if (!feedUrl || !feed || typeof feed !== "object") {
+    return null;
+  }
+
+  const typedFeed = feed as {
+    title?: unknown;
+    author?: unknown;
+    image?: unknown;
+    description?: unknown;
+  };
+
+  return {
+    feedUrl,
+    title: typeof typedFeed.title === "string" ? typedFeed.title : null,
+    author: typeof typedFeed.author === "string" ? typedFeed.author : null,
+    image: typeof typedFeed.image === "string" ? typedFeed.image : null,
+    description: typeof typedFeed.description === "string" ? typedFeed.description : null,
+    playCount,
+  };
+}
+
+async function topPodcastsByPlaybackResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const playlistRows = await env.DB.prepare(
+    `SELECT rss_feeds
+     FROM playlists
+     WHERE visibility = 'public'
+     LIMIT 1000`,
+  ).all<{ rss_feeds: string | null }>();
+  const playRows = await env.DB.prepare(
+    `SELECT pp.feed_url AS feed_url, COUNT(*) AS play_count
+     FROM podcast_plays pp
+     INNER JOIN playlists p ON p.id = pp.playlist_id
+     WHERE p.visibility = 'public'
+       AND pp.feed_url IS NOT NULL
+     GROUP BY pp.feed_url`,
+  ).all<{ feed_url: string; play_count: number }>();
+  const playsByFeedUrl = new Map<string, number>();
+
+  for (const row of playRows.results || []) {
+    playsByFeedUrl.set(row.feed_url, Number(row.play_count) || 0);
+  }
+
+  const podcastsByFeedUrl = new Map<string, TopPodcast>();
+
+  for (const row of playlistRows.results || []) {
+    for (const feed of parseRssFeeds(row.rss_feeds)) {
+      const feedUrl = getFeedUrl(feed);
+
+      if (!feedUrl || podcastsByFeedUrl.has(feedUrl)) {
+        continue;
+      }
+
+      const podcast = toTopPodcast(feed, playsByFeedUrl.get(feedUrl) || 0);
+
+      if (podcast) {
+        podcastsByFeedUrl.set(feedUrl, podcast);
+      }
+    }
+  }
+
+  const podcasts = [...podcastsByFeedUrl.values()]
+    .sort((left, right) => right.playCount - left.playCount)
+    .slice(0, 50);
+
+  return jsonResponse(
+    {
+      ok: true,
+      podcasts,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    try {
+      const { pathname } = new URL(request.url);
 
-    if (request.method === "OPTIONS" && (isAuthDiagnosticsRoute(pathname) || isMeRoute(pathname) || isPlaylistRoute(pathname))) {
-      return authDiagnosticsOptionsResponse(request, env);
-    }
-
-    if (request.method === "GET" && (pathname === "/health" || pathname === "/api/health")) {
-      return jsonResponse(healthResponse);
-    }
-
-    if (request.method === "GET" && (pathname === "/diagnostics" || pathname === "/api/diagnostics")) {
-      if (!isDiagnosticsAuthorized(request, env)) {
-        return jsonResponse(unauthorizedResponse, 401);
+      if (request.method === "OPTIONS") {
+        return optionsResponse(request, env);
       }
 
-      return diagnosticsResponse(env);
-    }
-
-    if (request.method === "GET" && (pathname === "/clerk/diagnostics" || pathname === "/api/clerk/diagnostics")) {
-      if (!isDiagnosticsAuthorized(request, env)) {
-        return jsonResponse(unauthorizedResponse, 401);
+      if ((request.method === "GET" || request.method === "HEAD") && (pathname === "/health" || pathname === "/api/health")) {
+        return withCors(healthCheckResponse(request), request, env);
       }
 
-      return clerkDiagnosticsResponse(env);
+      if (request.method === "GET" && (pathname === "/diagnostics" || pathname === "/api/diagnostics")) {
+        if (!isDiagnosticsAuthorized(request, env)) {
+          return withCors(jsonResponse(unauthorizedResponse, 401), request, env);
+        }
+
+        return withCors(await diagnosticsResponse(env), request, env);
+      }
+
+      if (request.method === "GET" && (pathname === "/clerk/diagnostics" || pathname === "/api/clerk/diagnostics")) {
+        if (!isDiagnosticsAuthorized(request, env)) {
+          return withCors(jsonResponse(unauthorizedResponse, 401), request, env);
+        }
+
+        return withCors(await clerkDiagnosticsResponse(env), request, env);
+      }
+
+      if (request.method === "GET" && isAuthDiagnosticsRoute(pathname)) {
+        return withCors(await authDiagnosticsResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isMeRoute(pathname)) {
+        return withCors(await meResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && (isPlaylistsRoute(pathname) || isEntityPlaylistRoute(pathname))) {
+        return withCors(await playlistsResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isEntityFollowRoute(pathname)) {
+        return withCors(await followsResponse(request, env), request, env);
+      }
+
+      if ((request.method === "GET" || request.method === "POST") && isTopPodcastsRoute(pathname)) {
+        return withCors(await topPodcastsByPlaybackResponse(request, env), request, env);
+      }
+
+      const playlistId = getPlaylistId(pathname);
+
+      if (request.method === "GET" && playlistId) {
+        return withCors(await playlistResponse(request, env, playlistId), request, env);
+      }
+
+      return withCors(jsonResponse(notFoundResponse, 404), request, env);
+    } catch (error) {
+      console.error("Unhandled Worker error", error instanceof Error ? error.message : error);
+      return withCors(
+        jsonResponse(
+          {
+            ok: false,
+            error: "Internal server error",
+          },
+          500,
+        ),
+        request,
+        env,
+      );
     }
-
-    if (request.method === "GET" && isAuthDiagnosticsRoute(pathname)) {
-      return authDiagnosticsResponse(request, env);
-    }
-
-    if (request.method === "GET" && isMeRoute(pathname)) {
-      return meResponse(request, env);
-    }
-
-    if (request.method === "GET" && isPlaylistsRoute(pathname)) {
-      return playlistsResponse(request, env);
-    }
-
-    const playlistId = getPlaylistId(pathname);
-
-    if (request.method === "GET" && playlistId) {
-      return playlistResponse(request, env, playlistId);
-    }
-
-    return jsonResponse(notFoundResponse, 404);
   },
 };

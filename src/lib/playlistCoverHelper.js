@@ -1,5 +1,5 @@
 import { getFeedFromCache, saveFeedToCache, getRSSCacheFromCloud } from '@/lib/feedCache';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 
 /**
  * Get cover image for playlist
@@ -30,7 +30,7 @@ export async function getPlaylistCoverImage(playlist) {
     // If still not found, fetch from API
     if (!feedData) {
       try {
-        const res = await base44.functions.invoke('fetchRSSFeed', { url: feed.url, count: 10 });
+        const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: feed.url, count: 10 });
         feedData = res.data;
         if (feedData) {
           saveFeedToCache(feed.url, feedData);

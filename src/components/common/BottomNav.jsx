@@ -1,9 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
 import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { base44 } from '@/api/base44Client';
-import { redirectToLogin } from '@/lib/authRedirect';
+import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 
 const getNavItems = () => [
@@ -16,19 +14,8 @@ const getNavItems = () => [
 export default function BottomNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [isAuthed, setIsAuthed] = useState(() => {
-    const cached = sessionStorage.getItem('voxyl_authed');
-    if (cached === 'true') return true;
-    if (cached === 'false') return false;
-    return null;
-  });
-
-  useEffect(() => {
-    base44.auth.isAuthenticated().then(v => {
-      sessionStorage.setItem('voxyl_authed', String(v));
-      setIsAuthed(v);
-    }).catch(() => setIsAuthed(false));
-  }, []);
+  const { isAuthenticated, clerkLoaded, isLoadingAuth, navigateToLogin } = useAuth();
+  const authReady = clerkLoaded || !isLoadingAuth;
 
   return (
     <nav
@@ -48,14 +35,14 @@ export default function BottomNav() {
             (path !== '/' && location.pathname.startsWith(path));
 
           const handleClick = () => {
-            if (isProtected && isAuthed === false) {
-              redirectToLogin(window.location.href);
+            if (isProtected && authReady && !isAuthenticated) {
+              navigateToLogin();
               return;
             }
             navigate(path);
           };
 
-          const showLogin = path === '/profile' && isAuthed !== true;
+          const showLogin = path === '/profile' && authReady && !isAuthenticated;
           const DisplayIcon = showLogin ? LogIn : Icon;
           const displayLabel = showLogin ? t('loginWithGoogle').split(' ')[0] : label;
 

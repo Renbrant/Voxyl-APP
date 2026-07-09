@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, Mail, Copy, Check, CheckCircle2, Loader2, Link2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 
-const APP_BASE_URL = 'https://voxyl-app.base44.app';
+const APP_BASE_URL = 'https://v.renbrant.com';
 
 function buildInviteLink(inviterId) {
   return `${APP_BASE_URL}?ref=${inviterId}`;
@@ -146,7 +146,7 @@ export default function InviteFriendModal({ onClose, playlistId = null }) {
   const [user, setUser] = useState(null);
   const [mode, setMode] = useState('share'); // 'share' | 'email'
 
-  useEffect(() => { base44.auth.me().then(setUser).catch(() => {}); }, []);
+  useEffect(() => { voxylApi.auth.me().then(setUser).catch(() => {}); }, []);
 
   const inviteLink = user ? buildInviteLink(user.id) : APP_BASE_URL;
   const inviterName = user?.full_name || user?.email?.split('@')[0] || 'Um amigo';
@@ -155,9 +155,9 @@ export default function InviteFriendModal({ onClose, playlistId = null }) {
     if (!email.trim() || !email.includes('@')) { setError('E-mail inválido'); return; }
     setSending(true);
     setError('');
-    await base44.users.inviteUser(email.trim(), 'user');
+    await voxylApi.users.inviteUser(email.trim(), 'user');
     if (user) {
-      await base44.entities.Referral.create({
+      await voxylApi.entities.Referral.create({
         inviter_id: user.id,
         inviter_email: user.email,
         inviter_name: inviterName,

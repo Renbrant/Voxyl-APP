@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Loader2, CheckCircle2, ListMusic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { generateShareToken } from '@/lib/rssUtils';
@@ -15,9 +15,9 @@ export default function AddToPlaylistModal({ podcast, onClose }) {
   const [newName, setNewName] = useState('');
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
-      return base44.entities.Playlist.filter({ creator_id: u.id }, '-created_date', 50);
+      return voxylApi.entities.Playlist.filter({ creator_id: u.id }, '-created_date', 50);
     }).then(data => {
       setPlaylists(data);
       setLoading(false);
@@ -35,7 +35,7 @@ export default function AddToPlaylistModal({ podcast, onClose }) {
         description: podcast.description || '',
         image: podcast.image || '',
       }];
-      await base44.entities.Playlist.update(playlist.id, { rss_feeds: updatedFeeds });
+      await voxylApi.entities.Playlist.update(playlist.id, { rss_feeds: updatedFeeds });
     }
     setSaving(false);
     setDone(playlist.name);
@@ -44,7 +44,7 @@ export default function AddToPlaylistModal({ podcast, onClose }) {
   const handleCreateAndAdd = async () => {
     if (!newName.trim() || !user) return;
     setSaving(true);
-    const pl = await base44.entities.Playlist.create({
+    const pl = await voxylApi.entities.Playlist.create({
       name: newName.trim(),
       creator_id: user.id,
       creator_email: user.email,

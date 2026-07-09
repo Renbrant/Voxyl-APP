@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { getCache, setCache, TTL_5MIN } from '@/lib/appCache';
@@ -24,7 +24,7 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
     queryFn: async () => {
       const cached = getCache('all-playlists-feed');
       if (cached) return cached;
-      const data = await base44.entities.Playlist.list('-updated_date', 200);
+      const data = await voxylApi.entities.Playlist.list('-updated_date', 200);
       setCache('all-playlists-feed', data, TTL_5MIN);
       return data;
     },
@@ -37,7 +37,7 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
     queryFn: async () => {
       const cached = getCache(`user-podcast-plays-${user.id}`);
       if (cached) return cached;
-      const data = await base44.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 100);
+      const data = await voxylApi.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 100);
       setCache(`user-podcast-plays-${user.id}`, data, TTL_5MIN);
       return data;
     },

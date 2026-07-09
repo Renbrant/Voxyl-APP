@@ -47,7 +47,7 @@ function ClerkTestContent() {
         return
       }
 
-      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/auth/diagnostics`, {
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/auth/diagnostics`, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -97,7 +97,7 @@ function ClerkTestContent() {
         return
       }
 
-      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/me`, {
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/me`, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -117,7 +117,7 @@ function ClerkTestContent() {
         status: null,
         ok: false,
         user: null,
-        error: error instanceof Error ? error.message : '/api/me request failed.',
+        error: error instanceof Error ? error.message : '/me request failed.',
       })
     } finally {
       setIsTestingMe(false)
@@ -129,7 +129,7 @@ function ClerkTestContent() {
     setPlaylistsDiagnostics(null)
 
     try {
-      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/api/playlists`, {
+      const response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/playlists`, {
         method: 'GET',
       })
       const contentType = response.headers.get('content-type') || ''
@@ -150,7 +150,7 @@ function ClerkTestContent() {
         ok: false,
         playlistCount: 0,
         firstPlaylist: null,
-        error: error instanceof Error ? error.message : '/api/playlists request failed.',
+        error: error instanceof Error ? error.message : '/playlists request failed.',
       })
     } finally {
       setIsTestingPlaylists(false)
@@ -161,14 +161,14 @@ function ClerkTestContent() {
     <div className="min-h-screen bg-background px-6 py-10 text-foreground">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 rounded-2xl border border-border bg-card p-6">
         <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-4 text-sm font-medium text-orange-200">
-          Temporary migration test page. Base44 remains the active auth provider.
+          Clerk and the Cloudflare Worker are the active auth path.
         </div>
 
         <SignedOut>
           <div className="space-y-3">
             <h1 className="text-2xl font-semibold">Clerk Test</h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              This is an isolated migration test for Clerk. It does not replace Base44 auth or change the current app flow.
+              This page verifies Clerk tokens against the Cloudflare Worker.
             </p>
             <SignInButton mode="modal">
               <button className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">
@@ -226,7 +226,7 @@ function ClerkTestContent() {
                 disabled={isTestingMe}
                 className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isTestingMe ? 'Testing /api/me...' : 'Test /api/me'}
+                {isTestingMe ? 'Testing /me...' : 'Test /me'}
               </button>
               <button
                 type="button"
@@ -234,7 +234,7 @@ function ClerkTestContent() {
                 disabled={isTestingPlaylists}
                 className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isTestingPlaylists ? 'Testing /api/playlists...' : 'Test /api/playlists'}
+                {isTestingPlaylists ? 'Testing /playlists...' : 'Test /playlists'}
               </button>
               <SignOutButton>
                 <button className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold">
@@ -281,7 +281,7 @@ function ClerkTestContent() {
 
             {meDiagnostics && (
               <div className="rounded-xl border border-border bg-background/60 p-4">
-                <h2 className="mb-3 text-sm font-semibold">/api/me result</h2>
+                <h2 className="mb-3 text-sm font-semibold">/me result</h2>
                 <dl className="space-y-2 text-sm">
                   <div>
                     <dt className="text-muted-foreground">HTTP status</dt>
@@ -300,8 +300,8 @@ function ClerkTestContent() {
                     <dd className="break-all font-mono">{meDiagnostics.user?.clerk_user_id || 'null'}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">user.legacy_base44_user_id</dt>
-                    <dd className="break-all font-mono">{meDiagnostics.user?.legacy_base44_user_id || 'null'}</dd>
+                    <dt className="text-muted-foreground">user.legacy_user_id</dt>
+                    <dd className="break-all font-mono">{meDiagnostics.user?.legacy_user_id || 'null'}</dd>
                   </div>
                   <div>
                     <dt className="text-muted-foreground">user.email</dt>
@@ -345,7 +345,7 @@ function ClerkTestContent() {
 
             {playlistsDiagnostics && (
               <div className="rounded-xl border border-border bg-background/60 p-4">
-                <h2 className="mb-3 text-sm font-semibold">/api/playlists result</h2>
+                <h2 className="mb-3 text-sm font-semibold">/playlists result</h2>
                 <dl className="space-y-2 text-sm">
                   <div>
                     <dt className="text-muted-foreground">HTTP status</dt>
@@ -391,7 +391,7 @@ export default function ClerkTest() {
       <div className="min-h-screen bg-background px-6 py-10 text-foreground">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-border bg-card p-6">
           <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-4 text-sm font-medium text-orange-200">
-            Temporary migration test page. Base44 remains the active auth provider.
+            Clerk and the Cloudflare Worker are the active auth path.
           </div>
           <h1 className="text-2xl font-semibold">Clerk Test</h1>
           <p className="text-sm text-muted-foreground">

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, UserX, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -9,7 +9,7 @@ export default function BlockedUsersModal({ user, onClose, onCountChange }) {
   const [unblocking, setUnblocking] = useState(null);
 
   useEffect(() => {
-    base44.entities.Block.filter({ blocker_id: user.id })
+    voxylApi.entities.Block.filter({ blocker_id: user.id })
       .then(blocks => {
         setBlockedUsers(blocks);
         onCountChange?.(blocks.length);
@@ -20,7 +20,7 @@ export default function BlockedUsersModal({ user, onClose, onCountChange }) {
 
   const handleUnblock = async (blockId, blockedId) => {
     setUnblocking(blockId);
-    await base44.entities.Block.delete(blockId);
+    await voxylApi.entities.Block.delete(blockId);
     const updated = blockedUsers.filter(b => b.id !== blockId);
     setBlockedUsers(updated);
     onCountChange?.(updated.length);

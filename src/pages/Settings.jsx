@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { t, setLanguage, lang } from '@/lib/i18n';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Moon, Sun, Globe, Eye, Ban, LogOut, Trash2, Shield, Monitor } from 'lucide-react';
 import VoxylHeader from '@/components/common/VoxylHeader';
@@ -45,7 +45,7 @@ export default function Settings() {
   const [currentLang, setCurrentLang] = useState(lang);
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
       const saved = localStorage.getItem('theme') || 'dark';
       setTheme(saved);
@@ -61,7 +61,7 @@ export default function Settings() {
   };
 
   const handleLogout = () => {
-    base44.auth.logout('/');
+    voxylApi.auth.logout('/');
   };
 
   const themeOptions = THEME_OPTIONS();
@@ -90,9 +90,9 @@ export default function Settings() {
       action: () => {
         if (!user) return;
         const newVal = !user.profile_hidden;
-        base44.auth.updateMe({ profile_hidden: newVal });
-        base44.entities.Playlist.filter({ creator_id: user.id }).then(playlists => {
-          Promise.all(playlists.map(p => base44.entities.Playlist.update(p.id, { creator_hidden: newVal })));
+        voxylApi.auth.updateMe({ profile_hidden: newVal });
+        voxylApi.entities.Playlist.filter({ creator_id: user.id }).then(playlists => {
+          Promise.all(playlists.map(p => voxylApi.entities.Playlist.update(p.id, { creator_hidden: newVal })));
         });
         setUser(prev => ({ ...prev, profile_hidden: newVal }));
       },

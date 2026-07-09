@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Trash2, GripVertical, Loader2, Clock, Save, Image as ImageIcon, Lock, Globe, Users, ChevronDown, ChevronUp, Timer, ArrowDown, ArrowUp } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
@@ -37,7 +37,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
   useEffect(() => {
     if (!user) {
-      base44.auth.me().then(setCurrentUser).catch(() => {});
+      voxylApi.auth.me().then(setCurrentUser).catch(() => {});
     } else {
       setCurrentUser(user);
     }
@@ -72,7 +72,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
     if (feeds.length >= MAX_FEEDS) { setFeedError(`Limite de ${MAX_FEEDS} podcasts por playlist durante o período de testes.`); return; }
     setAddingFeed(true);
     setFeedError('');
-    const res = await base44.functions.invoke('fetchRSSFeed', { url, count: 1 }).then(r => r.data).catch(() => null);
+    const res = await voxylApi.functions.invoke('fetchRSSFeed', { url, count: 1 }).then(r => r.data).catch(() => null);
     if (!res?.title) { setFeedError('URL inválida ou feed não encontrado'); setAddingFeed(false); return; }
     setFeeds(prev => [...prev, { url, title: res.title, description: res.description || '', image: res.image || '', skip_start_seconds: 0, skip_end_seconds: 0 }]);
     setNewFeedUrl('');
@@ -93,7 +93,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
     const file = e.target.files?.[0];
     if (!file) return;
     setGeneratingImage(true);
-    const res = await base44.integrations.Core.UploadFile({ file }).catch(() => null);
+    const res = await voxylApi.integrations.Core.UploadFile({ file }).catch(() => null);
     setGeneratingImage(false);
     if (res?.file_url) {
       setCoverImage(res.file_url);
@@ -106,7 +106,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
   const handleDelete = async () => {
     setDeleting(true);
-    await base44.entities.Playlist.delete(playlist.id);
+    await voxylApi.entities.Playlist.delete(playlist.id);
     setDeleting(false);
     onSaved();
     onClose();
@@ -114,7 +114,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
   const handleSave = async () => {
     setSaving(true);
-    await base44.entities.Playlist.update(playlist.id, {
+    await voxylApi.entities.Playlist.update(playlist.id, {
       name: name.trim() || playlist.name,
       description,
       max_duration: maxDuration,

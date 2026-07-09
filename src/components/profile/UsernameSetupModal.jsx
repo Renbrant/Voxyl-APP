@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, AtSign, Loader2, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -24,7 +24,7 @@ export default function UsernameSetupModal({ currentUser, currentUsername, onClo
     setError('');
 
     // Check if username is already taken by another user
-    const existing = await base44.entities.User.filter({ username: username.trim().toLowerCase() }).catch(() => []);
+    const existing = await voxylApi.entities.User.filter({ username: username.trim().toLowerCase() }).catch(() => []);
     const taken = existing.find(u => u.id !== currentUser.id);
     if (taken) {
       setError('Este nome de usuário já está em uso');
@@ -33,9 +33,9 @@ export default function UsernameSetupModal({ currentUser, currentUsername, onClo
     }
 
     const uname = username.trim().toLowerCase().replace(/^@+/, '');
-    await base44.auth.updateMe({ username: uname });
+    await voxylApi.auth.updateMe({ username: uname });
     // Sync creator_username on ALL owned playlists via backend (bypasses RLS)
-    await base44.functions.invoke('syncUsername', { username: uname }).catch(() => {});
+    await voxylApi.functions.invoke('syncUsername', { username: uname }).catch(() => {});
     setLoading(false);
     onSaved(uname);
     onClose();

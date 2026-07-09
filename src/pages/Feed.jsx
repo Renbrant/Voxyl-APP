@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
@@ -28,12 +28,12 @@ export default function Feed() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
       setTab('my-playlists'); // default to personal tab if logged in
       Promise.all([
-        base44.entities.Block.filter({ blocker_id: u.id }),
-        base44.entities.Block.filter({ blocked_id: u.id }),
+        voxylApi.entities.Block.filter({ blocker_id: u.id }),
+        voxylApi.entities.Block.filter({ blocked_id: u.id }),
       ]).then(([myBlocks, theirBlocks]) => {
         const ids = [
           ...asArray(myBlocks).map(b => b.blocked_id),
@@ -41,7 +41,7 @@ export default function Feed() {
         ];
         setBlockedIds([...new Set(ids)]);
       }).catch(() => {});
-      base44.entities.Follow.filter({ follower_id: u.id, status: 'accepted' })
+      voxylApi.entities.Follow.filter({ follower_id: u.id, status: 'accepted' })
         .then(follows => setFollowingIds(new Set(asArray(follows).map(f => f.following_id))))
         .catch(() => {});
     }).catch(() => {}); // guest mode — user stays null
@@ -66,7 +66,7 @@ export default function Feed() {
     queryFn: async () => {
       const cached = getCache('feed-playlists');
       if (Array.isArray(cached)) return cached;
-      const data = asArray(await base44.entities.Playlist.list('-plays_count', 100));
+      const data = asArray(await voxylApi.entities.Playlist.list('-plays_count', 100));
       setCache('feed-playlists', data, TTL_5MIN);
       return data;
     },
@@ -80,7 +80,7 @@ export default function Feed() {
       const cacheKey = `my-likes-${user.id}`;
       const cached = getCache(cacheKey);
       if (cached) { setLikes(cached); return cached; }
-      const l = asArray(await base44.entities.PlaylistLike.filter({ user_id: user.id }));
+      const l = asArray(await voxylApi.entities.PlaylistLike.filter({ user_id: user.id }));
       const ids = l.map(x => x.playlist_id);
       setLikes(ids);
       setCache(cacheKey, ids, TTL_5MIN);
@@ -97,7 +97,7 @@ export default function Feed() {
     queryKey: ['top-podcasts'],
     queryFn: async () => {
       try {
-        const res = await base44.functions.invoke('getTopPodcastsByPlayback', {});
+        const res = await voxylApi.functions.invoke('getTopPodcastsByPlayback', {});
         if (Array.isArray(res.data)) return res.data;
         if (Array.isArray(res.data?.podcasts)) return res.data.podcasts;
         return Array.isArray(res.data) ? res.data : [];
@@ -111,7 +111,7 @@ export default function Feed() {
     const liked = likes.includes(playlist.id);
     setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
     try {
-      await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
     } catch {
       // Revert optimistic update on failure
       setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));

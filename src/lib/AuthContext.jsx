@@ -1,20 +1,25 @@
-import { createContext, useState, useContext, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
-import { appParams, base44ConfigError } from '@/lib/app-params';
-import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
+import { createContext, useState, useContext, useCallback, useEffect } from 'react';
+import { useAuth as useClerkAuth, useUser as useClerkUser } from '@clerk/clerk-react';
+import { voxylApi, setAuthTokenGetter } from '@/api/voxylApiClient';
 import { redirectToLogin } from '@/lib/authRedirect';
+import { isClerkConfigured } from '@/lib/clerkConfig';
 import { clearStoredNativeToken, getStoredNativeToken, isNativePlatform, restoreNativeAuthSession } from '@/lib/nativeAuthSession';
 
 const AuthContext = createContext();
 
-export const AuthProvider = ({ children }) => {
+function devAuthLog(message, details = {}) {
+  if (!import.meta.env.DEV) return;
+  console.debug(`[VOXYL AUTH] ${message}`, details);
+}
+
+const FallbackAuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(true);
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [appPublicSettings, setAppPublicSettings] = useState(null); // Contains only { id, public_settings }
+  const [appPublicSettings, setAppPublicSettings] = useState({ public_settings: {} });
 
   useEffect(() => {
     checkAppState();
@@ -24,16 +29,6 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoadingPublicSettings(true);
       setAuthError(null);
-
-      if (base44ConfigError) {
-        setAuthError({
-          type: 'configuration_error',
-          message: base44ConfigError
-        });
-        setIsLoadingPublicSettings(false);
-        setIsLoadingAuth(false);
-        return;
-      }
 
       // On native platforms, attempt to restore session from stored token BEFORE
       // hitting the server. This ensures cold-start logins survive app restarts.
@@ -58,60 +53,15 @@ export const AuthProvider = ({ children }) => {
         }
       }
       
-      // First, check app public settings (with token if available)
-      // This will tell us if auth is required, user not registered, etc.
-      const appClient = createAxiosClient({
-        baseURL: `${appParams.serverUrl}/api/apps/public`,
-        headers: {
-          'X-App-Id': appParams.appId
-        },
-        token: appParams.token, // Include token if available
-        interceptResponses: true
-      });
-      
-      try {
-        const publicSettings = await appClient.get(`/prod/public-settings/by-id/${appParams.appId}`);
-        setAppPublicSettings(publicSettings);
-        
-        // If we got the app public settings successfully, check if user is authenticated
-        if (appParams.token) {
-          await checkUserAuth();
-        } else {
-          setIsLoadingAuth(false);
-          setIsAuthenticated(false);
-          setAuthChecked(true);
-        }
-        setIsLoadingPublicSettings(false);
-      } catch (appError) {
-        console.error('App state check failed:', appError);
-        
-        // Handle app-level errors
-        if (appError.status === 403 && appError.data?.extra_data?.reason) {
-          const reason = appError.data.extra_data.reason;
-          if (reason === 'auth_required') {
-            setAuthError({
-              type: 'auth_required',
-              message: 'Authentication required'
-            });
-          } else if (reason === 'user_not_registered') {
-            setAuthError({
-              type: 'user_not_registered',
-              message: 'User not registered for this app'
-            });
-          } else {
-            setAuthError({
-              type: reason,
-              message: appError.message
-            });
-          }
-        } else {
-          setAuthError({
-            type: 'unknown',
-            message: appError.message || 'Failed to load app'
-          });
-        }
-        setIsLoadingPublicSettings(false);
+      setAppPublicSettings({ public_settings: {} });
+      setIsLoadingPublicSettings(false);
+
+      if (await voxylApi.auth.isAuthenticated()) {
+        await checkUserAuth();
+      } else {
         setIsLoadingAuth(false);
+        setIsAuthenticated(false);
+        setAuthChecked(true);
       }
     } catch (error) {
       console.error('Unexpected error:', error);
@@ -135,12 +85,12 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem(storageKey, '1');
 
     // Auto-follow the referrer via secure server function
-    await base44.functions.invoke('requestFollow', { targetUserId: referrerId }).catch(() => {});
+    await voxylApi.functions.invoke('requestFollow', { targetUserId: referrerId }).catch(() => {});
 
     // Update referral record if exists
-    const referrals = await base44.entities.Referral.filter({ inviter_id: referrerId, invitee_email: currentUser.email }).catch(() => []);
+    const referrals = await voxylApi.entities.Referral.filter({ inviter_id: referrerId, invitee_email: currentUser.email }).catch(() => []);
     if (referrals[0]) {
-      await base44.entities.Referral.update(referrals[0].id, { status: 'joined' }).catch(() => {});
+      await voxylApi.entities.Referral.update(referrals[0].id, { status: 'joined' }).catch(() => {});
     }
 
     // Clean ref param from URL without reload
@@ -151,9 +101,8 @@ export const AuthProvider = ({ children }) => {
 
   const checkUserAuth = async () => {
     try {
-      // Now check if the user is authenticated
       setIsLoadingAuth(true);
-      const currentUser = await base44.auth.me();
+      const currentUser = await voxylApi.auth.me();
       setUser(currentUser);
       setIsAuthenticated(true);
       setIsLoadingAuth(false);
@@ -192,9 +141,9 @@ export const AuthProvider = ({ children }) => {
       await clearStoredNativeToken();
     }
     if (shouldRedirect) {
-      base44.auth.logout(window.location.href);
+      voxylApi.auth.logout(window.location.href);
     } else {
-      base44.auth.logout();
+      voxylApi.auth.logout();
     }
   };
 
@@ -207,10 +156,16 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={{ 
       user, 
+      apiUser: user,
+      clerkUser: null,
+      clerkLoaded: true,
+      clerkSignedIn: isAuthenticated,
       isAuthenticated, 
       isLoadingAuth,
+      authLoading: isLoadingAuth,
       isLoadingPublicSettings,
       authError,
+      accountSyncError: null,
       appPublicSettings,
       authChecked,
       logout,
@@ -221,6 +176,194 @@ export const AuthProvider = ({ children }) => {
       {children}
     </AuthContext.Provider>
   );
+};
+
+const ClerkAuthProvider = ({ children }) => {
+  const { isLoaded, isSignedIn, getToken, signOut } = useClerkAuth();
+  const { user: clerkUser } = useClerkUser();
+  const [user, setUser] = useState(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [appPublicSettings] = useState({ public_settings: {} });
+
+  const clerkLoaded = Boolean(isLoaded);
+  const clerkSignedIn = Boolean(isSignedIn);
+  const isAuthenticated = clerkSignedIn;
+
+  const buildClerkFallbackUser = useCallback(() => {
+    if (!clerkUser) return null;
+    const email = clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses?.[0]?.emailAddress || null;
+    return {
+      id: clerkUser.id,
+      clerk_user_id: clerkUser.id,
+      email,
+      full_name: clerkUser.fullName || [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || email,
+      name: clerkUser.fullName || email,
+      username: null,
+      profile_picture: clerkUser.imageUrl || null,
+      picture: clerkUser.imageUrl || null,
+      avatar_url: clerkUser.imageUrl || null,
+      profile_hidden: 0,
+      account_sync_pending: true,
+    };
+  }, [clerkUser]);
+
+  useEffect(() => {
+    if (!clerkLoaded || !clerkSignedIn) {
+      setAuthTokenGetter(null);
+      return;
+    }
+
+    setAuthTokenGetter(async () => getToken());
+    return () => setAuthTokenGetter(null);
+  }, [clerkLoaded, clerkSignedIn, getToken]);
+
+  const processReferral = useCallback(async (currentUser) => {
+    const params = new URLSearchParams(window.location.search);
+    const referrerId = params.get('ref');
+    if (!referrerId || referrerId === currentUser.id) return;
+
+    const storageKey = `voxyl_ref_processed_${currentUser.id}`;
+    if (localStorage.getItem(storageKey)) return;
+    localStorage.setItem(storageKey, '1');
+
+    await voxylApi.functions.invoke('requestFollow', { targetUserId: referrerId }).catch(() => {});
+
+    const referrals = await voxylApi.entities.Referral.filter({ inviter_id: referrerId, invitee_email: currentUser.email }).catch(() => []);
+    if (referrals[0]) {
+      await voxylApi.entities.Referral.update(referrals[0].id, { status: 'joined' }).catch(() => {});
+    }
+
+    params.delete('ref');
+    const newUrl = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}`;
+    window.history.replaceState({}, '', newUrl);
+  }, []);
+
+  const checkUserAuth = useCallback(async () => {
+    if (!clerkLoaded) {
+      setIsLoadingAuth(true);
+      return null;
+    }
+
+    devAuthLog("clerk state", {
+      clerkLoaded,
+      clerkSignedIn,
+      clerkUserId: clerkUser?.id || null,
+    });
+
+    if (!clerkSignedIn) {
+      setUser(null);
+      setAuthError(null);
+      setIsLoadingAuth(false);
+      setAuthChecked(true);
+      sessionStorage.setItem('voxyl_authed', 'false');
+      return null;
+    }
+
+    try {
+      setIsLoadingAuth(true);
+      setAuthError(null);
+      sessionStorage.setItem('voxyl_authed', 'true');
+      const token = await getToken().catch(() => null);
+      devAuthLog("clerk token readiness", {
+        clerkUserId: clerkUser?.id || null,
+        hasToken: Boolean(token),
+      });
+      const currentUser = await voxylApi.auth.me();
+      setUser(currentUser);
+      setIsLoadingAuth(false);
+      setAuthChecked(true);
+      sessionStorage.setItem('voxyl_authed', 'true');
+      processReferral(currentUser).catch(() => {});
+      return currentUser;
+    } catch (error) {
+      console.error('User auth check failed:', error);
+      const fallbackUser = buildClerkFallbackUser();
+      setUser(fallbackUser);
+      setIsLoadingAuth(false);
+      setAuthChecked(true);
+      sessionStorage.setItem('voxyl_authed', 'true');
+
+      const status = error?.status || error?.response?.status;
+      setAuthError({
+        type: 'account_sync_failed',
+        status,
+        message: status === 401 || status === 403
+          ? 'Your Clerk session is active, but Voxyl could not verify it with the API.'
+          : (error.message || 'Your Clerk session is active, but Voxyl could not load your account profile.'),
+      });
+      return null;
+    }
+  }, [buildClerkFallbackUser, clerkLoaded, clerkSignedIn, clerkUser, getToken, processReferral]);
+
+  useEffect(() => {
+    checkUserAuth();
+  }, [checkUserAuth]);
+
+  useEffect(() => {
+    devAuthLog("final state", {
+      clerkLoaded,
+      clerkSignedIn,
+      clerkUserId: clerkUser?.id || null,
+      hasApiUser: Boolean(user && !user.account_sync_pending),
+      isAuthenticated,
+      isLoadingAuth,
+      authErrorType: authError?.type || null,
+      authErrorStatus: authError?.status || null,
+    });
+  }, [authError, clerkLoaded, clerkSignedIn, clerkUser, isAuthenticated, isLoadingAuth, user]);
+
+  const checkAppState = useCallback(async () => {
+    return checkUserAuth();
+  }, [checkUserAuth]);
+
+  const logout = async (shouldRedirect = true) => {
+    setUser(null);
+    setAuthError(null);
+    setAuthChecked(true);
+    sessionStorage.setItem('voxyl_authed', 'false');
+    await signOut?.({ redirectUrl: shouldRedirect ? window.location.href : undefined });
+  };
+
+  const navigateToLogin = () => {
+    redirectToLogin(window.location.href).catch(error => {
+      console.error('Login redirect failed:', error);
+    });
+  };
+
+  return (
+    <AuthContext.Provider value={{
+      user,
+      apiUser: user?.account_sync_pending ? null : user,
+      clerkUser,
+      clerkLoaded,
+      clerkSignedIn,
+      isAuthenticated,
+      isLoadingAuth,
+      authLoading: isLoadingAuth,
+      isLoadingPublicSettings,
+      authError,
+      accountSyncError: authError?.type === 'account_sync_failed' ? authError : null,
+      appPublicSettings,
+      authChecked,
+      logout,
+      navigateToLogin,
+      checkUserAuth,
+      checkAppState,
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const AuthProvider = ({ children }) => {
+  if (!isClerkConfigured) {
+    return <FallbackAuthProvider>{children}</FallbackAuthProvider>;
+  }
+
+  return <ClerkAuthProvider>{children}</ClerkAuthProvider>;
 };
 
 export const useAuth = () => {

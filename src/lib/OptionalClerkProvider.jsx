@@ -6,7 +6,6 @@ export default function OptionalClerkProvider({ children }) {
     return children
   }
 
-  // ClerkProvider is currently passive; Base44 remains the active auth provider during migration.
   return (
     <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
       {children}

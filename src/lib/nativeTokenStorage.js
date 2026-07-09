@@ -2,15 +2,14 @@
  * nativeTokenStorage.js
  *
  * LIGHTWEIGHT storage-only helper for native token persistence.
- * MUST NOT import base44, base44Client, appParams, App, AuthContext,
- * or anything that initializes the Base44 SDK.
+ * MUST NOT import the API client, App, AuthContext, or other runtime modules.
  *
- * Used by main.jsx BEFORE any SDK modules are imported.
+ * Used by main.jsx before the React app is imported.
  */
 
 import { Preferences } from '@capacitor/preferences';
 
-const TOKEN_KEY = 'base44_access_token';
+const TOKEN_KEY = 'voxyl_access_token';
 const log = (...args) => console.log('[AUTH]', ...args);
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -53,9 +52,9 @@ async function prefClear() {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Called in main.jsx BEFORE any SDK/App imports.
+ * Called in main.jsx before app imports.
  * Reads Capacitor Preferences and writes to localStorage if needed,
- * so that app-params.js and base44Client.js see the token at init time.
+ * so native sessions can survive app restarts.
  */
 export async function hydrateLocalStorageFromPreferences() {
   const lsToken = lsGet();

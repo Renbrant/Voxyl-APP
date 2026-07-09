@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { X, Copy, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-const APP_URL = 'https://voxyl.base44.app';
+const APP_URL = 'https://v.renbrant.com';
 const SHARE_TEXT = 'Descubra o Voxyl — o app de playlists de podcasts que você vai amar 🎧';
 
 const shareOptions = [

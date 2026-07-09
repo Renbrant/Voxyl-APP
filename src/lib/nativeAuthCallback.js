@@ -1,7 +1,7 @@
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
-// Import from storage-only file — no base44/SDK imports triggered here
+// Import from storage-only file, keeping callback handling lightweight
 import { setStoredNativeToken } from '@/lib/nativeTokenStorage';
 
 // @capacitor/browser v8 only supports two events:

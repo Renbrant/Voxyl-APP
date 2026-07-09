@@ -1,9 +1,8 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
-import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
+import { useEffect } from 'react';
+import { Home, Compass, Heart, User, LogIn, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { base44 } from '@/api/base44Client';
-import { redirectToLogin } from '@/lib/authRedirect';
+import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 
 const getNavItems = () => [
@@ -16,19 +15,19 @@ const getNavItems = () => [
 export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [isAuthed, setIsAuthed] = useState(() => {
-    const cached = sessionStorage.getItem('voxyl_authed');
-    if (cached === 'true') return true;
-    if (cached === 'false') return false;
-    return null;
-  });
+  const { isAuthenticated, clerkLoaded, isLoadingAuth, user, navigateToLogin, logout } = useAuth();
+  const authReady = clerkLoaded || !isLoadingAuth;
 
   useEffect(() => {
-    base44.auth.isAuthenticated().then(v => {
-      sessionStorage.setItem('voxyl_authed', String(v));
-      setIsAuthed(v);
-    }).catch(() => setIsAuthed(false));
-  }, []);
+    if (!import.meta.env.DEV) return;
+    console.debug('[VOXYL SIDEBAR] auth render', {
+      clerkLoaded,
+      isLoadingAuth,
+      isAuthenticated,
+      userId: user?.id || null,
+      accountSyncPending: Boolean(user?.account_sync_pending),
+    });
+  }, [clerkLoaded, isAuthenticated, isLoadingAuth, user]);
 
   return (
     <aside
@@ -37,7 +36,7 @@ export default function Sidebar() {
     >
       <div className="flex items-center gap-2.5 px-6 pt-8 pb-6 select-none">
         <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0">
-          <img src="https://media.base44.com/images/public/69e2ae13aa773b21002b1fe4/26d262763_voxyllogo.png" alt="Voxyl" className="w-full h-full object-contain" />
+          <div className="flex h-full w-full items-center justify-center bg-primary text-sm font-bold text-primary-foreground">V</div>
         </div>
         <div className="flex items-baseline gap-1.5">
           <span className="text-2xl font-grotesk font-bold text-gradient">Voxyl</span>
@@ -51,13 +50,13 @@ export default function Sidebar() {
           const active = location.pathname === path ||
             (path !== '/' && location.pathname.startsWith(path));
 
-          const showLogin = path === '/profile' && isAuthed !== true;
+          const showLogin = path === '/profile' && authReady && !isAuthenticated;
           const DisplayIcon = showLogin ? LogIn : Icon;
           const displayLabel = showLogin ? t('loginWithGoogle').split(' ')[0] : label;
 
           const handleClick = () => {
-            if (isProtected && isAuthed === false) {
-              redirectToLogin(window.location.href);
+            if (isProtected && authReady && !isAuthenticated) {
+              navigateToLogin();
               return;
             }
             navigate(path);
@@ -80,6 +79,19 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {isAuthenticated && (
+        <div className="mt-auto px-3 pb-5">
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="flex w-full items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-secondary/50"
+          >
+            <LogOut size={20} strokeWidth={1.8} />
+            <span>{t('settingsLogout')}</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

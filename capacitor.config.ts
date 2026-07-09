@@ -11,8 +11,8 @@ const config: CapacitorConfig = {
   },
   server: {
     // Keep the bundled web assets by default. Uncomment only if you need the APK
-    // to load every page from the hosted Base44 app instead of local assets.
-    // url: 'https://voxyl-app.base44.app',
+    // to load every page from the hosted Voxyl web app app instead of local assets.
+    // url: 'https://v.renbrant.com',
   },
   ios: {
     backgroundColor: '#0f0d0b',

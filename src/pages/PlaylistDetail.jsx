@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
@@ -51,7 +51,7 @@ export default function PlaylistDetail() {
 
   useEffect(() => {
     if (!user || !id) return;
-    base44.entities.PlaylistLike.filter({ playlist_id: id, user_id: user.id })
+    voxylApi.entities.PlaylistLike.filter({ playlist_id: id, user_id: user.id })
       .then(records => setLiked(records.length > 0))
       .catch(() => {});
   }, [user, id]);
@@ -62,14 +62,14 @@ export default function PlaylistDetail() {
     if (!playlist) return;
     setLiked(v => !v);
     try {
-      await base44.functions.invoke('togglePlaylistLike', { playlist_id: id });
+      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id });
     } catch {
       setLiked(v => !v); // revert on failure
     }
   });
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
       // Check if this is the pending playlist the user signed up for
       const pending = localStorage.getItem('voxyl_pending_playlist');
@@ -78,15 +78,15 @@ export default function PlaylistDetail() {
       localStorage.removeItem('voxyl_pending_playlist');
       localStorage.removeItem('voxyl_pending_creator_id');
       // Auto-like the playlist as the first action post-signup
-      base44.entities.PlaylistLike.filter({ playlist_id: id, user_id: u.id })
+      voxylApi.entities.PlaylistLike.filter({ playlist_id: id, user_id: u.id })
         .then(existing => {
           if (existing.length === 0) {
-            base44.functions.invoke('togglePlaylistLike', { playlist_id: id }).catch(() => {});
+            voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id }).catch(() => {});
           }
         });
         // Auto-follow the creator if they came from a share link
         if (pendingCreatorId && pendingCreatorId !== u.id) {
-          base44.functions.invoke('requestFollow', { targetUserId: pendingCreatorId }).catch(() => {});
+          voxylApi.functions.invoke('requestFollow', { targetUserId: pendingCreatorId }).catch(() => {});
         }
       }
     }).catch(() => {});
@@ -94,7 +94,7 @@ export default function PlaylistDetail() {
 
   const { data: playlist, refetch: refetchPlaylist } = useQuery({
     queryKey: ['playlist', id],
-    queryFn: () => base44.entities.Playlist.filter({ id }),
+    queryFn: () => voxylApi.entities.Playlist.filter({ id }),
     select: data => data[0],
   });
 
@@ -109,9 +109,9 @@ export default function PlaylistDetail() {
     setFollowing(v => !v);
     try {
       if (prevFollowing) {
-        await base44.functions.invoke('cancelFollowRequest', { targetUserId: playlist.creator_id });
+        await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId: playlist.creator_id });
       } else {
-        await base44.functions.invoke('requestFollow', { targetUserId: playlist.creator_id });
+        await voxylApi.functions.invoke('requestFollow', { targetUserId: playlist.creator_id });
       }
     } catch {
       setFollowing(prevFollowing); // revert on failure
@@ -121,7 +121,7 @@ export default function PlaylistDetail() {
 
   useEffect(() => {
     if (!user || !playlist || isOwner) return;
-    base44.entities.Follow.filter({ follower_id: user.id, following_id: playlist.creator_id })
+    voxylApi.entities.Follow.filter({ follower_id: user.id, following_id: playlist.creator_id })
       .then(records => setFollowing(records.length > 0))
       .catch(() => {});
   }, [user, playlist, isOwner]);
@@ -164,7 +164,7 @@ export default function PlaylistDetail() {
     if (currentEpisode?.audioUrl === ep.audioUrl) { togglePlay(); return; }
     play(ep, episodes, { type: 'playlist', id });
     setPlayedUrls(prev => new Set([...prev, ep.audioUrl]));
-    base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
+    voxylApi.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
   };
 
   const loadEpisodesRef = useRef(null);
@@ -290,7 +290,7 @@ export default function PlaylistDetail() {
               onClick={() => {
                 const nextUnplayed = episodes.find(ep => !finishedUrls.has(ep.audioUrl)) || episodes[0];
                 play(nextUnplayed, episodes);
-                base44.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
+                voxylApi.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full gradient-primary text-white text-xs font-medium"
             >

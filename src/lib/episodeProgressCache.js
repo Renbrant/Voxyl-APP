@@ -82,8 +82,8 @@ export function getAllFinishedFromCache() {
 let dbRecordMap = {}; // audioUrl → { id, ...fields }
 
 /** Load all progress records from DB into local map and seed local cache */
-export async function loadProgressFromDB(base44, userId) {
-  const records = asArray(await base44.entities.EpisodeProgress.filter({ user_id: userId }));
+export async function loadProgressFromDB(voxylApi, userId) {
+  const records = asArray(await voxylApi.entities.EpisodeProgress.filter({ user_id: userId }));
   dbRecordMap = {};
   const cache = readCache();
   const now = Date.now();
@@ -109,7 +109,7 @@ export async function loadProgressFromDB(base44, userId) {
 }
 
 /** Save a single episode's progress to DB (upsert) */
-export async function saveProgressToDB(base44, userId, audioUrl) {
+export async function saveProgressToDB(voxylApi, userId, audioUrl) {
   const cached = getCachedProgress(audioUrl);
   if (!cached) return;
 
@@ -124,22 +124,22 @@ export async function saveProgressToDB(base44, userId, audioUrl) {
 
   const existing = dbRecordMap[audioUrl];
   if (existing?.id) {
-    await base44.entities.EpisodeProgress.update(existing.id, payload);
+    await voxylApi.entities.EpisodeProgress.update(existing.id, payload);
     dbRecordMap[audioUrl] = { ...existing, ...payload };
   } else {
-    const created = await base44.entities.EpisodeProgress.create(payload);
+    const created = await voxylApi.entities.EpisodeProgress.create(payload);
     dbRecordMap[audioUrl] = created;
   }
 }
 
 /** Delete old DB records (finished > 60 days) — can be called occasionally */
-export async function pruneOldDBRecords(base44) {
+export async function pruneOldDBRecords(voxylApi) {
   const now = Date.now();
   const toDelete = Object.values(dbRecordMap).filter(r =>
     r.last_played_at && now - new Date(r.last_played_at).getTime() > TTL_MS
   );
   for (const r of toDelete) {
-    await base44.entities.EpisodeProgress.delete(r.id);
+    await voxylApi.entities.EpisodeProgress.delete(r.id);
     delete dbRecordMap[r.audio_url];
   }
 }

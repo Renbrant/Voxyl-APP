@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { parseDurationToSeconds } from '@/lib/rssUtils';
 import { Share2, Headphones, Star, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { redirectToLogin } from '@/lib/authRedirect';
+import { useAuth } from '@/lib/AuthContext';
 
 const GRADIENT_COLORS = [
   'from-purple-600 to-cyan-400',
@@ -20,19 +21,16 @@ export default function PlaylistPreview() {
   const [playlist, setPlaylist] = useState(null);
   const [episodes, setEpisodes] = useState([]);
   const [loadingEps, setLoadingEps] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(null); // null = checking
+  const { isAuthenticated, isLoadingAuth } = useAuth();
 
   useEffect(() => {
-    base44.auth.isAuthenticated().then(auth => {
-      setIsLoggedIn(auth);
-      // If already logged in, go straight to the full detail page (with all features)
-      if (auth) navigate(`/playlist/${id}`, { replace: true });
-    });
-  }, [id]);
+    // If already logged in, go straight to the full detail page (with all features)
+    if (isAuthenticated) navigate(`/playlist/${id}`, { replace: true });
+  }, [id, isAuthenticated, navigate]);
   // Note: guests (/share/:id) see a preview — /playlist/:id is now open to guests too
 
   useEffect(() => {
-    base44.entities.Playlist.filter({ id })
+    voxylApi.entities.Playlist.filter({ id })
       .then(data => {
         const pl = data[0] || null;
         setPlaylist(pl);
@@ -68,7 +66,7 @@ export default function PlaylistPreview() {
     setLoadingEps(true);
     Promise.allSettled(
       playlist.rss_feeds.slice(0, 2).map(f =>
-        base44.functions.invoke('fetchRSSFeed', { url: f.url, count: 10 }).then(r => r.data)
+        voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 10 }).then(r => r.data)
       )
     )
       .then(results => {
@@ -107,7 +105,7 @@ export default function PlaylistPreview() {
   };
 
   // Still checking auth
-  if (isLoggedIn === null) {
+  if (isLoadingAuth) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />

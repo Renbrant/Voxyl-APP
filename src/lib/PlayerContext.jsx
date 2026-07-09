@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { invalidateCache } from '@/lib/appCache';
 import {
   getCachedProgress,
@@ -76,7 +76,7 @@ export function PlayerProvider({ children }) {
     const dur = useNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
     setCachedProgress(audioUrl, pos, dur, true);
     const u = userRef.current;
-    if (u) saveProgressToDB(base44, u.id, audioUrl).catch(() => {});
+    if (u) saveProgressToDB(voxylApi, u.id, audioUrl).catch(() => {});
   }, []);
 
   const recordPodcastPlay = useCallback(() => {
@@ -88,7 +88,7 @@ export function PlayerProvider({ children }) {
     const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (dur > 0 && pos / dur >= 0.5) {
       podcastPlayRecordedRef.current.add(ep.audioUrl);
-      base44.functions.invoke('recordPodcastPlay', {
+      voxylApi.functions.invoke('recordPodcastPlay', {
         feed_url: ep.feedUrl || ep.id || '',
         podcast_title: ep.feedTitle || '',
         podcast_image: ep.image || '',
@@ -113,7 +113,7 @@ export function PlayerProvider({ children }) {
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
     recordPodcastPlay();
     const u = userRef.current;
-    if (forceDB && u) saveProgressToDB(base44, u.id, ep.audioUrl).catch(() => {});
+    if (forceDB && u) saveProgressToDB(voxylApi, u.id, ep.audioUrl).catch(() => {});
   }, [recordPodcastPlay]);
 
   const stopSaveTimers = useCallback(() => {
@@ -622,10 +622,10 @@ export function PlayerProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    base44.auth.me().then(async u => {
+    voxylApi.auth.me().then(async u => {
       setUser(u);
       userRef.current = u;
-      if (u) { try { await loadProgressFromDB(base44, u.id); } catch {} }
+      if (u) { try { await loadProgressFromDB(voxylApi, u.id); } catch {} }
       setFinishedUrls(getAllFinishedFromCache());
       finishedUrlsRef.current = getAllFinishedFromCache();
     }).catch(() => {

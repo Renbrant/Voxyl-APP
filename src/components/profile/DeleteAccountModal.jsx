@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, Trash2, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -48,13 +48,13 @@ export default function DeleteAccountModal({ user, onClose }) {
   const handleDelete = async () => {
     if (!canDelete) return;
     setLoading(true);
-    const res = await base44.functions.invoke('deleteAccount', {});
+    const res = await voxylApi.functions.invoke('deleteAccount', {});
     const data = res.data;
     if (!data?.success && data?.errors?.length > 0) {
       // Partial failure — still log out but show errors in console for debugging
       console.error('[deleteAccount] partial errors:', data.errors);
     }
-    base44.auth.logout('/');
+    voxylApi.auth.logout('/');
   };
 
   const current = steps[step];

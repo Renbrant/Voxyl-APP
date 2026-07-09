@@ -1,13 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import '@/index.css'
-// ONLY import the lightweight storage helper here — it has NO base44/SDK imports.
-// Everything else (App, AuthContext, base44Client) is dynamically imported AFTER hydration.
+// Keep native token hydration separate from the React app bootstrap.
+
 import { hydrateLocalStorageFromPreferences } from '@/lib/nativeTokenStorage'
 
 // Native auth callback detector.
-// Runs synchronously BEFORE any async work so no routing or auth logic interferes.
-// Base44 redirects to /?native_auth_callback=1&access_token=... after Google login.
+
+// Login redirects to /?native_auth_callback=1&access_token=... after completion.
 function runNativeAuthCallbackCheck() {
   const search = new URLSearchParams(window.location.search)
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
@@ -50,6 +50,7 @@ function runNativeAuthCallbackCheck() {
 
 async function bootstrap() {
   console.log('[AUTH] bootstrap start')
+  console.log('[VOXYL BUILD]', '2026-07-09-auth-me-token-safe-legacy-link')
 
   // 1. Handle native OAuth callback redirect — no hydration needed here
   const nativeCallbackHandled = runNativeAuthCallbackCheck()
@@ -68,15 +69,12 @@ async function bootstrap() {
     root.classList.add(savedTheme === 'light' ? 'light' : 'dark')
   }
 
-  // 3. Hydrate localStorage from Capacitor Preferences BEFORE importing anything
-  //    that touches base44Client / app-params. This is the critical step that ensures
-  //    the SDK sees the token at module initialization time on cold start.
+  // 3. Hydrate localStorage from Capacitor Preferences before importing the app.
   if (nativePlatform === 'android' || nativePlatform === 'ios') {
     await hydrateLocalStorageFromPreferences()
   }
 
-  // 4. NOW dynamically import App and auth callback — base44Client/app-params
-  //    will initialize with the token already in localStorage.
+  // 4. Dynamically import the app and native auth callback handling.
   console.log('[AUTH] importing App after token hydration')
   const [{ default: App }, { default: OptionalClerkProvider }, { initializeNativeAuthCallback }] = await Promise.all([
     import('@/App.jsx'),

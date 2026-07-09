@@ -6,8 +6,8 @@ import InviteFriendModal from '@/components/profile/InviteFriendModal';
 import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import ShareAppModal from '@/components/profile/ShareAppModal';
 import { UserCircle2, Users, ListMusic, Share2, Bell, EyeOff, Eye, Pencil, Settings, Camera, RefreshCw, Loader2, LogIn } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
-import { redirectToLogin } from '@/lib/authRedirect';
+import { voxylApi } from '@/api/voxylApiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import FollowRequestsModal from '@/components/profile/FollowRequestsModal';
@@ -15,8 +15,8 @@ import UsernameSetupModal from '@/components/profile/UsernameSetupModal';
 import { useNavigate } from 'react-router-dom';
 
 export default function Profile() {
-  const [isAuthed, setIsAuthed] = useState(null); // null = loading
-  const [user, setUser] = useState(null);
+  const { user: authUser, isAuthenticated, isLoadingAuth, accountSyncError, navigateToLogin, checkUserAuth } = useAuth();
+  const [localUser, setLocalUser] = useState(null);
   const [showInvite, setShowInvite] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [showShare, setShowShare] = useState(false);
@@ -33,20 +33,22 @@ export default function Profile() {
   const eggTimerRef = useRef(null);
   const eggIntervalRef = useRef(null);
   const navigate = useNavigate();
+  const user = localUser || authUser;
+  const canLoadProfileData = Boolean(user && !user.account_sync_pending && !accountSyncError);
 
   useEffect(() => {
-    base44.auth.isAuthenticated().then(authed => {
-      setIsAuthed(authed);
-      if (authed) {
-        base44.auth.me().then((u) => {
-          setUser(u);
-          if (!u.username) setShowUsernameModal(true);
-          base44.entities.Follow.filter({ following_id: u.id, status: 'pending' })
-            .then((reqs) => setPendingCount(reqs.length))
-            .catch(() => {});
-        }).catch(() => {});
-      }
-    }).catch(() => setIsAuthed(false));
+    setLocalUser(authUser || null);
+    if (authUser && !authUser.account_sync_pending) {
+      if (!authUser.username) setShowUsernameModal(true);
+      voxylApi.entities.Follow.filter({ following_id: authUser.id, status: 'pending' })
+        .then((reqs) => setPendingCount(reqs.length))
+        .catch(() => {});
+    } else {
+      setPendingCount(0);
+    }
+  }, [authUser]);
+
+  useEffect(() => {
     // Check if already unlocked
     if (localStorage.getItem('voxyl_egg_unlocked') === 'true') setEggUnlocked(true);
   }, []);
@@ -76,15 +78,15 @@ export default function Profile() {
   };
 
   const syncPictureToPlaylists = async (pictureUrl) => {
-    const myPlaylists = await base44.entities.Playlist.filter({ creator_id: user.id }).catch(() => []);
-    await Promise.all(myPlaylists.map(p => base44.entities.Playlist.update(p.id, { creator_picture: pictureUrl })));
+    const myPlaylists = await voxylApi.entities.Playlist.filter({ creator_id: user.id }).catch(() => []);
+    await Promise.all(myPlaylists.map(p => voxylApi.entities.Playlist.update(p.id, { creator_picture: pictureUrl })));
   };
 
   const handleUseLoginPhoto = async () => {
     const loginPhoto = user.picture || user.avatar_url || user.photo_url;
     if (!loginPhoto) return;
-    await base44.auth.updateMe({ profile_picture: loginPhoto });
-    setUser(prev => ({ ...prev, profile_picture: loginPhoto }));
+    await voxylApi.auth.updateMe({ profile_picture: loginPhoto });
+    setLocalUser(prev => ({ ...(prev || user), profile_picture: loginPhoto }));
     setShowAvatarSheet(false);
     syncPictureToPlaylists(loginPhoto);
   };
@@ -94,10 +96,10 @@ export default function Profile() {
     if (!file) return;
     setUploadingPhoto(true);
     setShowAvatarSheet(false);
-    const res = await base44.integrations.Core.UploadFile({ file }).catch(() => null);
+    const res = await voxylApi.integrations.Core.UploadFile({ file }).catch(() => null);
     if (res?.file_url) {
-      await base44.auth.updateMe({ profile_picture: res.file_url });
-      setUser(prev => ({ ...prev, profile_picture: res.file_url }));
+      await voxylApi.auth.updateMe({ profile_picture: res.file_url });
+      setLocalUser(prev => ({ ...(prev || user), profile_picture: res.file_url }));
       syncPictureToPlaylists(res.file_url);
     }
     setUploadingPhoto(false);
@@ -107,24 +109,24 @@ export default function Profile() {
     if (!user) return;
     setHidingProfile(true);
     const newVal = !user.profile_hidden;
-    await base44.auth.updateMe({ profile_hidden: newVal });
-    setUser((prev) => ({ ...prev, profile_hidden: newVal }));
+    await voxylApi.auth.updateMe({ profile_hidden: newVal });
+    setLocalUser((prev) => ({ ...(prev || user), profile_hidden: newVal }));
     // Sync creator_hidden on all owned playlists
-    const myPlaylists = await base44.entities.Playlist.filter({ creator_id: user.id }).catch(() => []);
-    await Promise.all(myPlaylists.map((p) => base44.entities.Playlist.update(p.id, { creator_hidden: newVal })));
+    const myPlaylists = await voxylApi.entities.Playlist.filter({ creator_id: user.id }).catch(() => []);
+    await Promise.all(myPlaylists.map((p) => voxylApi.entities.Playlist.update(p.id, { creator_hidden: newVal })));
     setHidingProfile(false);
   };
 
   const { data: playlists = [] } = useQuery({
     queryKey: ['profile-playlists', user?.id],
-    enabled: !!user,
-    queryFn: () => base44.entities.Playlist.filter({ creator_id: user.id }, '-created_date', 20)
+    enabled: canLoadProfileData,
+    queryFn: () => voxylApi.entities.Playlist.filter({ creator_id: user.id }, '-created_date', 20)
   });
 
   const publicPlaylists = playlists.filter((p) => p.visibility === 'public' || !p.visibility);
   const followersPlaylists = playlists.filter((p) => p.visibility === 'friends_only');
 
-  if (isAuthed === false) {
+  if (!isLoadingAuth && !isAuthenticated) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6 text-center gap-5">
         <div className="w-16 h-16 rounded-2xl gradient-primary flex items-center justify-center glow-primary">
@@ -135,10 +137,30 @@ export default function Profile() {
           <p className="text-sm text-muted-foreground">{t('profileLoginHint')}</p>
         </div>
         <button
-          onClick={() => redirectToLogin(window.location.href)}
+          onClick={navigateToLogin}
           className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
         >
           {t('loginWithGoogle')}
+        </button>
+      </div>
+    );
+  }
+
+  if (accountSyncError) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6 text-center gap-5">
+        <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/30 flex items-center justify-center">
+          <RefreshCw size={28} className="text-primary" />
+        </div>
+        <div>
+          <h2 className="text-xl font-grotesk font-bold text-foreground mb-1">Account sync needed</h2>
+          <p className="text-sm text-muted-foreground">{accountSyncError.message}</p>
+        </div>
+        <button
+          onClick={checkUserAuth}
+          className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
+        >
+          Try again
         </button>
       </div>
     );
@@ -339,7 +361,7 @@ export default function Profile() {
           currentUser={user}
           currentUsername={user.username}
           onClose={() => setShowUsernameModal(false)}
-          onSaved={(uname) => setUser((prev) => ({ ...prev, username: uname }))} />
+          onSaved={(uname) => setLocalUser((prev) => ({ ...(prev || user), username: uname }))} />
 
         }
       </AnimatePresence>

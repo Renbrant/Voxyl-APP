@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Trash2, Globe, Lock, Loader2, Image as ImageIcon, Sparkles, Users, Search, Timer, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { generateShareToken } from '@/lib/rssUtils';
@@ -51,7 +51,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     setPodcastSearch(query);
     if (!query.trim()) { setPodcastResults([]); return; }
     setSearchingPodcasts(true);
-    const res = await base44.functions.invoke('searchPodcasts', { query }).then(r => r.data).catch(() => ({ results: [] }));
+    const res = await voxylApi.functions.invoke('searchPodcasts', { query }).then(r => r.data).catch(() => ({ results: [] }));
     setPodcastResults(res.results || []);
     setSearchingPodcasts(false);
   };
@@ -82,7 +82,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     if (!url.trim()) { setFeedValidations(prev => { const n = {...prev}; delete n[i]; return n; }); return; }
     setFeedValidations(prev => ({ ...prev, [i]: 'checking' }));
     try {
-      const res = await base44.functions.invoke('fetchRSSFeed', { url: url.trim(), count: 1 });
+      const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: url.trim(), count: 1 });
       const data = res.data || res;
       const valid = !!(data?.title || data?.items?.length > 0);
       setFeedValidations(prev => ({ ...prev, [i]: valid ? 'valid' : 'invalid' }));
@@ -102,7 +102,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     setGeneratingImage(true);
     setError('');
     const prompt = `Create a vibrant and modern podcast playlist cover art for "${name.trim()}". ${description ? `Theme: ${description.trim()}. ` : ''}Style: colorful, eye-catching, professional. No text or logos.`;
-    const res = await base44.integrations.Core.GenerateImage({ prompt }).catch(() => null);
+    const res = await voxylApi.integrations.Core.GenerateImage({ prompt }).catch(() => null);
     setGeneratingImage(false);
     if (res?.url) {
       setCoverImage(res.url);
@@ -116,7 +116,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     if (!file) return;
     setGeneratingImage(true);
     setError('');
-    const res = await base44.integrations.Core.UploadFile({ file }).catch(() => null);
+    const res = await voxylApi.integrations.Core.UploadFile({ file }).catch(() => null);
     setGeneratingImage(false);
     if (res?.file_url) {
       setCoverImage(res.file_url);
@@ -131,7 +131,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     if (validFeeds.length > MAX_FEEDS) { setError(`Máximo de ${MAX_FEEDS} podcasts por playlist durante o período de testes.`); return; }
     setSaving(true);
     setError('');
-    await base44.entities.Playlist.create({
+    await voxylApi.entities.Playlist.create({
       name: name.trim(),
       description: description.trim(),
       creator_id: user.id,
