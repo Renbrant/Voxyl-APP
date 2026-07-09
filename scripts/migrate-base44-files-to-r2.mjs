@@ -310,7 +310,7 @@ function buildSql(rows) {
     lines.push(`-- ${row.old_url}`);
     for (const [table, field] of SQL_FIELDS) {
       lines.push(
-        `UPDATE ${table} SET ${field} = REPLACE(${field}, ${sqlString(row.old_url)}, ${sqlString(row.new_url)}) WHERE ${field} LIKE ${sqlString(`%${row.old_url}%`)};`,
+        `UPDATE ${table} SET ${field} = REPLACE(${field}, ${sqlString(row.old_url)}, ${sqlString(row.new_url)}) WHERE ${field} IS NOT NULL AND instr(${field}, ${sqlString(row.old_url)}) > 0;`,
       );
     }
   }
