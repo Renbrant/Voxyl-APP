@@ -1,10 +1,9 @@
-import { X, Play, Pause, Calendar, Clock, ArrowLeft, List, Download, Check } from 'lucide-react';
+import { Calendar, Clock, ArrowLeft, List, Download, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { saveDownload, isDownloaded } from '@/lib/downloads';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
-import { formatDuration } from '@/lib/rssUtils';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 

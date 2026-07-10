@@ -1,4 +1,4 @@
-const CACHE_NAME = 'voxyl-v1';
+const CACHE_NAME = 'voxyl-v2-auth-bridge';
 const CURRENT_EPISODE_KEY = 'voxyl_current_episode';
 const QUEUE_KEY = 'voxyl_queue';
 const AUTOPLAY_KEY = 'voxyl_autoplay';
@@ -8,7 +8,11 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.filter(name => name !== CACHE_NAME).map(name => caches.delete(name)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener('message', event => {

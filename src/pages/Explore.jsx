@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { t } from '@/lib/i18n';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
 import VoxylHeader from '@/components/common/VoxylHeader';
@@ -67,14 +67,14 @@ export default function Explore() {
   }, containerRef);
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
-      base44.entities.PodcastLike.filter({ user_id: u.id })
+      voxylApi.entities.PodcastLike.filter({ user_id: u.id })
         .then(likes => setLikedFeedUrls(new Set(likes.map(l => l.feed_url))))
         .catch(() => {});
       Promise.all([
-        base44.entities.Block.filter({ blocker_id: u.id }),
-        base44.entities.Block.filter({ blocked_id: u.id }),
+        voxylApi.entities.Block.filter({ blocker_id: u.id }),
+        voxylApi.entities.Block.filter({ blocked_id: u.id }),
       ]).then(([myBlocks, theirBlocks]) => {
         const ids = [
           ...myBlocks.map(b => b.blocked_id),
@@ -82,14 +82,14 @@ export default function Explore() {
         ];
         setBlockedIds([...new Set(ids)]);
       }).catch(() => {});
-      base44.entities.Follow.filter({ follower_id: u.id })
+      voxylApi.entities.Follow.filter({ follower_id: u.id })
         .then(follows => {
           const map = {};
           follows.forEach(f => { map[f.following_id] = f.status; });
           setFollowStatuses(map);
         })
         .catch(() => {});
-      base44.entities.Follow.filter({ following_id: u.id, status: 'accepted' })
+      voxylApi.entities.Follow.filter({ following_id: u.id, status: 'accepted' })
         .then(follows => {
           setTheyFollowMeIds(new Set(follows.map(f => f.follower_id)));
         })
@@ -101,7 +101,7 @@ export default function Explore() {
     queryKey: ['my-likes', user?.id],
     enabled: !!user,
     queryFn: async () => {
-      const l = await base44.entities.PlaylistLike.filter({ user_id: user.id });
+      const l = await voxylApi.entities.PlaylistLike.filter({ user_id: user.id });
       setLikes(l.map(x => x.playlist_id));
       return l;
     },
@@ -112,7 +112,7 @@ export default function Explore() {
     const liked = likes.includes(playlist.id);
     setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
     try {
-      await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
     } catch {
       // Revert optimistic update on failure
       setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));
@@ -123,7 +123,7 @@ export default function Explore() {
   const { data: playlists = [], isLoading: playlistsLoading } = useQuery({
     queryKey: ['explore-playlists'],
     queryFn: async () => {
-      const res = await base44.functions.invoke('getTopPlaylistsByPlayback', {});
+      const res = await voxylApi.functions.invoke('getTopPlaylistsByPlayback', {});
       return res.data?.playlists || [];
     },
   });
@@ -132,7 +132,7 @@ export default function Explore() {
   const { data: followersList = [] } = useQuery({
     queryKey: ['explore-followers', user?.id],
     enabled: !!user && tab === 'users',
-    queryFn: () => base44.entities.Follow.filter({ following_id: user.id, status: 'accepted' }),
+    queryFn: () => voxylApi.entities.Follow.filter({ following_id: user.id, status: 'accepted' }),
   });
 
   // Following: users I follow (accepted) - enrich with user profiles to get username
@@ -140,9 +140,9 @@ export default function Explore() {
     queryKey: ['explore-following', user?.id],
     enabled: !!user && tab === 'users',
     queryFn: async () => {
-      const follows = await base44.entities.Follow.filter({ follower_id: user.id, status: 'accepted' });
+      const follows = await voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'accepted' });
       // Fetch usernames from searchUsers for enrichment
-      const profiles = await base44.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
+      const profiles = await voxylApi.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
       const profileMap = {};
       profiles.forEach(p => { profileMap[p.id] = p; });
       return follows.map(f => ({ ...f, _profile: profileMap[f.following_id] || null }));
@@ -154,8 +154,8 @@ export default function Explore() {
     queryKey: ['explore-pending', user?.id],
     enabled: !!user && tab === 'users',
     queryFn: async () => {
-      const follows = await base44.entities.Follow.filter({ follower_id: user.id, status: 'pending' });
-      const profiles = await base44.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
+      const follows = await voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'pending' });
+      const profiles = await voxylApi.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
       const profileMap = {};
       profiles.forEach(p => { profileMap[p.id] = p; });
       return follows.map(f => ({ ...f, _profile: profileMap[f.following_id] || null }));
@@ -166,17 +166,17 @@ export default function Explore() {
   const { data: searchedUsers = [], isLoading: usersLoading } = useQuery({
     queryKey: ['explore-users', debouncedUserSearch],
     enabled: tab === 'users' && debouncedUserSearch.trim().length > 0,
-    queryFn: () => base44.functions.invoke('searchUsers', { query: debouncedUserSearch }).then(r => r.data?.users || []),
+    queryFn: () => voxylApi.functions.invoke('searchUsers', { query: debouncedUserSearch }).then(r => r.data?.users || []),
   });
 
   const handleLikePodcast = async (podcast) => {
     if (!user) return;
     if (likedFeedUrls.has(podcast.feedUrl)) {
-      const records = await base44.entities.PodcastLike.filter({ user_id: user.id, feed_url: podcast.feedUrl });
-      if (records[0]) await base44.entities.PodcastLike.delete(records[0].id);
+      const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: podcast.feedUrl });
+      if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
       setLikedFeedUrls(prev => { const s = new Set(prev); s.delete(podcast.feedUrl); return s; });
     } else {
-      await base44.entities.PodcastLike.create({
+      await voxylApi.entities.PodcastLike.create({
         user_id: user.id,
         user_email: user.email,
         feed_url: podcast.feedUrl,
@@ -195,7 +195,7 @@ export default function Explore() {
     if (!debouncedQuery.trim()) { setPodcastResults([]); return; }
     setPodcastLoading(true);
     const maxDuration = user?.max_duration || 0;
-    base44.functions.invoke('searchPodcasts', { 
+    voxylApi.functions.invoke('searchPodcasts', { 
       query: debouncedQuery, 
       maxDuration,
       language: podcastLanguage,

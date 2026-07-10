@@ -1,12 +1,11 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useRef, useEffect, useState } from 'react';
+import { useRef } from 'react';
 import { cn } from '@/lib/utils';
 import AudioPlayer from './player/AudioPlayer';
 import { usePlayer } from '@/lib/PlayerContext';
 import FollowRequestsBell from '@/components/notifications/FollowRequestsBell';
 import Sidebar from '@/components/common/Sidebar';
-import { base44 } from '@/api/base44Client';
-import { redirectToLogin } from '@/lib/authRedirect';
+import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
 
@@ -21,24 +20,9 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentEpisode } = usePlayer();
+  const { isAuthenticated, clerkLoaded, isLoadingAuth, navigateToLogin } = useAuth();
+  const authReady = clerkLoaded || !isLoadingAuth;
   const tabHistory = useRef({});
-  // Use cached value to avoid flash on navigation
-  const [isAuthed, setIsAuthed] = useState(() => {
-    const cached = sessionStorage.getItem('voxyl_authed');
-    if (cached === 'true') return true;
-    if (cached === 'false') return false;
-    return null;
-  });
-
-  useEffect(() => {
-    base44.auth.isAuthenticated().then(v => {
-      sessionStorage.setItem('voxyl_authed', String(v));
-      setIsAuthed(v);
-    }).catch(() => {
-      sessionStorage.setItem('voxyl_authed', 'false');
-      setIsAuthed(false);
-    });
-  }, []);
 
   const handleNavClick = (path) => {
     const active = location.pathname === path ||
@@ -99,15 +83,14 @@ export default function Layout() {
               (path !== '/' && location.pathname.startsWith(path));
 
             const handleClick = () => {
-              if (isProtected && isAuthed === false) {
-                redirectToLogin(window.location.href);
+              if (isProtected && authReady && !isAuthenticated) {
+                navigateToLogin();
                 return;
               }
               handleNavClick(path);
             };
 
-            // Show login icon for profile tab when not authed or still loading (no cache)
-            const showLogin = path === '/profile' && isAuthed !== true;
+            const showLogin = path === '/profile' && authReady && !isAuthenticated;
             const DisplayIcon = showLogin ? LogIn : Icon;
             const displayLabel = showLogin ? t('loginWithGoogle').split(' ')[0] : label;
 

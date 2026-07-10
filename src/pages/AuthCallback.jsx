@@ -1,15 +1,15 @@
 /**
  * src/pages/AuthCallback.jsx
  *
- * This page runs inside the Capacitor Browser (Chrome Custom Tab) after Google login completes.
- * Base44 redirects here with the token. We extract it and redirect to the custom scheme.
+ * This page runs inside the Capacitor Browser after login completes.
+ * It extracts the token and redirects to the custom scheme.
  *
  * IMPORTANT: This runs in a Chrome Custom Tab, NOT in the app WebView.
  * window.Capacitor is NOT available here. We cannot rely on Capacitor APIs.
  * We MUST use window.location.href to trigger the custom scheme redirect.
  *
  * Flow:
- * 1. Base44 login succeeds → Base44 redirects to /?native_auth_callback=1&access_token=...
+ * 1. Login succeeds and redirects to /?native_auth_callback=1&access_token=...
  * 2. This page loads and shows visible debug output
  * 3. We extract the token from query params or hash
  * 4. We redirect to: com.renbrant.voxyl://auth/callback?access_token=<TOKEN>

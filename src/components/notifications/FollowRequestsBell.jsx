@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import FollowRequestsModal from '@/components/profile/FollowRequestsModal';
@@ -12,7 +12,7 @@ export default function FollowRequestsBell() {
   const [pulse, setPulse] = useState(false);
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
       loadCount(u.id);
     }).catch(() => {});
@@ -26,7 +26,7 @@ export default function FollowRequestsBell() {
   }, [user]);
 
   const loadCount = (userId) => {
-    base44.entities.Follow.filter({ following_id: userId, status: 'pending' })
+    voxylApi.entities.Follow.filter({ following_id: userId, status: 'pending' })
       .then(reqs => {
         if (reqs.length > pendingCount) setPulse(true);
         setPendingCount(reqs.length);

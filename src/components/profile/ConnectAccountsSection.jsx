@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import { CheckCircle2, Link } from 'lucide-react';
 
 const providers = [
@@ -33,7 +32,7 @@ export default function ConnectAccountsSection({ user }) {
     // Detect which provider was used to sign up based on presence of profile_picture or provider hint
     const email = user?.email || '';
     const picture = user?.profile_picture || '';
-    // Base44 stores the auth provider in the user object when using social login
+    // The Worker mirrors the auth provider in the user object when available.
     const provider = user?.auth_provider || '';
     setLinked({
       google: provider === 'google' || (picture.includes('googleusercontent') || picture.includes('google')),
@@ -42,9 +41,10 @@ export default function ConnectAccountsSection({ user }) {
   }, [user]);
 
   const handleConnect = (providerId) => {
-    // Redirect to the Base44 OAuth link endpoint for the provider
-    const next = window.location.href;
-    window.location.href = `/_auth/link/${providerId}?next=${encodeURIComponent(next)}`;
+    window.Clerk?.redirectToSignIn?.({
+      redirectUrl: window.location.href,
+      strategy: providerId === 'google' ? 'oauth_google' : 'oauth_facebook',
+    });
   };
 
   return (

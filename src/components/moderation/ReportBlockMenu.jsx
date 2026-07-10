@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { MoreVertical, Flag, Ban, X, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -27,7 +27,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
     if (!reason) return;
     setLoading(true);
     // Create report record
-    await base44.entities.Report.create({
+    await voxylApi.entities.Report.create({
       reporter_id: currentUser.id,
       reporter_email: currentUser.email,
       reported_user_id: targetUser.id,
@@ -41,9 +41,9 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
     });
     // Increment reports_count on the playlist
     if (contentType === 'playlist' && contentId) {
-      const playlists = await base44.entities.Playlist.filter({ id: contentId });
+      const playlists = await voxylApi.entities.Playlist.filter({ id: contentId });
       if (playlists[0]) {
-        await base44.entities.Playlist.update(contentId, {
+        await voxylApi.entities.Playlist.update(contentId, {
           reports_count: (playlists[0].reports_count || 0) + 1,
         });
       }
@@ -54,9 +54,9 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
 
   const handleBlock = async () => {
     setLoading(true);
-    const existing = await base44.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: targetUser.id });
+    const existing = await voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: targetUser.id });
     if (!existing.length) {
-      await base44.entities.Block.create({
+      await voxylApi.entities.Block.create({
         blocker_id: currentUser.id,
         blocker_email: currentUser.email,
         blocked_id: targetUser.id,

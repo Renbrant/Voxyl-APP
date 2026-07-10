@@ -1,14 +1,14 @@
 /**
  * nativeAuthSession.js
  *
- * Base44 session restoration logic for native platforms.
- * Safe to import base44 here because this file is only imported AFTER
+ * Session restoration logic for native platforms.
+ * Safe to import the API client here because this file is only imported after
  * hydrateLocalStorageFromPreferences() has already run in main.jsx.
  *
- * Storage helpers live in nativeTokenStorage.js (no Base44 imports).
+ * Storage helpers live in nativeTokenStorage.js (no voxylApi imports).
  */
 
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { Capacitor } from '@capacitor/core';
 import {
   getStoredNativeToken,
@@ -23,7 +23,7 @@ const log = (...args) => console.log('[AUTH]', ...args);
 export const isNativePlatform = () => Capacitor.isNativePlatform();
 
 /**
- * Verifies the stored token by calling base44.auth.me().
+ * Verifies the stored token by calling the Worker-backed auth endpoint.
  * Returns the user object if valid, null otherwise.
  * Only clears the token on definitive 401/403 — never on network errors.
  */
@@ -35,17 +35,17 @@ export async function restoreNativeAuthSession() {
 
   log('restoring native auth session');
 
-  // Try to inject token into SDK client if it doesn't already have it
+  // Older native sessions may have a stored token before Clerk is ready
   try {
-    if (typeof base44.auth?.setToken === 'function') {
-      base44.auth.setToken(token);
-    } else if (base44._client?.setToken) {
-      base44._client.setToken(token);
+    if (typeof voxylApi.auth?.setToken === 'function') {
+      voxylApi.auth.setToken(token);
+    } else if (voxylApi._client?.setToken) {
+      voxylApi._client.setToken(token);
     }
   } catch {}
 
   try {
-    const user = await base44.auth.me();
+    const user = await voxylApi.auth.me();
     if (user) {
       log('current user restored successfully');
       return user;

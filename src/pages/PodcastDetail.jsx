@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { usePlayer } from '@/lib/PlayerContext';
-import { parseDurationToSeconds, formatDuration } from '@/lib/rssUtils';
+import { formatDuration } from '@/lib/rssUtils';
 import { getFeedFromCache, saveFeedToCache, getRSSCacheFromCloud } from '@/lib/feedCache';
 import { t } from '@/lib/i18n';
-import { ArrowLeft, Play, Pause, Loader2, ListMusic, Heart, Info, X } from 'lucide-react';
+import { ArrowLeft, Play, Loader2, ListMusic, Heart, Info, X } from 'lucide-react';
 import PageTransition from '@/components/common/PageTransition';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -31,9 +31,9 @@ export default function PodcastDetail() {
   const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
 
   useEffect(() => {
-    base44.auth.me().then(u => {
+    voxylApi.auth.me().then(u => {
       setUser(u);
-      base44.entities.PodcastLike.filter({ user_id: u.id, feed_url: feedUrl })
+      voxylApi.entities.PodcastLike.filter({ user_id: u.id, feed_url: feedUrl })
         .then(r => setLiked(r.length > 0))
         .catch(() => {});
     }).catch(() => {});
@@ -83,7 +83,7 @@ export default function PodcastDetail() {
         if (cloudCached) {
           fresh = cloudCached;
         } else {
-          const res = await base44.functions.invoke('fetchRSSFeed', { url: feedUrl, count: 100 });
+          const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: feedUrl, count: 100 });
           fresh = res.data || res;
         }
         
@@ -122,11 +122,11 @@ export default function PodcastDetail() {
   const handleLike = async () => {
     if (!user) return;
     if (liked) {
-      const records = await base44.entities.PodcastLike.filter({ user_id: user.id, feed_url: feedUrl });
-      if (records[0]) await base44.entities.PodcastLike.delete(records[0].id);
+      const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: feedUrl });
+      if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
       setLiked(false);
     } else {
-      await base44.entities.PodcastLike.create({
+      await voxylApi.entities.PodcastLike.create({
         user_id: user.id,
         user_email: user.email,
         feed_url: feedUrl,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import { UserPlus, UserCheck, Clock, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -15,11 +15,11 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
 
     if (followStatus === 'accepted' || followStatus === 'pending') {
       // Unfollow / cancel request via secure server function
-      await base44.functions.invoke('cancelFollowRequest', { targetUserId }).catch(() => {});
+      await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId }).catch(() => {});
       onStatusChange?.(null);
     } else {
       // Send follow request via secure server function
-      await base44.functions.invoke('requestFollow', { targetUserId }).catch(() => {});
+      await voxylApi.functions.invoke('requestFollow', { targetUserId }).catch(() => {});
       onStatusChange?.('pending');
     }
 

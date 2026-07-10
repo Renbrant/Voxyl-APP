@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { UserCircle2, AtSign } from 'lucide-react';
+import { UserCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import FollowButton from '@/components/profile/FollowButton';
 

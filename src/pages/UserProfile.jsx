@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { voxylApi } from '@/api/voxylApiClient';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
 import FollowButton from '@/components/profile/FollowButton';
 import { ArrowLeft, UserCircle2, Ban } from 'lucide-react';
@@ -22,9 +22,9 @@ export default function UserProfile() {
   const [blockLoading, setBlockLoading] = useState(false);
 
   useEffect(() => {
-    base44.auth.me().then(setCurrentUser).catch(() => {});
+    voxylApi.auth.me().then(setCurrentUser).catch(() => {});
     // Fetch public profile data (including picture) via service role
-    base44.functions.invoke('getPublicUserProfile', { userId })
+    voxylApi.functions.invoke('getPublicUserProfile', { userId })
       .then(res => {
         const data = res.data;
         setProfileUser(prev => ({ ...prev, ...data }));
@@ -33,11 +33,11 @@ export default function UserProfile() {
   }, [userId]);
 
   useEffect(() => {
-    base44.entities.Follow.filter({ following_id: userId, status: 'accepted' })
+    voxylApi.entities.Follow.filter({ following_id: userId, status: 'accepted' })
       .then(follows => setFollowersCount(follows.length))
       .catch(() => {});
 
-    base44.entities.Follow.filter({ follower_id: userId })
+    voxylApi.entities.Follow.filter({ follower_id: userId })
       .then(follows => {
         if (follows.length > 0 && follows[0].follower_username) {
           setProfileUser(prev => prev?.username ? prev : {
@@ -52,7 +52,7 @@ export default function UserProfile() {
 
   useEffect(() => {
     // Fetch playlists — auth is resolved server-side, no need to wait for currentUser
-    base44.functions.invoke('getUserPlaylists', { userId })
+    voxylApi.functions.invoke('getUserPlaylists', { userId })
       .then(res => {
         const data = res.data;
         setPlaylists(data.playlists || []);
@@ -68,13 +68,13 @@ export default function UserProfile() {
         }
       })
       .catch(() => setLoading(false));
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   useEffect(() => {
     if (!currentUser) return;
 
     // Check follow status for pending
-    base44.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
+    voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
       .then(follows => {
         if (follows.length > 0 && follows[0].status === 'pending') {
           setFollowStatus('pending');
@@ -83,12 +83,12 @@ export default function UserProfile() {
       .catch(() => {});
 
     // Check if they follow me
-    base44.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id, status: 'accepted' })
+    voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id, status: 'accepted' })
       .then(follows => setTheyFollowMe(follows.length > 0))
       .catch(() => {});
 
     // Check block status
-    base44.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId })
+    voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId })
       .then(blocks => setIsBlocked(blocks.length > 0))
       .catch(() => {});
   }, [currentUser, userId]);
@@ -97,11 +97,11 @@ export default function UserProfile() {
     if (!currentUser) return;
     setBlockLoading(true);
     if (isBlocked) {
-      const blocks = await base44.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId });
-      if (blocks.length > 0) await base44.entities.Block.delete(blocks[0].id);
+      const blocks = await voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId });
+      if (blocks.length > 0) await voxylApi.entities.Block.delete(blocks[0].id);
       setIsBlocked(false);
     } else {
-      await base44.entities.Block.create({
+      await voxylApi.entities.Block.create({
         blocker_id: currentUser.id,
         blocker_email: currentUser.email,
         blocked_id: userId,
@@ -110,11 +110,11 @@ export default function UserProfile() {
       });
       setIsBlocked(true);
       // Remove any existing follow in both directions
-      const myFollows = await base44.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId });
-      const theirFollows = await base44.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id });
+      const myFollows = await voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId });
+      const theirFollows = await voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id });
       await Promise.all([
-        ...myFollows.map(f => base44.entities.Follow.delete(f.id)),
-        ...theirFollows.map(f => base44.entities.Follow.delete(f.id)),
+        ...myFollows.map(f => voxylApi.entities.Follow.delete(f.id)),
+        ...theirFollows.map(f => voxylApi.entities.Follow.delete(f.id)),
       ]);
       setFollowStatus(null);
     }

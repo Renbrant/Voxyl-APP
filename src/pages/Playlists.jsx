@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { t } from '@/lib/i18n';
-import { base44 } from '@/api/base44Client';
-import { redirectToLogin } from '@/lib/authRedirect';
+import { voxylApi } from '@/api/voxylApiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, ListMusic, Mic, Download, LogIn } from 'lucide-react';
+import { Plus, ListMusic, Mic, Download, LogIn, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import VoxylHeader from '@/components/common/VoxylHeader';
@@ -15,7 +15,7 @@ import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import DownloadedEpisodeCard from '@/components/downloads/DownloadedEpisodeCard';
 import { getDownloads } from '@/lib/downloads';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
-import { getCachedContent, setCachedContent, clearAllContentCache, isCacheExpired } from '@/lib/savedContentCache';
+import { getCachedContent, setCachedContent, clearAllContentCache } from '@/lib/savedContentCache';
 
 const TABS = () => [
 { key: 'playlists', label: t('playlistsTabPlaylists'), icon: ListMusic },
@@ -24,16 +24,16 @@ const TABS = () => [
 
 
 export default function Playlists() {
-  const [user, setUser] = useState(null);
-  const [isAuthed, setIsAuthed] = useState(null); // null = loading
+  const { user, isAuthenticated, isLoadingAuth, accountSyncError, navigateToLogin, checkUserAuth } = useAuth();
   const [tab, setTab] = useState('playlists');
   const [showCreate, setShowCreate] = useState(false);
   const [downloads, setDownloads] = useState([]);
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
+  const canLoadUserData = Boolean(user && !user.account_sync_pending && !accountSyncError);
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
-    if (user?.id) clearAllContentCache(user.id);
+    if (canLoadUserData) clearAllContentCache(user.id);
     invalidateCache(`my-playlists-${user?.id}`);
     invalidateCache(`liked-playlists-${user?.id}`);
     invalidateCache(`liked-podcasts-${user?.id}`);
@@ -43,30 +43,24 @@ export default function Playlists() {
   }, containerRef);
 
   useEffect(() => {
-    base44.auth.isAuthenticated().then(authed => {
-      setIsAuthed(authed);
-      if (authed) {
-        base44.auth.me().then(setUser).catch(() => {});
-      }
-    }).catch(() => setIsAuthed(false));
     setDownloads(getDownloads());
   }, []);
 
   // My playlists
   const { data: myPlaylists = [], refetch: refetchMine } = useQuery({
     queryKey: ['my-playlists', user?.id],
-    enabled: !!user,
+    enabled: canLoadUserData,
     queryFn: async () => {
       const cacheKey = `my-playlists-${user.id}`;
       const cached = getCache(cacheKey);
       if (cached) return cached;
-      const data = await base44.entities.Playlist.filter({ creator_id: user.id }, '-created_date', 50);
+      const data = await voxylApi.entities.Playlist.filter({ creator_id: user.id }, '-created_date', 50);
       setCache(cacheKey, data, TTL_5MIN);
       setCachedContent(user.id, 'MY_PLAYLISTS', data);
       return data;
     },
     initialData: () => {
-      if (!user) return undefined;
+      if (!canLoadUserData) return undefined;
       const cached = getCachedContent(user.id, 'MY_PLAYLISTS');
       return cached || getCache(`my-playlists-${user.id}`) || undefined;
     }
@@ -75,18 +69,18 @@ export default function Playlists() {
   // Liked playlist IDs
   const { data: likedPlaylistRecords = [] } = useQuery({
     queryKey: ['liked-playlists', user?.id],
-    enabled: !!user && tab === 'playlists',
+    enabled: canLoadUserData && tab === 'playlists',
     queryFn: async () => {
       const cacheKey = `liked-playlists-${user.id}`;
       const cached = getCache(cacheKey);
       if (cached) return cached;
-      const data = await base44.entities.PlaylistLike.filter({ user_id: user.id });
+      const data = await voxylApi.entities.PlaylistLike.filter({ user_id: user.id });
       setCache(cacheKey, data, TTL_5MIN);
       setCachedContent(user.id, 'LIKED_PLAYLISTS', data);
       return data;
     },
     initialData: () => {
-      if (!user) return undefined;
+      if (!canLoadUserData) return undefined;
       const cached = getCachedContent(user.id, 'LIKED_PLAYLISTS');
       return cached || getCache(`liked-playlists-${user.id}`) || undefined;
     }
@@ -103,7 +97,7 @@ export default function Playlists() {
       const results = await Promise.all(
         likedPlaylistIds.
         filter((id) => !myPlaylistIds.has(id)).
-        map((id) => base44.entities.Playlist.filter({ id }).then((r) => r[0]).catch(() => null))
+        map((id) => voxylApi.entities.Playlist.filter({ id }).then((r) => r[0]).catch(() => null))
       );
       return results.filter(Boolean);
     }
@@ -112,8 +106,8 @@ export default function Playlists() {
   // User's recent plays (for sorting)
   const { data: userPlays = [] } = useQuery({
     queryKey: ['user-plays-sort', user?.id],
-    enabled: !!user,
-    queryFn: () => base44.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 500),
+    enabled: canLoadUserData,
+    queryFn: () => voxylApi.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 500),
   });
 
   // Map: feed_url -> last played_at
@@ -127,35 +121,35 @@ export default function Playlists() {
   // Liked podcasts
   const { data: likedPodcasts = [], refetch: refetchPodcasts } = useQuery({
     queryKey: ['liked-podcasts', user?.id],
-    enabled: !!user && tab === 'podcasts',
+    enabled: canLoadUserData && tab === 'podcasts',
     queryFn: async () => {
       const cacheKey = `liked-podcasts-${user.id}`;
       const cached = getCache(cacheKey);
       if (cached) return cached;
-      const data = await base44.entities.PodcastLike.filter({ user_id: user.id }, '-created_date', 100);
+      const data = await voxylApi.entities.PodcastLike.filter({ user_id: user.id }, '-created_date', 100);
       setCache(cacheKey, data, TTL_5MIN);
       setCachedContent(user.id, 'LIKED_PODCASTS', data);
       return data;
     },
     initialData: () => {
-      if (!user) return undefined;
+      if (!canLoadUserData) return undefined;
       const cached = getCachedContent(user.id, 'LIKED_PODCASTS');
       return cached || getCache(`liked-podcasts-${user.id}`) || undefined;
     }
   });
 
   const handleUnlikePodcast = async (podcastLike) => {
-    await base44.entities.PodcastLike.delete(podcastLike.id);
+    await voxylApi.entities.PodcastLike.delete(podcastLike.id);
     refetchPodcasts();
   };
 
   const handleLikePlaylist = async (playlist) => {
     if (!user) return;
-    await base44.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
+    await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
     queryClient.invalidateQueries({ queryKey: ['liked-playlists', user?.id] });
   };
 
-  if (isAuthed === false) {
+  if (!isLoadingAuth && !isAuthenticated) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6 text-center gap-5">
         <div className="w-16 h-16 rounded-2xl gradient-primary flex items-center justify-center glow-primary">
@@ -166,10 +160,30 @@ export default function Playlists() {
           <p className="text-sm text-muted-foreground">{t('loginToAccessHint')}</p>
         </div>
         <button
-          onClick={() => redirectToLogin(window.location.href)}
+          onClick={navigateToLogin}
           className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
         >
           {t('loginWithGoogle')}
+        </button>
+      </div>
+    );
+  }
+
+  if (accountSyncError) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6 text-center gap-5">
+        <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/30 flex items-center justify-center">
+          <RefreshCw size={28} className="text-primary" />
+        </div>
+        <div>
+          <h2 className="text-xl font-grotesk font-bold text-foreground mb-1">Account sync needed</h2>
+          <p className="text-sm text-muted-foreground">{accountSyncError.message}</p>
+        </div>
+        <button
+          onClick={checkUserAuth}
+          className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
+        >
+          Try again
         </button>
       </div>
     );

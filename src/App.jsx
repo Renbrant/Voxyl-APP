@@ -20,7 +20,7 @@ import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
 import PodcastDetail from '@/pages/PodcastDetail';
 import AuthCallback from '@/pages/AuthCallback';
-import { base44ConfigError, isBase44Configured } from '@/lib/app-params';
+import ClerkTest from '@/pages/ClerkTest';
 
 const AppErrorScreen = ({ title, message }) => (
   <div className="fixed inset-0 flex items-center justify-center bg-[#0f0d0b] px-6 text-white">
@@ -88,7 +88,7 @@ const AuthenticatedApp = () => {
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-2xl overflow-hidden">
-            <img src="https://media.base44.com/images/public/69e2ae13aa773b21002b1fe4/26d262763_voxyllogo.png" alt="Voxyl" className="w-full h-full object-contain" />
+            <div className="flex h-full w-full items-center justify-center bg-primary text-lg font-bold text-primary-foreground">V</div>
           </div>
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
@@ -120,6 +120,7 @@ const AuthenticatedApp = () => {
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/podcast/:feedUrl" element={<PodcastDetail />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/clerk-test" element={<ClerkTest />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
     </>
@@ -127,15 +128,6 @@ const AuthenticatedApp = () => {
 };
 
 function App() {
-  if (!isBase44Configured) {
-    return (
-      <AppErrorScreen
-        title="Configuração do aplicativo ausente"
-        message={base44ConfigError}
-      />
-    );
-  }
-
   return (
     <AppErrorBoundary>
       <AuthProvider>
