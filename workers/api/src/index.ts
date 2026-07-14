@@ -531,14 +531,37 @@ function parseIpv6Literal(hostname: string): bigint | null {
   return value;
 }
 
-function isPrivateIpv6(value: bigint): boolean {
-  return value === 0n ||
-    value === 1n ||
-    (value >> 120n) === 0xffn ||
-    (value >> 121n) === 0b1111110n ||
-    (value >> 122n) === 0b1111111010n ||
-    (value >> 112n) === 0x64ff9bn ||
-    (value >> 32n) === 0xffffn;
+function ipv6PrefixFromString(prefix: string): bigint {
+  const parsed = parseIpv6Literal(prefix);
+
+  if (parsed === null) {
+    throw new Error(`Invalid IPv6 prefix: ${prefix}`);
+  }
+
+  return parsed;
+}
+
+function ipv6MatchesPrefix(value: bigint, prefix: bigint, prefixLength: number): boolean {
+  if (prefixLength === 0) {
+    return true;
+  }
+
+  const shift = BigInt(128 - prefixLength);
+  return (value >> shift) === (prefix >> shift);
+}
+
+const blockedIpv6Prefixes: Array<[bigint, number]> = [
+  [ipv6PrefixFromString("::"), 128],
+  [ipv6PrefixFromString("::1"), 128],
+  [ipv6PrefixFromString("fc00::"), 7],
+  [ipv6PrefixFromString("fe80::"), 10],
+  [ipv6PrefixFromString("ff00::"), 8],
+  [ipv6PrefixFromString("64:ff9b::"), 96],
+  [ipv6PrefixFromString("::ffff:0.0.0.0"), 96],
+];
+
+function isUnsafeIpv6(value: bigint): boolean {
+  return blockedIpv6Prefixes.some(([prefix, length]) => ipv6MatchesPrefix(value, prefix, length));
 }
 
 function validatePublicFeedUrl(rawUrl: string): string {
@@ -581,20 +604,9 @@ function validatePublicFeedUrl(rawUrl: string): string {
   }
 
   const ipv6Hostname = hostname.replace(/^\[/, "").replace(/\]$/, "");
-
-  if (ipv6Hostname.includes(":") &&
-      (ipv6Hostname === "::" ||
-       ipv6Hostname === "::1" ||
-       ipv6Hostname.startsWith("fc") ||
-       ipv6Hostname.startsWith("fd") ||
-       ipv6Hostname.startsWith("fe80:") ||
-       ipv6Hostname.startsWith("ff"))) {
-    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not public");
-  }
-
   const ipv6 = parseIpv6Literal(hostname);
 
-  if (ipv6 !== null && isPrivateIpv6(ipv6)) {
+  if (ipv6 !== null && isUnsafeIpv6(ipv6)) {
     throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not public");
   }
 
@@ -602,6 +614,9 @@ function validatePublicFeedUrl(rawUrl: string): string {
     throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not allowed");
   }
 
+  // Cloudflare Workers fetch does not expose DNS result pinning to user code. Hostname
+  // allowlisting here is lexical; post-deployment tests must verify platform behavior
+  // for hostnames that resolve to non-public addresses.
   parsed.hash = "";
   return parsed.toString();
 }
@@ -688,11 +703,59 @@ function firstImage(...values: unknown[]): string {
   return "";
 }
 
+const audioExtensionPattern = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)(?:[?#]|$)/i;
+const genericBinaryMimeTypes = new Set(["", "application/octet-stream", "binary/octet-stream"]);
+
+function hasAudioExtension(url: string): boolean {
+  return audioExtensionPattern.test(url);
+}
+
+function isPlayableAudioUrl(url: string, type: string): boolean {
+  const normalizedType = type.toLowerCase();
+
+  if (normalizedType.startsWith("audio/")) {
+    return true;
+  }
+
+  return genericBinaryMimeTypes.has(normalizedType) && hasAudioExtension(url);
+}
+
+function mediaContentImageUrl(value: unknown): string {
+  for (const item of asArray(value)) {
+    const url = attr(item, "url");
+    const type = attr(item, "type").toLowerCase();
+    const medium = attr(item, "medium").toLowerCase();
+
+    if (url && (type.startsWith("image/") || medium === "image")) {
+      return url;
+    }
+  }
+
+  return "";
+}
+
+function episodeImageUrl(source: Record<string, unknown>): string {
+  return firstImage(source["itunes:image"], source["media:thumbnail"]) || mediaContentImageUrl(source["media:content"]);
+}
+
+function atomAuthorText(value: unknown): string {
+  for (const author of asArray(value)) {
+    const name = isRecord(author) ? firstText(author.name) : firstText(author);
+
+    if (name) {
+      return name;
+    }
+  }
+
+  return "";
+}
+
 function getRssAudioUrl(item: Record<string, unknown>, baseUrl: string): string {
   for (const enclosure of asArray(item.enclosure)) {
     const url = attr(enclosure, "url");
+    const type = attr(enclosure, "type");
 
-    if (url) {
+    if (url && isPlayableAudioUrl(url, type)) {
       return absolutePublicUrl(url, baseUrl);
     }
   }
@@ -702,7 +765,7 @@ function getRssAudioUrl(item: Record<string, unknown>, baseUrl: string): string 
     const type = attr(media, "type").toLowerCase();
     const medium = attr(media, "medium").toLowerCase();
 
-    if (url && (type.startsWith("audio/") || medium === "audio" || /\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(url))) {
+    if (url && (type.startsWith("audio/") || medium === "audio" || isPlayableAudioUrl(url, type))) {
       return absolutePublicUrl(url, baseUrl);
     }
   }
@@ -716,7 +779,7 @@ function getAtomAudioUrl(entry: Record<string, unknown>, baseUrl: string): strin
     const href = attr(link, "href");
     const type = attr(link, "type").toLowerCase();
 
-    if (href && rel === "enclosure" && (type.startsWith("audio/") || /\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(href))) {
+    if (href && rel === "enclosure" && isPlayableAudioUrl(href, type)) {
       return absolutePublicUrl(href, baseUrl);
     }
   }
@@ -757,7 +820,7 @@ function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFe
 
   const guid = firstText(item.guid);
   const link = absolutePublicUrl(item.link, feed.feedUrl);
-  const image = absolutePublicUrl(firstImage(item["itunes:image"], item["media:thumbnail"], item["media:content"]), feed.feedUrl) || feed.image;
+  const image = absolutePublicUrl(episodeImageUrl(item), feed.feedUrl) || feed.image;
 
   return {
     id: stableEpisodeId(guid, audioUrl, link, firstText(item.title)),
@@ -784,7 +847,7 @@ function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<Normalized
 
   const guid = firstText(entry.id);
   const link = getAtomAlternateLink(entry, feed.feedUrl);
-  const image = absolutePublicUrl(firstImage(entry["itunes:image"], entry["media:thumbnail"], entry["media:content"]), feed.feedUrl) || feed.image;
+  const image = absolutePublicUrl(episodeImageUrl(entry), feed.feedUrl) || feed.image;
 
   return {
     id: stableEpisodeId(guid, audioUrl, link, firstText(entry.title)),
@@ -796,7 +859,7 @@ function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<Normalized
     pubDate: firstText(entry.published, entry.updated),
     duration: firstText(entry["itunes:duration"]),
     image,
-    author: firstText(entry.author, feed.author),
+    author: atomAuthorText(entry.author) || feed.author,
     feedTitle: feed.title,
     feedUrl: feed.feedUrl,
   };
@@ -866,7 +929,7 @@ function parseNormalizedFeed(xml: string, feedUrl: string): NormalizedFeed {
       title: firstText(atomFeed.title),
       description: htmlToText(atomFeed.subtitle),
       image: feedImage,
-      author: firstText(atomFeed.author),
+      author: atomAuthorText(atomFeed.author),
       feedUrl,
       link: getAtomAlternateLink(atomFeed, feedUrl),
     };
@@ -892,6 +955,10 @@ function cloneFeedWithCount(feed: NormalizedFeed, count: number): NormalizedFeed
   };
 }
 
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
 async function readResponseBodyLimited(response: Response): Promise<string> {
   const contentLength = response.headers.get("content-length");
 
@@ -909,7 +976,19 @@ async function readResponseBodyLimited(response: Response): Promise<string> {
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let result: ReadableStreamReadResult<Uint8Array>;
+
+      try {
+        result = await reader.read();
+      } catch (error) {
+        if (isTimeoutError(error)) {
+          throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
+        }
+
+        throw error;
+      }
+
+      const { done, value } = result;
 
       if (done) {
         break;
@@ -943,6 +1022,7 @@ async function readResponseBodyLimited(response: Response): Promise<string> {
 async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl: string }> {
   let currentUrl = validatePublicFeedUrl(initialUrl);
   const visited = new Set<string>();
+  const signal = AbortSignal.timeout(RSS_FETCH_TIMEOUT_MS);
 
   for (let redirects = 0; redirects <= RSS_FETCH_MAX_REDIRECTS; redirects += 1) {
     if (visited.has(currentUrl)) {
@@ -960,10 +1040,10 @@ async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl
           "User-Agent": RSS_FETCH_USER_AGENT,
           Accept: RSS_FETCH_ACCEPT,
         },
-        signal: AbortSignal.timeout(RSS_FETCH_TIMEOUT_MS),
+        signal,
       });
     } catch (error) {
-      if (error instanceof Error && error.name === "TimeoutError") {
+      if (isTimeoutError(error)) {
         throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
       }
 
@@ -989,10 +1069,18 @@ async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl
       throw new RssFetchError(502, "upstream-unavailable", "Feed origin returned an error");
     }
 
-    return {
-      xml: await readResponseBodyLimited(response),
-      finalUrl: currentUrl,
-    };
+    try {
+      return {
+        xml: await readResponseBodyLimited(response),
+        finalUrl: currentUrl,
+      };
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
+      }
+
+      throw error;
+    }
   }
 
   throw new RssFetchError(502, "upstream-unavailable", "Feed redirect limit was reached");

@@ -82,6 +82,22 @@ function atomFeed() {
     </feed>`;
 }
 
+function atomFeedWithAuthors() {
+  return `<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <title>Authored Atom Podcast</title>
+      <author><name>Feed Atom Author</name></author>
+      <link rel="alternate" href="https://podcasts.example.com/atom" />
+      <entry>
+        <id>tag:example.com,2024:atom-author-1</id>
+        <title>Authored Atom Episode</title>
+        <author><name>Episode Atom Author</name></author>
+        <link rel="enclosure" href="https://cdn.example.com/atom-author-1.mp3" type="audio/mpeg" />
+        <published>2024-01-02T00:00:00Z</published>
+      </entry>
+    </feed>`;
+}
+
 function mockFetchSequence(responses, onRequest) {
   let index = 0;
   mock.method(globalThis, 'fetch', async (url, options) => {
@@ -281,6 +297,35 @@ describe('RSS fetch Worker route', () => {
     assert.equal(linkLocalResponse.status, 403);
   });
 
+  it('rejects blocked IPv6 CIDR ranges', async () => {
+    const urls = [
+      'http://[fe80::1]/feed.xml',
+      'http://[fe90::1]/feed.xml',
+      'http://[fea0::1]/feed.xml',
+      'http://[febf::1]/feed.xml',
+      'http://[fc00::1]/feed.xml',
+      'http://[fd00::1]/feed.xml',
+      'http://[ff02::1]/feed.xml',
+      'http://[64:ff9b::c0a8:101]/feed.xml',
+    ];
+
+    for (const url of urls) {
+      const response = await worker.fetch(request('/api/rss/fetch', { url }), env());
+      const data = await body(response);
+
+      assert.equal(response.status, 403, url);
+      assert.equal(data.code, 'unsafe-feed-url', url);
+    }
+  });
+
+  it('does not reject a clearly public IPv6 literal during URL validation', async () => {
+    mockFetchSequence([xmlResponse(rssFeed())]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://[2606:4700:4700::1111]/feed.xml' }), env());
+
+    assert.equal(response.status, 200);
+  });
+
   it('rejects unsafe redirect destinations', async () => {
     mockFetchSequence([new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/feed.xml' } })]);
 
@@ -304,8 +349,37 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.code, 'upstream-unavailable');
   });
 
+  it('uses one global timeout signal across redirects', async () => {
+    const signals = [];
+    mockFetchSequence([
+      new Response(null, { status: 302, headers: { location: 'https://feeds.example.com/final.xml' } }),
+      xmlResponse(rssFeed()),
+    ], (url, options) => { signals.push(options.signal); });
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
+
+    assert.equal(response.status, 200);
+    assert.equal(signals.length, 2);
+    assert.equal(signals[0], signals[1]);
+  });
+
   it('maps upstream timeout to 504', async () => {
     mockFetchSequence([new DOMException('timeout', 'TimeoutError')]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 504);
+    assert.equal(data.code, 'upstream-timeout');
+  });
+
+  it('maps timeout while reading the response body to 504', async () => {
+    const stream = new ReadableStream({
+      pull() {
+        throw new DOMException('timeout', 'AbortError');
+      },
+    });
+    mockFetchSequence([new Response(stream, { status: 200 })]);
 
     const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
     const data = await body(response);
@@ -342,6 +416,78 @@ describe('RSS fetch Worker route', () => {
 
     assert.equal(response.status, 422);
     assert.equal(data.code, 'invalid-feed-xml');
+  });
+
+  it('skips image enclosures and uses a later audio enclosure', async () => {
+    const item = `<item>
+      <title>Mixed enclosures</title>
+      <enclosure url="https://cdn.example.com/cover.jpg" type="image/jpeg" />
+      <enclosure url="https://cdn.example.com/audio.mp3" type="audio/mpeg" />
+    </item>`;
+    mockFetchSequence([xmlResponse(rssFeed(item))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env()));
+
+    assert.equal(data.items.length, 1);
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/audio.mp3');
+  });
+
+  it('filters feeds containing only an image enclosure', async () => {
+    const item = `<item>
+      <title>Image only</title>
+      <enclosure url="https://cdn.example.com/cover.jpg" type="image/jpeg" />
+    </item>`;
+    mockFetchSequence([xmlResponse(rssFeed(item))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env()));
+
+    assert.deepEqual(data.items, []);
+  });
+
+  it('accepts audio enclosure URLs without a MIME type', async () => {
+    const item = `<item>
+      <title>No MIME</title>
+      <enclosure url="https://cdn.example.com/audio.flac" />
+    </item>`;
+    mockFetchSequence([xmlResponse(rssFeed(item))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env()));
+
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/audio.flac');
+  });
+
+  it('accepts generic binary enclosures with audio extensions', async () => {
+    const item = `<item>
+      <title>Generic binary</title>
+      <enclosure url="https://cdn.example.com/audio.mp3" type="application/octet-stream" />
+    </item>`;
+    mockFetchSequence([xmlResponse(rssFeed(item))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env()));
+
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/audio.mp3');
+  });
+
+  it('does not use audio media:content as episode artwork', async () => {
+    const item = `<item>
+      <title>Audio media only</title>
+      <media:content url="https://cdn.example.com/episode.mp3" type="audio/mpeg" />
+    </item>`;
+    mockFetchSequence([xmlResponse(rssFeed(item))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env()));
+
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/episode.mp3');
+    assert.equal(data.items[0].image, 'https://cdn.example.com/feed.jpg');
+  });
+
+  it('normalizes standard Atom author name structures', async () => {
+    mockFetchSequence([xmlResponse(atomFeedWithAuthors())]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/atom.xml' }), env()));
+
+    assert.equal(data.author, 'Feed Atom Author');
+    assert.equal(data.items[0].author, 'Episode Atom Author');
   });
 
   it('uses fresh KV cache hits without a second origin fetch', async () => {
