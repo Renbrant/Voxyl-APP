@@ -1,5 +1,6 @@
 // Detect browser/device language or get from localStorage
 const detectLang = () => {
+  if (typeof localStorage === 'undefined' || typeof navigator === 'undefined') return 'pt';
   const saved = localStorage.getItem('voxyl_language');
   if (saved === 'en' || saved === 'pt') return saved;
   
@@ -82,6 +83,13 @@ const translations = {
   exploreCatCrime: { pt: '🔍 True Crime', en: '🔍 True Crime' },
   exploreCatComedy: { pt: '😂 Comédia', en: '😂 Comedy' },
   exploreCatPolitics: { pt: '🗳️ Política', en: '🗳️ Politics' },
+  podcastSearchNotConfigured: { pt: 'A busca de podcasts ainda não está configurada. Tente novamente mais tarde.', en: 'Podcast search is not configured yet. Please try again later.' },
+  podcastSearchTimeout: { pt: 'A busca de podcasts demorou demais. Tente novamente em instantes.', en: 'Podcast search took too long. Please try again in a moment.' },
+  podcastSearchRateLimit: { pt: 'A busca de podcasts está temporariamente ocupada. Tente novamente em breve.', en: 'Podcast search is temporarily busy. Please try again soon.' },
+  podcastSearchUnavailable: { pt: 'A busca de podcasts está temporariamente indisponível. Tente novamente mais tarde.', en: 'Podcast search is temporarily unavailable. Please try again later.' },
+  podcastSearchInvalidRequest: { pt: 'Digite um termo de busca de podcast mais curto.', en: 'Please enter a shorter podcast search term.' },
+  podcastSearchFailed: { pt: 'Não foi possível buscar podcasts. Tente novamente.', en: 'Podcast search failed. Please try again.' },
+  podcastSearchNoResults: { pt: 'Nenhum podcast encontrado.', en: 'No podcasts found.' },
 
   // Playlists page
   playlistsTitle: { pt: 'Curtidas', en: 'Saved' },

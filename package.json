@@ -8,6 +8,7 @@
     "build": "vite build && node scripts/generate-version.mjs",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "postinstall": "patch-package"
