@@ -865,7 +865,65 @@ function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<Normalized
   };
 }
 
-function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBaseUrl: string): NormalizedFeed {
+function normalizeRssItems(
+  sourceItems: unknown[],
+  feed: Omit<NormalizedFeed, "items">,
+  resolutionBaseUrl: string,
+  count: number,
+): NormalizedEpisode[] {
+  const items: NormalizedEpisode[] = [];
+
+  for (const sourceItem of sourceItems) {
+    if (!isRecord(sourceItem)) {
+      continue;
+    }
+
+    const item = normalizeRssItem(sourceItem, feed, resolutionBaseUrl);
+
+    if (!item) {
+      continue;
+    }
+
+    items.push(item);
+
+    if (items.length >= count) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+function normalizeAtomItems(
+  sourceEntries: unknown[],
+  feed: Omit<NormalizedFeed, "items">,
+  resolutionBaseUrl: string,
+  count: number,
+): NormalizedEpisode[] {
+  const items: NormalizedEpisode[] = [];
+
+  for (const sourceEntry of sourceEntries) {
+    if (!isRecord(sourceEntry)) {
+      continue;
+    }
+
+    const item = normalizeAtomItem(sourceEntry, feed, resolutionBaseUrl);
+
+    if (!item) {
+      continue;
+    }
+
+    items.push(item);
+
+    if (items.length >= count) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBaseUrl: string, count = 100): NormalizedFeed {
   let parsed: unknown;
 
   try {
@@ -911,10 +969,7 @@ function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBa
       link: absolutePublicUrl(channel.link, resolutionBaseUrl),
     };
     const sourceItems = rssChannel ? asArray(channel.item) : asArray((parsed["rdf:RDF"] as Record<string, unknown>).item);
-    const items = sourceItems
-      .filter(isRecord)
-      .map((item) => normalizeRssItem(item, feed, resolutionBaseUrl))
-      .filter((item): item is NormalizedEpisode => item !== null);
+    const items = normalizeRssItems(sourceItems, feed, resolutionBaseUrl, count);
 
     if (!feed.title && items.length === 0) {
       throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
@@ -933,10 +988,7 @@ function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBa
       feedUrl: requestedFeedUrl,
       link: getAtomAlternateLink(atomFeed, resolutionBaseUrl),
     };
-    const items = asArray(atomFeed.entry)
-      .filter(isRecord)
-      .map((entry) => normalizeAtomItem(entry, feed, resolutionBaseUrl))
-      .filter((item): item is NormalizedEpisode => item !== null);
+    const items = normalizeAtomItems(asArray(atomFeed.entry), feed, resolutionBaseUrl, count);
 
     if (!feed.title && items.length === 0) {
       throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
@@ -1125,7 +1177,7 @@ async function putRssCacheEntry(env: Env, key: string, feed: NormalizedFeed): Pr
 
 async function rssFetchResponse(request: Request, env: Env): Promise<Response> {
   const payload = await parseRssFetchRequest(request);
-  const cacheKey = `rss-feed:v1:${await sha256Hex(payload.url)}`;
+  const cacheKey = `rss-feed:v2:${payload.count}:${await sha256Hex(payload.url)}`;
   const cached = await getRssCacheEntry(env, cacheKey);
 
   if (cached && Date.now() - cached.cachedAt <= RSS_FETCH_FRESH_TTL_MS) {
@@ -1137,7 +1189,7 @@ async function rssFetchResponse(request: Request, env: Env): Promise<Response> {
 
   try {
     const { xml, finalUrl } = await fetchFeedXml(payload.url);
-    const feed = parseNormalizedFeed(xml, payload.url, finalUrl);
+    const feed = parseNormalizedFeed(xml, payload.url, finalUrl, payload.count);
     await putRssCacheEntry(env, cacheKey, feed);
 
     return jsonResponse(cloneFeedWithCount(feed, payload.count), 200, {
