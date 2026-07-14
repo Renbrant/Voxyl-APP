@@ -240,6 +240,19 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.items[0].feedUrl, 'https://feeds.example.com/show.xml');
   });
 
+  it('preserves mixed-case RSS pubDate values from the streaming parser', async () => {
+    mockFetchSequence([xmlResponse(rssFeed(`<item>
+      <guid>mixed-case-date</guid>
+      <title>Mixed Case Date</title>
+      <enclosure url="https://cdn.example.com/mixed-case-date.mp3" type="audio/mpeg" />
+      <pubDate>Tue, 14 Jul 2026 12:00:00 GMT</pubDate>
+    </item>`))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/mixed-case-date.xml' }), env()));
+
+    assert.equal(data.items[0].pubDate, 'Tue, 14 Jul 2026 12:00:00 GMT');
+  });
+
   it('normalizes a valid Atom feed', async () => {
     mockFetchSequence([xmlResponse(atomFeed())]);
 

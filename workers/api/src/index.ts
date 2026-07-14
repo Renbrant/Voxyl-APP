@@ -917,7 +917,7 @@ function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFe
     description: htmlToText(item["content:encoded"] ?? item.description ?? item.summary),
     audioUrl,
     link,
-    pubDate: firstText(item.pubDate, item["dc:date"]),
+    pubDate: firstText(item.pubdate, item.pubDate, item["dc:date"]),
     duration: firstText(item["itunes:duration"], item.duration),
     image,
     author: firstText(item["itunes:author"], item.author, item["dc:creator"], feed.author),
