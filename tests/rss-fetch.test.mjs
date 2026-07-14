@@ -6,6 +6,9 @@ import worker from '../workers/api/src/index.ts';
 const baseEnv = {
   CLERK_AUTHORIZED_PARTIES: 'https://v.renbrant.com,http://localhost:5173',
 };
+const MIB = 1024 * 1024;
+const OLD_RSS_FETCH_MAX_BYTES = 2 * MIB;
+const RSS_FETCH_MAX_BYTES = 4 * MIB;
 
 class MemoryKv {
   constructor() {
@@ -64,6 +67,12 @@ function rssFeed(items = '') {
     </rss>`;
 }
 
+function rssFeedWithMinimumBytes(minBytes) {
+  const base = rssFeed();
+  const paddingSize = Math.max(0, minBytes - new TextEncoder().encode(base).byteLength);
+  return base.replace('</channel>', `<docs>${'x'.repeat(paddingSize)}</docs></channel>`);
+}
+
 function atomFeed() {
   return `<?xml version="1.0"?>
     <feed xmlns="http://www.w3.org/2005/Atom">
@@ -117,6 +126,22 @@ function xmlResponse(xml, init = {}) {
       ...init.headers,
     },
     ...init,
+  });
+}
+
+function byteStream(byteCount, chunkSize = 64 * 1024) {
+  let sent = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (sent >= byteCount) {
+        controller.close();
+        return;
+      }
+
+      const nextSize = Math.min(chunkSize, byteCount - sent);
+      sent += nextSize;
+      controller.enqueue(new Uint8Array(nextSize));
+    },
   });
 }
 
@@ -426,10 +451,31 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.code, 'upstream-unavailable');
   });
 
-  it('maps oversized responses to 413', async () => {
-    mockFetchSequence([new Response('', { status: 200, headers: { 'content-length': String(2 * 1024 * 1024 + 1) } })]);
+  it('accepts valid feeds above the old 2 MiB limit but below 4 MiB', async () => {
+    mockFetchSequence([xmlResponse(rssFeedWithMinimumBytes(OLD_RSS_FETCH_MAX_BYTES + 128 * 1024))]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/large.xml' }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.title, 'Test Podcast');
+    assert.equal(data.items.length, 1);
+  });
+
+  it('maps Content-Length above 4 MiB to 413', async () => {
+    mockFetchSequence([new Response('', { status: 200, headers: { 'content-length': String(RSS_FETCH_MAX_BYTES + 1) } })]);
 
     const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 413);
+    assert.equal(data.code, 'feed-too-large');
+  });
+
+  it('maps streamed responses above 4 MiB without Content-Length to 413', async () => {
+    mockFetchSequence([new Response(byteStream(RSS_FETCH_MAX_BYTES + 1), { status: 200 })]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/streamed-large.xml' }), env());
     const data = await body(response);
 
     assert.equal(response.status, 413);
