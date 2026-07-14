@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
+import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
 
 export default function Explore() {
   const location = useLocation();
@@ -28,6 +29,7 @@ export default function Explore() {
   const [search, setSearch] = useState(params.get('q') || '');
   const [podcastResults, setPodcastResults] = useState([]);
   const [podcastLoading, setPodcastLoading] = useState(false);
+  const [podcastError, setPodcastError] = useState('');
   const [selectedPodcast, setSelectedPodcast] = useState(null);
   const [voxylSearch, setVoxylSearch] = useState(params.get('vq') || '');
   const [userSearch, setUserSearch] = useState('');
@@ -192,21 +194,32 @@ export default function Explore() {
   // Podcast Index search
   useEffect(() => {
     if (tab !== 'podcasts') return;
-    if (!debouncedQuery.trim()) { setPodcastResults([]); return; }
+    if (!debouncedQuery.trim()) { setPodcastResults([]); setPodcastError(''); return; }
+    let cancelled = false;
     setPodcastLoading(true);
-    const maxDuration = user?.max_duration || 0;
+    setPodcastError('');
     voxylApi.functions.invoke('searchPodcasts', { 
       query: debouncedQuery, 
-      maxDuration,
       language: podcastLanguage,
       sortBy: podcastSortBy,
       category: podcastCategory,
     })
       .then(res => {
+        if (cancelled) return;
         setPodcastResults(res.data?.results || []);
-        setPodcastLoading(false);
       })
-      .catch(() => setPodcastLoading(false));
+      .catch(error => {
+        if (cancelled) return;
+        setPodcastResults([]);
+        setPodcastError(getPodcastSearchErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setPodcastLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [debouncedQuery, tab, user, podcastLanguage, podcastSortBy, podcastCategory]);
 
   const filteredPlaylists = playlists
@@ -522,7 +535,13 @@ export default function Explore() {
                 {[...Array(5)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
               </div>
             )}
-            {!podcastLoading && podcastResults.map((podcast, i) => (
+            {!podcastLoading && podcastError && (
+              <div className="text-center py-16 text-muted-foreground">
+                <p className="text-4xl mb-3">⚠️</p>
+                <p className="text-sm">{podcastError}</p>
+              </div>
+            )}
+            {!podcastLoading && !podcastError && podcastResults.map((podcast, i) => (
               <PodcastResultCard
                 key={podcast.id}
                 podcast={podcast}
@@ -532,7 +551,7 @@ export default function Explore() {
                 liked={likedFeedUrls.has(podcast.feedUrl)}
               />
             ))}
-            {!podcastLoading && search.trim() && podcastResults.length === 0 && (
+            {!podcastLoading && !podcastError && search.trim() && podcastResults.length === 0 && (
               <div className="text-center py-16 text-muted-foreground">
                 <p className="text-4xl mb-3">🔍</p>
                 <p>{t('exploreNoFound')} "{search}"</p>

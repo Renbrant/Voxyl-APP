@@ -31,6 +31,96 @@ interface Env {
   CLERK_JWT_KEY: string;
   CLERK_AUTHORIZED_PARTIES: string;
   CLERK_ISSUER?: string;
+  PODCAST_INDEX_API_KEY?: string;
+  PODCAST_INDEX_API_SECRET?: string;
+}
+
+const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/3.0 (+https://v.renbrant.com)";
+const PODCAST_SEARCH_TIMEOUT_MS = 8000;
+const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
+const PODCAST_SEARCH_MAX_RESULTS = 50;
+const PODCAST_SEARCH_PROVIDER_MAX_RESULTS = 100;
+
+const podcastLanguageAliases: Record<string, string[]> = {
+  pt: ["pt", "portuguese", "portugues", "português"],
+  en: ["en", "english"],
+  es: ["es", "spanish", "espanol", "español"],
+  fr: ["fr", "french", "français", "francais"],
+  de: ["de", "german", "deutsch"],
+  it: ["it", "italian", "italiano"],
+  ja: ["ja", "japanese", "日本語"],
+};
+
+const podcastCategoryMap: Record<string, string> = {
+  technology: "102",
+  business: "9",
+  education: "11",
+  entertainment: "12",
+  sports: "77",
+  health: "14",
+  news: "55",
+  science: "67",
+  "true crime": "103",
+  comedy: "10",
+  politics: "59",
+  tecnologia: "102",
+  "negócios": "9",
+  "educação": "11",
+  entretenimento: "12",
+  esportes: "77",
+  "saúde": "14",
+  "notícias": "55",
+  "ciência": "67",
+  "comédia": "10",
+  "política": "59",
+};
+
+const allowedPodcastSorts = new Set(["", "relevance", "popularity", "episodes", "recent", "frequency"]);
+
+type PodcastSearchRequest = {
+  query: string;
+  maxDuration: number;
+  language: string;
+  sortBy: string;
+  category: string;
+};
+
+type PodcastSearchErrorCode =
+  | "invalid-request"
+  | "provider-configuration"
+  | "provider-authentication"
+  | "provider-rate-limit"
+  | "provider-timeout"
+  | "provider-unavailable"
+  | "provider-response"
+  | "internal-error";
+
+type PodcastSearchResult = {
+  id: string;
+  title: string;
+  author: string;
+  description: string;
+  image: string;
+  feedUrl: string;
+  website: string;
+  language: string;
+  categories: Record<string, string>;
+  episodeCount: number;
+  latestPublishTime: number | null;
+  oldestPublishTime: number | null;
+  lastUpdateTime: number | null;
+};
+
+class PodcastSearchError extends Error {
+  readonly status: number;
+  readonly code: PodcastSearchErrorCode;
+
+  constructor(status: number, code: PodcastSearchErrorCode, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
 }
 
 function jsonResponse(body: unknown, status = 200, headers?: Record<string, string>): Response {
@@ -172,6 +262,10 @@ function isTopPodcastsRoute(pathname: string): boolean {
   return pathname === "/functions/getTopPodcastsByPlayback" || pathname === "/api/functions/getTopPodcastsByPlayback";
 }
 
+function isPodcastSearchRoute(pathname: string): boolean {
+  return pathname === "/api/functions/searchPodcasts" || pathname === "/api/podcasts/search";
+}
+
 function getPlaylistId(pathname: string): string | null {
   const prefixes = ["/playlists/", "/api/playlists/"];
 
@@ -211,6 +305,312 @@ function healthCheckResponse(request: Request): Response {
   }
 
   return jsonResponse(healthResponse);
+}
+
+async function sha1Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function generatePodcastIndexAuthHeaders(
+  apiKey: string,
+  apiSecret: string,
+  timestamp = Math.floor(Date.now() / 1000),
+): Promise<Record<string, string>> {
+  return {
+    "User-Agent": PODCAST_INDEX_USER_AGENT,
+    "X-Auth-Date": String(timestamp),
+    "X-Auth-Key": apiKey,
+    Authorization: await sha1Hex(`${apiKey}${apiSecret}${timestamp}`),
+  };
+}
+
+function parseOptionalString(value: unknown, fieldName: string): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  if (typeof value !== "string") {
+    throw new PodcastSearchError(400, "invalid-request", `${fieldName} must be a string`);
+  }
+
+  return value.trim();
+}
+
+async function parsePodcastSearchRequest(request: Request): Promise<PodcastSearchRequest> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastSearchError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastSearchError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+  const query = parseOptionalString(payload.query, "query");
+
+  if (!query) {
+    throw new PodcastSearchError(400, "invalid-request", "query is required");
+  }
+
+  if (query.length > PODCAST_SEARCH_MAX_QUERY_LENGTH) {
+    throw new PodcastSearchError(400, "invalid-request", `query must be ${PODCAST_SEARCH_MAX_QUERY_LENGTH} characters or less`);
+  }
+
+  const language = parseOptionalString(payload.language, "language").toLowerCase();
+  const sortBy = parseOptionalString(payload.sortBy, "sortBy").toLowerCase();
+  const category = parseOptionalString(payload.category, "category").toLowerCase();
+  const maxDuration = payload.maxDuration === undefined || payload.maxDuration === null || payload.maxDuration === ""
+    ? 0
+    : Number(payload.maxDuration);
+
+  if (!Number.isFinite(maxDuration) || maxDuration < 0 || maxDuration > 24 * 60) {
+    throw new PodcastSearchError(400, "invalid-request", "maxDuration must be a number between 0 and 1440");
+  }
+
+  if (language && !/^[a-z]{2}(-[a-z0-9]+)?$/i.test(language)) {
+    throw new PodcastSearchError(400, "invalid-request", "language must be a valid language code");
+  }
+
+  if (!allowedPodcastSorts.has(sortBy)) {
+    throw new PodcastSearchError(400, "invalid-request", "sortBy is not supported");
+  }
+
+  if (category.length > 80) {
+    throw new PodcastSearchError(400, "invalid-request", "category must be 80 characters or less");
+  }
+
+  return {
+    query,
+    maxDuration,
+    language,
+    sortBy: sortBy || "relevance",
+    category,
+  };
+}
+
+function normalizePodcastLanguage(language: string): string {
+  return language.toLowerCase().replace(/_/g, "-").split("-")[0].trim();
+}
+
+function matchesPodcastLanguage(feedLanguage: string, requestedLanguage: string): boolean {
+  if (!requestedLanguage) {
+    return true;
+  }
+
+  if (!feedLanguage) {
+    return false;
+  }
+
+  const normalized = normalizePodcastLanguage(feedLanguage);
+  const aliases = podcastLanguageAliases[requestedLanguage] || [requestedLanguage];
+  return aliases.some((alias) => normalized === alias || feedLanguage.toLowerCase().startsWith(alias));
+}
+
+function getProviderSearchUrl(payload: PodcastSearchRequest): URL {
+  const url = new URL(`${PODCAST_INDEX_BASE_URL}/search/byterm`);
+  url.searchParams.set("q", payload.query);
+  url.searchParams.set("max", String(PODCAST_SEARCH_PROVIDER_MAX_RESULTS));
+  url.searchParams.set("fulltext", "");
+  url.searchParams.set("similar", "");
+
+  return url;
+}
+
+function stringFromProvider(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function numberFromProvider(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function normalizePodcastCategories(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const categories: Record<string, string> = {};
+
+  for (const [key, category] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof category === "string") {
+      categories[key] = category;
+    }
+  }
+
+  return categories;
+}
+
+function normalizePodcastFeed(feed: unknown): PodcastSearchResult | null {
+  if (!feed || typeof feed !== "object") {
+    return null;
+  }
+
+  const typedFeed = feed as Record<string, unknown>;
+  const id = numberFromProvider(typedFeed.id)?.toString() || stringFromProvider(typedFeed.id);
+  const title = stringFromProvider(typedFeed.title).trim();
+  const feedUrl = stringFromProvider(typedFeed.url).trim();
+
+  if (!id || !title || !feedUrl) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    author: stringFromProvider(typedFeed.author),
+    description: stringFromProvider(typedFeed.description),
+    image: stringFromProvider(typedFeed.image) || stringFromProvider(typedFeed.artwork),
+    feedUrl,
+    website: stringFromProvider(typedFeed.link),
+    language: stringFromProvider(typedFeed.language),
+    categories: normalizePodcastCategories(typedFeed.categories),
+    episodeCount: numberFromProvider(typedFeed.episodeCount) || 0,
+    latestPublishTime: numberFromProvider(typedFeed.newestItemPublishTime),
+    oldestPublishTime: numberFromProvider(typedFeed.oldestItemPublishTime),
+    lastUpdateTime: numberFromProvider(typedFeed.lastUpdateTime),
+  };
+}
+
+function getPodcastFrequencyScore(podcast: PodcastSearchResult): number {
+  if (!podcast.episodeCount || !podcast.oldestPublishTime || !podcast.latestPublishTime) {
+    return 0;
+  }
+
+  const days = (podcast.latestPublishTime - podcast.oldestPublishTime) / 86400;
+
+  if (!Number.isFinite(days) || days <= 0) {
+    return 0;
+  }
+
+  return podcast.episodeCount / days;
+}
+
+function sortPodcastResults(results: PodcastSearchResult[], sortBy: string): PodcastSearchResult[] {
+  if (sortBy === "episodes") {
+    return [...results].sort((left, right) => right.episodeCount - left.episodeCount);
+  }
+
+  if (sortBy === "recent") {
+    return [...results].sort((left, right) => (right.latestPublishTime || right.lastUpdateTime || 0) - (left.latestPublishTime || left.lastUpdateTime || 0));
+  }
+
+  if (sortBy === "frequency") {
+    return [...results].sort((left, right) => getPodcastFrequencyScore(right) - getPodcastFrequencyScore(left));
+  }
+
+  return results;
+}
+
+function filterPodcastResults(results: PodcastSearchResult[], payload: PodcastSearchRequest): PodcastSearchResult[] {
+  let filtered = payload.language
+    ? results.filter((podcast) => matchesPodcastLanguage(podcast.language, payload.language))
+    : results;
+  const categoryId = payload.category ? podcastCategoryMap[payload.category] : null;
+
+  if (categoryId) {
+    const matches = filtered.filter((podcast) => Object.prototype.hasOwnProperty.call(podcast.categories, categoryId));
+    const nonMatches = filtered.filter((podcast) => !Object.prototype.hasOwnProperty.call(podcast.categories, categoryId));
+    filtered = [...matches, ...nonMatches];
+  }
+
+  return sortPodcastResults(filtered, payload.sortBy).slice(0, PODCAST_SEARCH_MAX_RESULTS);
+}
+
+function podcastSearchErrorResponse(error: PodcastSearchError, request: Request, env: Env): Response {
+  return jsonResponse(
+    {
+      ok: false,
+      code: error.code,
+      error: error.message,
+    },
+    error.status,
+    getCorsHeaders(request, env),
+  );
+}
+
+async function podcastSearchResponse(request: Request, env: Env): Promise<Response> {
+  const payload = await parsePodcastSearchRequest(request);
+
+  if (!env.PODCAST_INDEX_API_KEY || !env.PODCAST_INDEX_API_SECRET) {
+    throw new PodcastSearchError(503, "provider-configuration", "Podcast search is not configured");
+  }
+
+  const headers = await generatePodcastIndexAuthHeaders(env.PODCAST_INDEX_API_KEY, env.PODCAST_INDEX_API_SECRET);
+  const providerUrl = getProviderSearchUrl(payload);
+  let providerResponse: Response;
+
+  try {
+    providerResponse = await fetch(providerUrl, {
+      headers,
+      signal: AbortSignal.timeout(PODCAST_SEARCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new PodcastSearchError(504, "provider-timeout", "Podcast search provider timed out");
+    }
+
+    throw new PodcastSearchError(502, "provider-unavailable", "Podcast search provider is unavailable");
+  }
+
+  if (providerResponse.status === 401 || providerResponse.status === 403) {
+    throw new PodcastSearchError(502, "provider-authentication", "Podcast search provider authentication failed");
+  }
+
+  if (providerResponse.status === 429) {
+    throw new PodcastSearchError(429, "provider-rate-limit", "Podcast search provider rate limit reached");
+  }
+
+  if (!providerResponse.ok) {
+    throw new PodcastSearchError(502, "provider-unavailable", "Podcast search provider is unavailable");
+  }
+
+  let providerData: unknown;
+
+  try {
+    providerData = await providerResponse.json();
+  } catch {
+    throw new PodcastSearchError(502, "provider-response", "Podcast search provider returned malformed data");
+  }
+
+  const feeds = (providerData as { feeds?: unknown }).feeds;
+
+  if (!Array.isArray(feeds)) {
+    throw new PodcastSearchError(502, "provider-response", "Podcast search provider returned malformed data");
+  }
+
+  const normalizedResults = feeds.map(normalizePodcastFeed).filter((podcast): podcast is PodcastSearchResult => podcast !== null);
+  const results = filterPodcastResults(normalizedResults, payload);
+  const ignoredFilters = [
+    ...(payload.maxDuration > 0 ? ["maxDuration"] : []),
+    ...(payload.category && !podcastCategoryMap[payload.category] ? ["category"] : []),
+  ];
+
+  return jsonResponse(
+    {
+      ok: true,
+      results,
+      meta: {
+        source: "podcastindex",
+        ignoredFilters,
+      },
+    },
+    200,
+    getCorsHeaders(request, env),
+  );
 }
 
 async function checkDb(env: Env): Promise<true | string> {
@@ -1195,6 +1595,10 @@ export default {
         return withCors(await topPodcastsByPlaybackResponse(request, env), request, env);
       }
 
+      if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
+        return withCors(await podcastSearchResponse(request, env), request, env);
+      }
+
       const playlistId = getPlaylistId(pathname);
 
       if (request.method === "GET" && playlistId) {
@@ -1203,6 +1607,10 @@ export default {
 
       return withCors(jsonResponse(notFoundResponse, 404), request, env);
     } catch (error) {
+      if (error instanceof PodcastSearchError) {
+        return withCors(podcastSearchErrorResponse(error, request, env), request, env);
+      }
+
       console.error("Unhandled Worker error", error instanceof Error ? error.message : error);
       return withCors(
         jsonResponse(

@@ -1,10 +1,12 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
+import { t } from '@/lib/i18n';
 import { X, Plus, Trash2, Globe, Lock, Loader2, Image as ImageIcon, Sparkles, Users, Search, Timer, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { generateShareToken } from '@/lib/rssUtils';
 import { cn } from '@/lib/utils';
+import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
 
 const BASE_MAX_PLAYLISTS = 2;
 const BASE_MAX_FEEDS = 5;
@@ -37,6 +39,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
   const [podcastSearch, setPodcastSearch] = useState('');
   const [podcastResults, setPodcastResults] = useState([]);
   const [searchingPodcasts, setSearchingPodcasts] = useState(false);
+  const [podcastSearchError, setPodcastSearchError] = useState('');
   const [feedValidations, setFeedValidations] = useState({}); // { [index]: 'valid' | 'invalid' | 'checking' }
 
   const atPlaylistLimit = playlistCount >= MAX_PLAYLISTS;
@@ -44,23 +47,30 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
   const addFeed = () => {
     const validCount = feeds.filter(f => f.url.trim()).length;
     if (validCount >= MAX_FEEDS) { setError(`Máximo de ${MAX_FEEDS} podcasts por playlist durante o período de testes.`); return; }
-    setFeeds(prev => [...prev, { url: '' }]);
+    setFeeds(prev => [...prev, { url: '', skip_start_seconds: 0, skip_end_seconds: 0 }]);
   };
 
   const handleSearchPodcasts = async (query) => {
     setPodcastSearch(query);
-    if (!query.trim()) { setPodcastResults([]); return; }
+    if (!query.trim()) { setPodcastResults([]); setPodcastSearchError(''); return; }
     setSearchingPodcasts(true);
-    const res = await voxylApi.functions.invoke('searchPodcasts', { query }).then(r => r.data).catch(() => ({ results: [] }));
-    setPodcastResults(res.results || []);
-    setSearchingPodcasts(false);
+    setPodcastSearchError('');
+    try {
+      const res = await voxylApi.functions.invoke('searchPodcasts', { query }).then(r => r.data);
+      setPodcastResults(res.results || []);
+    } catch (searchError) {
+      setPodcastResults([]);
+      setPodcastSearchError(getPodcastSearchErrorMessage(searchError));
+    } finally {
+      setSearchingPodcasts(false);
+    }
   };
 
   const addPodcastFeed = (podcast) => {
     const validCount = feeds.filter(f => f.url.trim()).length;
     if (validCount >= MAX_FEEDS) { setError(`Máximo de ${MAX_FEEDS} podcasts por playlist durante o período de testes.`); return; }
     if (feeds.some(f => f.url === podcast.feedUrl)) { setError('Este podcast já foi adicionado'); return; }
-    setFeeds(prev => [...prev, { url: podcast.feedUrl, title: podcast.title }]);
+    setFeeds(prev => [...prev, { url: podcast.feedUrl, title: podcast.title, skip_start_seconds: 0, skip_end_seconds: 0 }]);
     setPodcastSearch('');
     setPodcastResults([]);
   };
@@ -327,6 +337,16 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
                   </button>
                 ))}
               </div>
+            )}
+            {!searchingPodcasts && podcastSearchError && (
+              <p className="mb-3 text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-xl">
+                {podcastSearchError}
+              </p>
+            )}
+            {!searchingPodcasts && !podcastSearchError && podcastSearch.trim() && podcastResults.length === 0 && (
+              <p className="mb-3 text-xs text-muted-foreground px-1">
+                {t('podcastSearchNoResults')}
+              </p>
             )}
 
             {/* Manual RSS input */}
