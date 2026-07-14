@@ -109,6 +109,10 @@ function entityPath(entityName, id) {
   return id ? `/entities/${name}/${encodeURIComponent(id)}` : `/entities/${name}`;
 }
 
+function normalizeEntityItem(data) {
+  return data?.playlist || data?.item || data?.data || data;
+}
+
 function createEntityClient(entityName) {
   return {
     list(sort, limit) {
@@ -119,11 +123,15 @@ function createEntityClient(entityName) {
       const path = entityName === "Playlist" && !filters.id ? "/playlists" : entityPath(entityName);
       return apiFetch(path, { params }).then((data) => data?.items || data?.data || data?.playlists || data || []);
     },
+    get(id) {
+      const path = entityName === "Playlist" ? `/playlists/${encodeURIComponent(id)}` : entityPath(entityName, id);
+      return apiFetch(path).then(normalizeEntityItem);
+    },
     create(payload) {
-      return apiFetch(entityPath(entityName), { method: "POST", body: payload }).then((data) => data?.item || data?.data || data);
+      return apiFetch(entityPath(entityName), { method: "POST", body: payload }).then(normalizeEntityItem);
     },
     update(id, payload) {
-      return apiFetch(entityPath(entityName, id), { method: "PATCH", body: payload }).then((data) => data?.item || data?.data || data);
+      return apiFetch(entityPath(entityName, id), { method: "PATCH", body: payload }).then(normalizeEntityItem);
     },
     delete(id) {
       return apiFetch(entityPath(entityName, id), { method: "DELETE" });

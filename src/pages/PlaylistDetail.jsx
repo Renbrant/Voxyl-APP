@@ -92,10 +92,16 @@ export default function PlaylistDetail() {
     }).catch(() => {});
   }, [id]);
 
-  const { data: playlist, refetch: refetchPlaylist } = useQuery({
+  const {
+    data: playlist,
+    refetch: refetchPlaylist,
+    isLoading: isPlaylistLoading,
+    isError: isPlaylistError,
+  } = useQuery({
     queryKey: ['playlist', id],
-    queryFn: () => voxylApi.entities.Playlist.filter({ id }),
-    select: data => data[0],
+    queryFn: () => voxylApi.entities.Playlist.get(id),
+    enabled: Boolean(id),
+    retry: false,
   });
 
   const isOwner = user && playlist && user.id === playlist.creator_id;
@@ -174,9 +180,11 @@ export default function PlaylistDetail() {
   const gradient = GRADIENT_COLORS[id?.charCodeAt(0) % GRADIENT_COLORS.length];
 
   useEffect(() => {
-    if (playlist) {
-      getPlaylistCoverImage(playlist).then(img => setCoverImage(img));
+    if (!playlist) {
+      setCoverImage(null);
+      return;
     }
+    getPlaylistCoverImage(playlist).then(img => setCoverImage(img));
   }, [playlist]);
 
   return (
@@ -254,8 +262,18 @@ export default function PlaylistDetail() {
               <p className="text-sm text-muted-foreground">{t('detailBy')} {playlist.creator_username ? `@${playlist.creator_username}` : t('detailUser')} • {playlist.rss_feeds?.length || 0} {t('detailFeeds')}</p>
               {playlist.description && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{playlist.description}</p>}
             </>
-          ) : (
+          ) : isPlaylistError ? (
+            <div>
+              <h1 className="text-xl font-grotesk font-bold text-foreground leading-tight">Playlist indisponivel</h1>
+              <p className="text-sm text-muted-foreground mt-1">Esta playlist nao existe ou nao pode ser acessada.</p>
+            </div>
+          ) : isPlaylistLoading ? (
             <div className="h-16 animate-pulse rounded-xl bg-secondary" />
+          ) : (
+            <div>
+              <h1 className="text-xl font-grotesk font-bold text-foreground leading-tight">Playlist indisponivel</h1>
+              <p className="text-sm text-muted-foreground mt-1">Esta playlist nao existe ou nao pode ser acessada.</p>
+            </div>
           )}
         </div>
       </div>
