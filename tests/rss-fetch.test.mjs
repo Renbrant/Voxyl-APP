@@ -336,6 +336,29 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.code, 'unsafe-feed-url');
   });
 
+  it('preserves requested feedUrl across redirects while resolving relative media from the final URL', async () => {
+    const requestedFeedUrl = 'https://feeds.example.com/show';
+    const redirectedFeedUrl = 'https://cdn.example.com/podcasts/show/feed.xml';
+    const item = `<item>
+      <guid>redirected-episode</guid>
+      <title>Redirected Episode</title>
+      <enclosure url="episodes/one.mp3" type="audio/mpeg" />
+    </item>`;
+    mockFetchSequence([
+      new Response(null, { status: 302, headers: { location: redirectedFeedUrl } }),
+      xmlResponse(rssFeed(item)),
+    ]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: requestedFeedUrl }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.feedUrl, requestedFeedUrl);
+    assert.equal(data.items[0].feedUrl, requestedFeedUrl);
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/podcasts/show/episodes/one.mp3');
+    assert.equal(data.items.every((episode) => episode.feedUrl === requestedFeedUrl), true);
+  });
+
   it('enforces the redirect limit', async () => {
     mockFetchSequence(Array.from({ length: 6 }, (_, index) => new Response(null, {
       status: 302,
@@ -386,6 +409,21 @@ describe('RSS fetch Worker route', () => {
 
     assert.equal(response.status, 504);
     assert.equal(data.code, 'upstream-timeout');
+  });
+
+  it('maps non-timeout body stream failures to upstream-unavailable', async () => {
+    const stream = new ReadableStream({
+      pull() {
+        throw new TypeError('connection reset');
+      },
+    });
+    mockFetchSequence([new Response(stream, { status: 200 })]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 502);
+    assert.equal(data.code, 'upstream-unavailable');
   });
 
   it('maps oversized responses to 413', async () => {

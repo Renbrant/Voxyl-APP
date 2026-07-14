@@ -811,16 +811,16 @@ function stableEpisodeId(...parts: string[]): string {
   return `ep_${hash.toString(36)}_${source.length.toString(36)}`;
 }
 
-function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">): NormalizedEpisode | null {
-  const audioUrl = getRssAudioUrl(item, feed.feedUrl);
+function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">, resolutionBaseUrl: string): NormalizedEpisode | null {
+  const audioUrl = getRssAudioUrl(item, resolutionBaseUrl);
 
   if (!audioUrl) {
     return null;
   }
 
   const guid = firstText(item.guid);
-  const link = absolutePublicUrl(item.link, feed.feedUrl);
-  const image = absolutePublicUrl(episodeImageUrl(item), feed.feedUrl) || feed.image;
+  const link = absolutePublicUrl(item.link, resolutionBaseUrl);
+  const image = absolutePublicUrl(episodeImageUrl(item), resolutionBaseUrl) || feed.image;
 
   return {
     id: stableEpisodeId(guid, audioUrl, link, firstText(item.title)),
@@ -838,16 +838,16 @@ function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFe
   };
 }
 
-function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">): NormalizedEpisode | null {
-  const audioUrl = getAtomAudioUrl(entry, feed.feedUrl);
+function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">, resolutionBaseUrl: string): NormalizedEpisode | null {
+  const audioUrl = getAtomAudioUrl(entry, resolutionBaseUrl);
 
   if (!audioUrl) {
     return null;
   }
 
   const guid = firstText(entry.id);
-  const link = getAtomAlternateLink(entry, feed.feedUrl);
-  const image = absolutePublicUrl(episodeImageUrl(entry), feed.feedUrl) || feed.image;
+  const link = getAtomAlternateLink(entry, resolutionBaseUrl);
+  const image = absolutePublicUrl(episodeImageUrl(entry), resolutionBaseUrl) || feed.image;
 
   return {
     id: stableEpisodeId(guid, audioUrl, link, firstText(entry.title)),
@@ -865,7 +865,7 @@ function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<Normalized
   };
 }
 
-function parseNormalizedFeed(xml: string, feedUrl: string): NormalizedFeed {
+function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBaseUrl: string): NormalizedFeed {
   let parsed: unknown;
 
   try {
@@ -901,19 +901,19 @@ function parseNormalizedFeed(xml: string, feedUrl: string): NormalizedFeed {
 
   if (rssChannel || rdfChannel) {
     const channel = (rssChannel || rdfChannel) as Record<string, unknown>;
-    const feedImage = absolutePublicUrl(firstImage(channel["itunes:image"], isRecord(channel.image) ? channel.image.url : undefined), feedUrl);
+    const feedImage = absolutePublicUrl(firstImage(channel["itunes:image"], isRecord(channel.image) ? channel.image.url : undefined), resolutionBaseUrl);
     const feed: Omit<NormalizedFeed, "items"> = {
       title: firstText(channel.title),
       description: htmlToText(channel.description),
       image: feedImage,
       author: firstText(channel["itunes:author"], channel["dc:creator"], channel.managingEditor),
-      feedUrl,
-      link: absolutePublicUrl(channel.link, feedUrl),
+      feedUrl: requestedFeedUrl,
+      link: absolutePublicUrl(channel.link, resolutionBaseUrl),
     };
     const sourceItems = rssChannel ? asArray(channel.item) : asArray((parsed["rdf:RDF"] as Record<string, unknown>).item);
     const items = sourceItems
       .filter(isRecord)
-      .map((item) => normalizeRssItem(item, feed))
+      .map((item) => normalizeRssItem(item, feed, resolutionBaseUrl))
       .filter((item): item is NormalizedEpisode => item !== null);
 
     if (!feed.title && items.length === 0) {
@@ -924,18 +924,18 @@ function parseNormalizedFeed(xml: string, feedUrl: string): NormalizedFeed {
   }
 
   if (atomFeed) {
-    const feedImage = absolutePublicUrl(firstImage(atomFeed["itunes:image"], atomFeed.logo, atomFeed.icon), feedUrl);
+    const feedImage = absolutePublicUrl(firstImage(atomFeed["itunes:image"], atomFeed.logo, atomFeed.icon), resolutionBaseUrl);
     const feed: Omit<NormalizedFeed, "items"> = {
       title: firstText(atomFeed.title),
       description: htmlToText(atomFeed.subtitle),
       image: feedImage,
       author: atomAuthorText(atomFeed.author),
-      feedUrl,
-      link: getAtomAlternateLink(atomFeed, feedUrl),
+      feedUrl: requestedFeedUrl,
+      link: getAtomAlternateLink(atomFeed, resolutionBaseUrl),
     };
     const items = asArray(atomFeed.entry)
       .filter(isRecord)
-      .map((entry) => normalizeAtomItem(entry, feed))
+      .map((entry) => normalizeAtomItem(entry, feed, resolutionBaseUrl))
       .filter((item): item is NormalizedEpisode => item !== null);
 
     if (!feed.title && items.length === 0) {
@@ -981,11 +981,15 @@ async function readResponseBodyLimited(response: Response): Promise<string> {
       try {
         result = await reader.read();
       } catch (error) {
+        if (error instanceof RssFetchError) {
+          throw error;
+        }
+
         if (isTimeoutError(error)) {
           throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
         }
 
-        throw error;
+        throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
       }
 
       const { done, value } = result;
@@ -1075,11 +1079,15 @@ async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl
         finalUrl: currentUrl,
       };
     } catch (error) {
+      if (error instanceof RssFetchError) {
+        throw error;
+      }
+
       if (isTimeoutError(error)) {
         throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
       }
 
-      throw error;
+      throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
     }
   }
 
@@ -1129,7 +1137,7 @@ async function rssFetchResponse(request: Request, env: Env): Promise<Response> {
 
   try {
     const { xml, finalUrl } = await fetchFeedXml(payload.url);
-    const feed = parseNormalizedFeed(xml, finalUrl);
+    const feed = parseNormalizedFeed(xml, payload.url, finalUrl);
     await putRssCacheEntry(env, cacheKey, feed);
 
     return jsonResponse(cloneFeedWithCount(feed, payload.count), 200, {
