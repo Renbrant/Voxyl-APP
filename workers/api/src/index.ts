@@ -1,5 +1,5 @@
 import { verifyToken } from "@clerk/backend";
-import { XMLParser, XMLValidator } from "fast-xml-parser";
+import sax from "sax";
 
 const healthResponse = {
   ok: true,
@@ -189,6 +189,23 @@ type RssCacheEntry = {
 };
 
 type RssCacheStatus = "HIT" | "MISS" | "STALE";
+
+type XmlRecord = Record<string, unknown>;
+
+type CapturedXmlNode = {
+  name: string;
+  attributes: Record<string, string>;
+  children: XmlRecord;
+  text: string[];
+};
+
+type FeedKind = "rss" | "rdf" | "atom" | null;
+
+class RssFeedComplete extends Error {
+  constructor() {
+    super("RSS feed parsing completed early");
+  }
+}
 
 function jsonResponse(body: unknown, status = 200, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
@@ -662,6 +679,77 @@ function attr(value: unknown, name: string): string {
   return isRecord(value) ? firstText(value[`@_${name}`]) : "";
 }
 
+function xmlName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function xmlAttr(attributes: Record<string, string>, name: string): string {
+  return attributes[name] || attributes[name.toLowerCase()] || "";
+}
+
+function normalizeSaxAttributes(attributes: Record<string, unknown>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+
+  for (const [name, value] of Object.entries(attributes)) {
+    normalized[`@_${xmlName(name)}`] = String(value ?? "");
+  }
+
+  return normalized;
+}
+
+function appendXmlValue(target: XmlRecord, name: string, value: unknown): void {
+  const existing = target[name];
+
+  if (existing === undefined) {
+    target[name] = value;
+    return;
+  }
+
+  if (Array.isArray(existing)) {
+    existing.push(value);
+    return;
+  }
+
+  target[name] = [existing, value];
+}
+
+function capturedNodeToRecord(node: CapturedXmlNode): XmlRecord | string {
+  const record: XmlRecord = { ...node.children };
+  const text = node.text.join("").trim();
+  const attributes = normalizeSaxAttributes(node.attributes);
+
+  if (text) {
+    record["#text"] = text;
+  }
+
+  if (Object.keys(attributes).length > 0) {
+    Object.assign(record, attributes);
+  }
+
+  if (Object.keys(record).length === 1 && record["#text"] !== undefined) {
+    return text;
+  }
+
+  return record;
+}
+
+function startCapturedNode(name: string, attributes: Record<string, unknown>): CapturedXmlNode {
+  return {
+    name,
+    attributes: Object.fromEntries(Object.entries(attributes).map(([key, value]) => [xmlName(key), String(value ?? "")])),
+    children: {},
+    text: [],
+  };
+}
+
+function addCapturedText(captureStack: CapturedXmlNode[], value: string): void {
+  if (captureStack.length === 0 || !value) {
+    return;
+  }
+
+  captureStack[captureStack.length - 1].text.push(value);
+}
+
 function htmlToText(value: unknown): string {
   const text = firstText(value)
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
@@ -865,139 +953,245 @@ function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<Normalized
   };
 }
 
-function normalizeRssItems(
-  sourceItems: unknown[],
-  feed: Omit<NormalizedFeed, "items">,
-  resolutionBaseUrl: string,
-  count: number,
-): NormalizedEpisode[] {
-  const items: NormalizedEpisode[] = [];
+function isRssItemStart(name: string, tagStack: string[], feedKind: FeedKind): boolean {
+  const parent = tagStack[tagStack.length - 1];
 
-  for (const sourceItem of sourceItems) {
-    if (!isRecord(sourceItem)) {
-      continue;
-    }
-
-    const item = normalizeRssItem(sourceItem, feed, resolutionBaseUrl);
-
-    if (!item) {
-      continue;
-    }
-
-    items.push(item);
-
-    if (items.length >= count) {
-      break;
-    }
-  }
-
-  return items;
+  return name === "item" && (
+    (feedKind === "rss" && parent === "channel") ||
+    (feedKind === "rdf" && parent === "rdf:rdf")
+  );
 }
 
-function normalizeAtomItems(
-  sourceEntries: unknown[],
-  feed: Omit<NormalizedFeed, "items">,
-  resolutionBaseUrl: string,
-  count: number,
-): NormalizedEpisode[] {
-  const items: NormalizedEpisode[] = [];
-
-  for (const sourceEntry of sourceEntries) {
-    if (!isRecord(sourceEntry)) {
-      continue;
-    }
-
-    const item = normalizeAtomItem(sourceEntry, feed, resolutionBaseUrl);
-
-    if (!item) {
-      continue;
-    }
-
-    items.push(item);
-
-    if (items.length >= count) {
-      break;
-    }
-  }
-
-  return items;
+function isAtomEntryStart(name: string, tagStack: string[], feedKind: FeedKind): boolean {
+  return name === "entry" && feedKind === "atom" && tagStack[tagStack.length - 1] === "feed";
 }
 
-function parseNormalizedFeed(xml: string, requestedFeedUrl: string, resolutionBaseUrl: string, count = 100): NormalizedFeed {
-  let parsed: unknown;
+function isRssFeedMetadataStart(name: string, tagStack: string[], feedKind: FeedKind): boolean {
+  return (feedKind === "rss" || feedKind === "rdf") &&
+    tagStack[tagStack.length - 1] === "channel" &&
+    name !== "item";
+}
+
+function isAtomFeedMetadataStart(name: string, tagStack: string[], feedKind: FeedKind): boolean {
+  return feedKind === "atom" &&
+    tagStack[tagStack.length - 1] === "feed" &&
+    name !== "entry";
+}
+
+function buildStreamingFeedBase(
+  feedKind: FeedKind,
+  feedFields: XmlRecord,
+  requestedFeedUrl: string,
+  resolutionBaseUrl: string,
+): Omit<NormalizedFeed, "items"> {
+  if (feedKind === "atom") {
+    const feedImage = absolutePublicUrl(firstImage(feedFields["itunes:image"], feedFields.logo, feedFields.icon), resolutionBaseUrl);
+
+    return {
+      title: firstText(feedFields.title),
+      description: htmlToText(feedFields.subtitle),
+      image: feedImage,
+      author: atomAuthorText(feedFields.author),
+      feedUrl: requestedFeedUrl,
+      link: getAtomAlternateLink(feedFields, resolutionBaseUrl),
+    };
+  }
+
+  const feedImage = absolutePublicUrl(firstImage(feedFields["itunes:image"], isRecord(feedFields.image) ? feedFields.image.url : undefined), resolutionBaseUrl);
+
+  return {
+    title: firstText(feedFields.title),
+    description: htmlToText(feedFields.description),
+    image: feedImage,
+    author: firstText(feedFields["itunes:author"], feedFields["dc:creator"], feedFields.managingeditor),
+    feedUrl: requestedFeedUrl,
+    link: absolutePublicUrl(feedFields.link, resolutionBaseUrl),
+  };
+}
+
+async function parseNormalizedFeedStream(
+  response: Response,
+  requestedFeedUrl: string,
+  resolutionBaseUrl: string,
+  count: number,
+): Promise<NormalizedFeed> {
+  if (!response.body) {
+    throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+  }
+
+  const parser = sax.parser(true, {
+    lowercase: true,
+    normalize: false,
+    position: false,
+    strictEntities: false,
+    trim: false,
+  });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const tagStack: string[] = [];
+  const captureStack: CapturedXmlNode[] = [];
+  const feedFields: XmlRecord = {};
+  const items: NormalizedEpisode[] = [];
+  let feedKind: FeedKind = null;
+  let processedBytes = 0;
+  let parseError: Error | null = null;
+  let completedEarly = false;
+
+  const finishFeed = (): NormalizedFeed => {
+    const feed = buildStreamingFeedBase(feedKind, feedFields, requestedFeedUrl, resolutionBaseUrl);
+
+    if (!feed.title && items.length === 0) {
+      throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+    }
+
+    return { ...feed, items };
+  };
+
+  parser.onerror = (error: Error) => {
+    parseError = error;
+    throw error;
+  };
+
+  parser.onopentag = (node: { name: string; attributes: Record<string, unknown> }) => {
+    const name = xmlName(node.name);
+
+    if (tagStack.length === 0) {
+      if (name === "rss") {
+        feedKind = "rss";
+      } else if (name === "rdf:rdf") {
+        feedKind = "rdf";
+      } else if (name === "feed") {
+        feedKind = "atom";
+      }
+    }
+
+    const startsEpisode = captureStack.length === 0 && (
+      isRssItemStart(name, tagStack, feedKind) ||
+      isAtomEntryStart(name, tagStack, feedKind)
+    );
+    const startsMetadata = captureStack.length === 0 && (
+      isRssFeedMetadataStart(name, tagStack, feedKind) ||
+      isAtomFeedMetadataStart(name, tagStack, feedKind)
+    );
+
+    if (startsEpisode || startsMetadata || captureStack.length > 0) {
+      captureStack.push(startCapturedNode(name, node.attributes));
+    }
+
+    tagStack.push(name);
+  };
+
+  parser.ontext = (text: string) => {
+    addCapturedText(captureStack, text);
+  };
+
+  parser.oncdata = (text: string) => {
+    addCapturedText(captureStack, text);
+  };
+
+  parser.onclosetag = (rawName: string) => {
+    const name = xmlName(rawName);
+    const node = captureStack[captureStack.length - 1];
+
+    if (node?.name === name) {
+      captureStack.pop();
+      const value = capturedNodeToRecord(node);
+
+      if (captureStack.length > 0) {
+        appendXmlValue(captureStack[captureStack.length - 1].children, node.name, value);
+      } else if (node.name === "item") {
+        const item = normalizeRssItem(value as XmlRecord, buildStreamingFeedBase(feedKind, feedFields, requestedFeedUrl, resolutionBaseUrl), resolutionBaseUrl);
+
+        if (item) {
+          items.push(item);
+        }
+      } else if (node.name === "entry") {
+        const item = normalizeAtomItem(value as XmlRecord, buildStreamingFeedBase(feedKind, feedFields, requestedFeedUrl, resolutionBaseUrl), resolutionBaseUrl);
+
+        if (item) {
+          items.push(item);
+        }
+      } else {
+        appendXmlValue(feedFields, node.name, value);
+      }
+
+      if (items.length >= count) {
+        completedEarly = true;
+        throw new RssFeedComplete();
+      }
+    }
+
+    tagStack.pop();
+  };
 
   try {
-    const validation = XMLValidator.validate(xml, { allowBooleanAttributes: true });
+    while (true) {
+      let result: ReadableStreamReadResult<Uint8Array>;
 
-    if (validation !== true) {
-      throw new Error("Invalid XML");
+      try {
+        result = await reader.read();
+      } catch (error) {
+        if (isTimeoutError(error)) {
+          throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
+        }
+
+        throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
+      }
+
+      if (result.done) {
+        break;
+      }
+
+      if (!result.value?.byteLength) {
+        continue;
+      }
+
+      const remainingBytes = RSS_FETCH_MAX_BYTES - processedBytes;
+      const bytesToProcess = Math.min(result.value.byteLength, remainingBytes);
+
+      if (bytesToProcess > 0) {
+        processedBytes += bytesToProcess;
+
+        try {
+          parser.write(decoder.decode(result.value.subarray(0, bytesToProcess), { stream: true }));
+        } catch (error) {
+          if (error instanceof RssFeedComplete) {
+            await reader.cancel();
+            return finishFeed();
+          }
+
+          if (error instanceof Error && error === parseError) {
+            throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+          }
+
+          throw error;
+        }
+      }
+
+      if (bytesToProcess < result.value.byteLength || processedBytes >= RSS_FETCH_MAX_BYTES) {
+        throw new RssFetchError(413, "feed-too-large", "Feed response is too large before enough playable episodes were found");
+      }
     }
 
-    parsed = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: "@_",
-      textNodeName: "#text",
-      cdataPropName: "#cdata",
-      processEntities: true,
-      htmlEntities: true,
-      trimValues: true,
-      parseTagValue: false,
-      parseAttributeValue: false,
-      allowBooleanAttributes: true,
-    }).parse(xml);
-  } catch {
-    throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
-  }
+    try {
+      parser.write(decoder.decode());
+      parser.close();
+    } catch (error) {
+      if (error instanceof RssFeedComplete) {
+        return finishFeed();
+      }
 
-  if (!isRecord(parsed)) {
-    throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
-  }
-
-  const rssChannel = isRecord(parsed.rss) && isRecord(parsed.rss.channel) ? parsed.rss.channel : null;
-  const rdfChannel = isRecord(parsed["rdf:RDF"]) && isRecord(parsed["rdf:RDF"].channel) ? parsed["rdf:RDF"].channel : null;
-  const atomFeed = isRecord(parsed.feed) ? parsed.feed : null;
-
-  if (rssChannel || rdfChannel) {
-    const channel = (rssChannel || rdfChannel) as Record<string, unknown>;
-    const feedImage = absolutePublicUrl(firstImage(channel["itunes:image"], isRecord(channel.image) ? channel.image.url : undefined), resolutionBaseUrl);
-    const feed: Omit<NormalizedFeed, "items"> = {
-      title: firstText(channel.title),
-      description: htmlToText(channel.description),
-      image: feedImage,
-      author: firstText(channel["itunes:author"], channel["dc:creator"], channel.managingEditor),
-      feedUrl: requestedFeedUrl,
-      link: absolutePublicUrl(channel.link, resolutionBaseUrl),
-    };
-    const sourceItems = rssChannel ? asArray(channel.item) : asArray((parsed["rdf:RDF"] as Record<string, unknown>).item);
-    const items = normalizeRssItems(sourceItems, feed, resolutionBaseUrl, count);
-
-    if (!feed.title && items.length === 0) {
       throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
     }
 
-    return { ...feed, items };
-  }
-
-  if (atomFeed) {
-    const feedImage = absolutePublicUrl(firstImage(atomFeed["itunes:image"], atomFeed.logo, atomFeed.icon), resolutionBaseUrl);
-    const feed: Omit<NormalizedFeed, "items"> = {
-      title: firstText(atomFeed.title),
-      description: htmlToText(atomFeed.subtitle),
-      image: feedImage,
-      author: atomAuthorText(atomFeed.author),
-      feedUrl: requestedFeedUrl,
-      link: getAtomAlternateLink(atomFeed, resolutionBaseUrl),
-    };
-    const items = normalizeAtomItems(asArray(atomFeed.entry), feed, resolutionBaseUrl, count);
-
-    if (!feed.title && items.length === 0) {
-      throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+    if (completedEarly) {
+      return finishFeed();
     }
 
-    return { ...feed, items };
+    return finishFeed();
+  } finally {
+    reader.releaseLock();
   }
-
-  throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
 }
 
 function cloneFeedWithCount(feed: NormalizedFeed, count: number): NormalizedFeed {
@@ -1011,71 +1205,7 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
-async function readResponseBodyLimited(response: Response): Promise<string> {
-  const contentLength = response.headers.get("content-length");
-
-  if (contentLength && Number(contentLength) > RSS_FETCH_MAX_BYTES) {
-    throw new RssFetchError(413, "feed-too-large", "Feed response is too large");
-  }
-
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  try {
-    while (true) {
-      let result: ReadableStreamReadResult<Uint8Array>;
-
-      try {
-        result = await reader.read();
-      } catch (error) {
-        if (error instanceof RssFetchError) {
-          throw error;
-        }
-
-        if (isTimeoutError(error)) {
-          throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
-        }
-
-        throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
-      }
-
-      const { done, value } = result;
-
-      if (done) {
-        break;
-      }
-
-      if (value) {
-        total += value.byteLength;
-
-        if (total > RSS_FETCH_MAX_BYTES) {
-          throw new RssFetchError(413, "feed-too-large", "Feed response is too large");
-        }
-
-        chunks.push(value);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return new TextDecoder().decode(body);
-}
-
-async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl: string }> {
+async function fetchFeedResponse(initialUrl: string): Promise<{ response: Response; finalUrl: string }> {
   let currentUrl = validatePublicFeedUrl(initialUrl);
   const visited = new Set<string>();
   const signal = AbortSignal.timeout(RSS_FETCH_TIMEOUT_MS);
@@ -1125,22 +1255,10 @@ async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl
       throw new RssFetchError(502, "upstream-unavailable", "Feed origin returned an error");
     }
 
-    try {
-      return {
-        xml: await readResponseBodyLimited(response),
-        finalUrl: currentUrl,
-      };
-    } catch (error) {
-      if (error instanceof RssFetchError) {
-        throw error;
-      }
-
-      if (isTimeoutError(error)) {
-        throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
-      }
-
-      throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
-    }
+    return {
+      response,
+      finalUrl: currentUrl,
+    };
   }
 
   throw new RssFetchError(502, "upstream-unavailable", "Feed redirect limit was reached");
@@ -1188,8 +1306,8 @@ async function rssFetchResponse(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    const { xml, finalUrl } = await fetchFeedXml(payload.url);
-    const feed = parseNormalizedFeed(xml, payload.url, finalUrl, payload.count);
+    const { response, finalUrl } = await fetchFeedResponse(payload.url);
+    const feed = await parseNormalizedFeedStream(response, payload.url, finalUrl, payload.count);
     await putRssCacheEntry(env, cacheKey, feed);
 
     return jsonResponse(cloneFeedWithCount(feed, payload.count), 200, {

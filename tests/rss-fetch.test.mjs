@@ -186,20 +186,30 @@ function xmlResponse(xml, init = {}) {
   });
 }
 
-function byteStream(byteCount, chunkSize = 64 * 1024) {
-  let sent = 0;
+function textChunkStream(chunks, hooks = {}) {
+  const encoder = new TextEncoder();
+  let index = 0;
+
   return new ReadableStream({
     pull(controller) {
-      if (sent >= byteCount) {
+      hooks.onPull?.(index);
+
+      if (index >= chunks.length) {
         controller.close();
         return;
       }
 
-      const nextSize = Math.min(chunkSize, byteCount - sent);
-      sent += nextSize;
-      controller.enqueue(new Uint8Array(nextSize));
+      controller.enqueue(encoder.encode(chunks[index]));
+      index += 1;
+    },
+    cancel(reason) {
+      hooks.onCancel?.(reason, index);
     },
   });
+}
+
+function playableItem(index) {
+  return `<item><title>Episode ${index}</title><enclosure url="https://cdn.example.com/${index}.mp3" type="audio/mpeg" /></item>`;
 }
 
 async function body(response) {
@@ -303,6 +313,62 @@ describe('RSS fetch Worker route', () => {
     const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml', count: 2 }), env()));
 
     assert.equal(data.items.length, 2);
+  });
+
+  it('parses RSS across arbitrary chunk and tag boundaries', async () => {
+    mockFetchSequence([new Response(textChunkStream([
+      '<?xml version="1.0"?><rss><channel><tit',
+      'le>Chunked Podcast</title><item><title>Chunk',
+      'ed Episode</title><enclosure url="https://cdn.example.com/chunked.mp3" type="audio/mpeg" /></item></channel></rss>',
+    ]), { status: 200 })]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/chunked.xml', count: 1 }), env()));
+
+    assert.equal(data.title, 'Chunked Podcast');
+    assert.equal(data.items[0].title, 'Chunked Episode');
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/chunked.mp3');
+  });
+
+  it('parses split CDATA and split XML entities', async () => {
+    mockFetchSequence([new Response(textChunkStream([
+      '<?xml version="1.0"?><rss><channel><title>Entity Podcast</title><item><title>A &a',
+      'mp; B</title><description><![CDATA[<p>Hello ',
+      '<strong>CDATA</strong></p>]]></description><enclosure url="https://cdn.example.com/entity.mp3" type="audio/mpeg" /></item></channel></rss>',
+    ]), { status: 200 })]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/entity.xml', count: 1 }), env()));
+
+    assert.equal(data.items[0].title, 'A & B');
+    assert.equal(data.items[0].description, 'Hello CDATA');
+  });
+
+  it('skips non-playable entries and keeps parsing until the requested playable count', async () => {
+    const items = [
+      '<item><title>No audio</title><link>https://podcasts.example.com/no-audio</link></item>',
+      playableItem(1),
+      playableItem(2),
+    ].join('');
+    mockFetchSequence([xmlResponse(rssFeed(items))]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/skip.xml', count: 2 }), env()));
+
+    assert.deepEqual(data.items.map((item) => item.title), ['Episode 1', 'Episode 2']);
+  });
+
+  it('cancels the upstream reader after the requested playable count is collected', async () => {
+    let canceled = false;
+    mockFetchSequence([new Response(textChunkStream([
+      `<?xml version="1.0"?><rss><channel><title>Cancel Podcast</title>${playableItem(1)}`,
+      `${playableItem(2)}</channel></rss>`,
+    ], {
+      onCancel: () => { canceled = true; },
+    }), { status: 200 })]);
+
+    const data = await body(await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/cancel.xml', count: 1 }), env()));
+
+    assert.equal(data.items.length, 1);
+    assert.equal(data.items[0].title, 'Episode 1');
+    assert.equal(canceled, true);
   });
 
   it('limits normalized RSS results to the requested count before cache serialization', async () => {
@@ -550,24 +616,56 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.items.length, 1);
   });
 
-  it('maps Content-Length above 4 MiB to 413', async () => {
-    mockFetchSequence([new Response('', { status: 200, headers: { 'content-length': String(RSS_FETCH_MAX_BYTES + 1) } })]);
+  it('allows success with Content-Length above 4 MiB when requested episodes are found early', async () => {
+    mockFetchSequence([new Response(rssFeed(), {
+      status: 200,
+      headers: {
+        'content-length': String(RSS_FETCH_MAX_BYTES + 1),
+        'content-type': 'application/rss+xml',
+      },
+    })]);
 
     const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/show.xml' }), env());
     const data = await body(response);
 
-    assert.equal(response.status, 413);
-    assert.equal(data.code, 'feed-too-large');
+    assert.equal(response.status, 200);
+    assert.equal(data.items.length, 1);
   });
 
-  it('maps streamed responses above 4 MiB without Content-Length to 413', async () => {
-    mockFetchSequence([new Response(byteStream(RSS_FETCH_MAX_BYTES + 1), { status: 200 })]);
+  it('maps streamed responses over the processed-byte limit to 413 before a usable result', async () => {
+    const hugeIncompleteFeed = textChunkStream([
+      '<?xml version="1.0"?><rss><channel><title>Huge Podcast</title><docs>',
+      'x'.repeat(RSS_FETCH_MAX_BYTES + 1),
+      '</docs></channel></rss>',
+    ]);
+    mockFetchSequence([new Response(hugeIncompleteFeed, { status: 200 })]);
 
     const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/streamed-large.xml' }), env());
     const data = await body(response);
 
     assert.equal(response.status, 413);
     assert.equal(data.code, 'feed-too-large');
+  });
+
+  it('succeeds for feeds over 4 MiB when requested episodes arrive before the byte limit', async () => {
+    let canceled = false;
+    mockFetchSequence([new Response(textChunkStream([
+      `<?xml version="1.0"?><rss><channel><title>Huge Early Podcast</title>${playableItem(1)}`,
+      'x'.repeat(RSS_FETCH_MAX_BYTES + 1),
+      '</channel></rss>',
+    ], {
+      onCancel: () => { canceled = true; },
+    }), {
+      status: 200,
+      headers: { 'content-length': String(RSS_FETCH_MAX_BYTES + 2048) },
+    })]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/huge-early.xml', count: 1 }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.items.length, 1);
+    assert.equal(canceled, true);
   });
 
   it('maps upstream non-success responses clearly', async () => {
@@ -756,11 +854,12 @@ describe('RSS fetch Worker route', () => {
     assert.match(source, /feedUrl:\s*feed\.feedUrl/);
   });
 
-  it('keeps RSS normalization bounded by the requested count', async () => {
+  it('keeps RSS parsing bounded by the requested count', async () => {
     const source = fs.readFileSync(new URL('../workers/api/src/index.ts', import.meta.url), 'utf8');
 
-    assert.match(source, /function normalizeRssItems\(/);
-    assert.match(source, /if \(items\.length >= count\) {\s*break;\s*}/);
-    assert.match(source, /parseNormalizedFeed\(xml, payload\.url, finalUrl, payload\.count\)/);
+    assert.match(source, /function parseNormalizedFeedStream\(/);
+    assert.match(source, /if \(items\.length >= count\) {\s*completedEarly = true;\s*throw new RssFeedComplete\(\);/);
+    assert.match(source, /await reader\.cancel\(\)/);
+    assert.match(source, /parseNormalizedFeedStream\(response, payload\.url, finalUrl, payload\.count\)/);
   });
 });
