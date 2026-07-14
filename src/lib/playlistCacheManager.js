@@ -1,5 +1,6 @@
 import { voxylApi } from '@/api/voxylApiClient';
 import { getFeedFromCache, saveFeedToCache } from '@/lib/feedCache';
+import { sortPlaylistEpisodes } from './playlistEpisodeSorting';
 import { parseDurationToSeconds } from '@/lib/rssUtils';
 
 const CACHE_PREFIX = 'playlist_episodes_';
@@ -137,16 +138,6 @@ function processEpisodes(rawEpisodes, playlist) {
     });
 }
 
-// Sort episodes
-function sortEpisodes(episodes, playlist) {
-  const sortOrder = playlist?.episodes_sort_order || 'newest_first';
-  return [...episodes].sort((a, b) => {
-    const dateA = new Date(a.pubDate);
-    const dateB = new Date(b.pubDate);
-    return sortOrder === 'newest_first' ? dateB - dateA : dateA - dateB;
-  });
-}
-
 // Get initial playlist episodes (fast load from local cache)
 export async function getInitialPlaylistEpisodes(playlistId) {
   const localCache = getLocalCache(playlistId);
@@ -243,7 +234,7 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist) {
     }
 
     // Sort episodes
-    const sortedEpisodes = sortEpisodes(episodesToUse, playlist);
+    const sortedEpisodes = sortPlaylistEpisodes(episodesToUse, playlist);
 
     // Update both caches if we have new data
     if (sortedEpisodes.length > 0) {
