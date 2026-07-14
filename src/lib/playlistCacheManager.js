@@ -26,7 +26,7 @@ export function getLocalCache(playlistId) {
     return {
       episodes: JSON.parse(cached),
       hash,
-      timestamp: parseInt(timestamp || 0)
+      timestamp: parseInt(timestamp || '0')
     };
   } catch {
     return null;
@@ -98,7 +98,7 @@ export async function updateCloudCache(playlistId, episodes) {
 }
 
 // Process and filter episodes based on playlist config
-function processEpisodes(rawEpisodes, playlist) {
+export function processPlaylistEpisodes(rawEpisodes, playlist) {
   const feedSkipMap = {};
   (playlist.rss_feeds || []).forEach(f => {
     feedSkipMap[f.url] = {
@@ -168,32 +168,65 @@ export async function getInitialPlaylistEpisodes(playlistId) {
 }
 
 // Refresh and sync episodes (background sync with cloud and RSS feeds)
-export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist) {
+export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, options = {}) {
+  const { onProgress } = options;
+  const rssFeeds = playlist.rss_feeds || [];
+  const settledFeeds = new Array(rssFeeds.length).fill(null);
+  let completedFeeds = 0;
+  let failedFeeds = 0;
+
+  const emitProgress = (extra = {}) => {
+    if (!onProgress) return;
+    const successfulFeeds = settledFeeds.filter(Boolean);
+    onProgress({
+      playlistId,
+      episodes: mergeAndSortPlaylistEpisodes(successfulFeeds, playlist),
+      source: successfulFeeds.length > 0 ? 'rss' : 'none',
+      completedFeeds,
+      failedFeeds,
+      totalFeeds: rssFeeds.length,
+      done: completedFeeds >= rssFeeds.length,
+      ...extra,
+    });
+  };
+
   try {
-    // Fetch cloud cache and RSS feeds in parallel
-    const [cloudCache, feedResults] = await Promise.all([
-      getCloudCache(playlistId),
-      Promise.allSettled(
-        (playlist.rss_feeds || []).map(async (f) => {
+    const cloudCachePromise = getCloudCache(playlistId);
+    const feedPromises = rssFeeds.map(async (f, index) => {
+      try {
           const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 100 });
           const fresh = res.data;
           if (fresh?.items?.length) {
             saveFeedToCache(f.url, fresh);
           }
+          if (fresh?.items?.length) {
+            settledFeeds[index] = fresh;
+          } else {
+            const cached = getFeedFromCache(f.url);
+            settledFeeds[index] = cached?.items?.length ? cached : null;
+            if (!settledFeeds[index]) failedFeeds += 1;
+          }
+          completedFeeds += 1;
+          emitProgress({ feedUrl: f.url });
           return fresh;
-        })
-      )
+      } catch (error) {
+        const cached = getFeedFromCache(f.url);
+        settledFeeds[index] = cached?.items?.length ? cached : null;
+        if (!settledFeeds[index]) failedFeeds += 1;
+        completedFeeds += 1;
+        emitProgress({ feedUrl: f.url, error });
+        return settledFeeds[index];
+      }
+    });
+
+    // Fetch cloud cache and RSS feeds in parallel, while feeds emit progress individually.
+    const [cloudCache] = await Promise.all([
+      cloudCachePromise,
+      Promise.allSettled(feedPromises)
     ]);
 
     // Process feed results (fresh or cached)
-    const processedFeeds = (playlist.rss_feeds || []).map((f, i) => {
-      const result = feedResults[i];
-      if (result.status === 'fulfilled' && result.value?.items?.length) {
-        return result.value;
-      }
-      const cached = getFeedFromCache(f.url);
-      return cached?.items?.length ? cached : null;
-    }).filter(Boolean);
+    const processedFeeds = settledFeeds.filter(Boolean);
 
     // Get current local cache
     const localCache = getLocalCache(playlistId);
@@ -204,20 +237,10 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist) {
 
     if (processedFeeds.length > 0) {
       // We have fresh RSS data, use it
-      const rawEpisodes = processedFeeds
-        .filter(r => r?.items)
-        .flatMap(r => r.items);
-      
-      // DEDUPLICATE: Remove duplicate episodes by audioUrl
-      const seenUrls = new Set();
-      const deduplicatedEpisodes = rawEpisodes.filter(ep => {
-        if (!ep.audioUrl) return true; // Keep episodes without audioUrl
-        if (seenUrls.has(ep.audioUrl)) return false; // Skip duplicates
-        seenUrls.add(ep.audioUrl);
-        return true;
-      });
-      
-      episodesToUse = processEpisodes(deduplicatedEpisodes, playlist);
+      episodesToUse = mergeAndSortPlaylistEpisodes(processedFeeds, playlist);
+      if (failedFeeds > 0 && localCache?.episodes?.length) {
+        episodesToUse = mergePlaylistEpisodeLists([episodesToUse, localCache.episodes], playlist);
+      }
       sourceUsed = 'rss';
     } else if (cloudCache?.episodes?.length) {
       // No fresh RSS, use cloud cache if available and newer than local
@@ -243,18 +266,26 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist) {
     }
 
     return {
+      playlistId,
       episodes: sortedEpisodes,
       source: sourceUsed,
-      hash: hashEpisodes(sortedEpisodes)
+      hash: hashEpisodes(sortedEpisodes),
+      completedFeeds,
+      failedFeeds,
+      totalFeeds: rssFeeds.length
     };
   } catch (error) {
     console.error('Error refreshing playlist episodes:', error);
     // Return local cache as fallback
     const localCache = getLocalCache(playlistId);
     return {
+      playlistId,
       episodes: localCache?.episodes || [],
       source: 'local',
-      hash: localCache?.hash || null
+      hash: localCache?.hash || null,
+      completedFeeds,
+      failedFeeds: Math.max(failedFeeds, rssFeeds.length - completedFeeds),
+      totalFeeds: rssFeeds.length
     };
   }
 }
@@ -264,4 +295,34 @@ export function clearCache(playlistId) {
   localStorage.removeItem(CACHE_PREFIX + playlistId);
   localStorage.removeItem(CACHE_HASH_PREFIX + playlistId);
   localStorage.removeItem(CACHE_TIMESTAMP_PREFIX + playlistId);
+}
+
+export function mergeAndSortPlaylistEpisodes(feeds, playlist) {
+  const rawEpisodes = feeds
+    .filter(r => r?.items)
+    .flatMap(r => r.items);
+
+  const seenUrls = new Set();
+  const deduplicatedEpisodes = rawEpisodes.filter(ep => {
+    if (!ep.audioUrl) return true;
+    if (seenUrls.has(ep.audioUrl)) return false;
+    seenUrls.add(ep.audioUrl);
+    return true;
+  });
+
+  return sortPlaylistEpisodes(processPlaylistEpisodes(deduplicatedEpisodes, playlist), playlist);
+}
+
+export function mergePlaylistEpisodeLists(episodeLists, playlist) {
+  const seenUrls = new Set();
+  const merged = [];
+
+  episodeLists.flat().forEach(ep => {
+    const key = ep.audioUrl || ep.link || `${ep.feedUrl || ''}:${ep.title || ''}:${ep.pubDate || ''}`;
+    if (key && seenUrls.has(key)) return;
+    if (key) seenUrls.add(key);
+    merged.push(ep);
+  });
+
+  return sortPlaylistEpisodes(merged, playlist);
 }
