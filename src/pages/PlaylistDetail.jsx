@@ -4,7 +4,7 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
-import { getInitialPlaylistEpisodes, refreshAndSyncPlaylistEpisodes } from '@/lib/playlistCacheManager';
+import { getInitialPlaylistEpisodes, mergePlaylistEpisodeLists, refreshAndSyncPlaylistEpisodes } from '@/lib/playlistCacheManager';
 import { usePlayer } from '@/lib/PlayerContext';
 import { ArrowLeft, Share2, Play, Clock, Loader2, ListMusic, SkipForward, Pencil, Heart, UserPlus, UserCheck } from 'lucide-react';
 import { t } from '@/lib/i18n';
@@ -20,6 +20,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import EpisodeDetailModal from '@/components/player/EpisodeDetailModal';
 import EpisodeActionButton from '@/components/player/EpisodeActionButton';
 import SwipeableEpisodeRow from '@/components/player/SwipeableEpisodeRow';
+import {
+  INITIAL_PLAYLIST_SYNC_STATE,
+  createPlaylistRequestGuard,
+  getPlaylistEpisodeDisplayState,
+  getPlaylistRouteResetState,
+} from '@/lib/playlistEpisodeLoadGuards';
 
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
 import { format } from 'date-fns';
@@ -38,7 +44,8 @@ export default function PlaylistDetail() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [episodes, setEpisodes] = useState([]);
-  const [loadingEps, setLoadingEps] = useState(false);
+  const [cacheLookupStatus, setCacheLookupStatus] = useState('idle');
+  const [syncState, setSyncState] = useState(INITIAL_PLAYLIST_SYNC_STATE);
   const [backgroundSyncSource, setBackgroundSyncSource] = useState('none');
   const [playedUrls, setPlayedUrls] = useState(new Set());
   const [selectedEpisode, setSelectedEpisode] = useState(null);
@@ -48,6 +55,16 @@ export default function PlaylistDetail() {
   const [followingLoader, setFollowingLoader] = useState(false);
   const { requireAuth } = useRequireAuth();
   const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, autoplay, setAutoplay, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
+  const currentPlaylistIdRef = useRef(id);
+  const cacheRequestGuardRef = useRef(null);
+  const syncRequestGuardRef = useRef(null);
+  const loadEpisodesRef = useRef(null);
+  if (!cacheRequestGuardRef.current) {
+    cacheRequestGuardRef.current = createPlaylistRequestGuard(() => currentPlaylistIdRef.current);
+  }
+  if (!syncRequestGuardRef.current) {
+    syncRequestGuardRef.current = createPlaylistRequestGuard(() => currentPlaylistIdRef.current);
+  }
 
   useEffect(() => {
     if (!user || !id) return;
@@ -132,25 +149,89 @@ export default function PlaylistDetail() {
       .catch(() => {});
   }, [user, playlist, isOwner]);
 
-  // Load initial cache (fast)
+  // Reset playlist-owned UI immediately when the route changes.
   useEffect(() => {
     if (!id) return;
-    
-    setLoadingEps(true);
+    currentPlaylistIdRef.current = id;
+    const cacheToken = cacheRequestGuardRef.current.reset(id);
+    syncRequestGuardRef.current.reset(id);
+    const resetState = getPlaylistRouteResetState();
+    setEpisodes(resetState.episodes);
+    setBackgroundSyncSource(resetState.backgroundSyncSource);
+    setSelectedEpisode(resetState.selectedEpisode);
+    setCacheLookupStatus(resetState.cacheLookupStatus);
+    setSyncState(resetState.syncState);
+
     getInitialPlaylistEpisodes(id).then(result => {
+      if (!cacheRequestGuardRef.current.isCurrent(cacheToken)) return;
       setEpisodes(result.episodes);
-      setLoadingEps(false);
+      setBackgroundSyncSource(result.source);
+      setCacheLookupStatus('done');
+    }).catch(() => {
+      if (!cacheRequestGuardRef.current.isCurrent(cacheToken)) return;
+      setCacheLookupStatus('done');
     });
   }, [id]);
 
   // Refresh and sync in background
   useEffect(() => {
-    if (!playlist?.rss_feeds?.length || !id) return;
+    if (!id) return;
+    if (!playlist) {
+      loadEpisodesRef.current = null;
+      return;
+    }
+    if (!playlist?.rss_feeds?.length) {
+      loadEpisodesRef.current = () => Promise.resolve();
+      setSyncState(INITIAL_PLAYLIST_SYNC_STATE);
+      return;
+    }
 
     loadEpisodesRef.current = async () => {
-      const result = await refreshAndSyncPlaylistEpisodes(id, playlist);
-      setEpisodes(result.episodes);
+      const syncToken = syncRequestGuardRef.current.start(id);
+
+      setSyncState({
+        status: 'syncing',
+        source: 'rss',
+        completedFeeds: 0,
+        failedFeeds: 0,
+        totalFeeds: playlist.rss_feeds.length,
+      });
+
+      const isCurrentRequest = (playlistId = id) => (
+        syncRequestGuardRef.current.isCurrent({ ...syncToken, playlistId })
+      );
+
+      const result = await refreshAndSyncPlaylistEpisodes(id, playlist, {
+        onProgress: (progress) => {
+          if (!isCurrentRequest(progress.playlistId)) return;
+          if (progress.episodes.length > 0) {
+            setEpisodes(prev => mergePlaylistEpisodeLists([progress.episodes, prev], playlist));
+          }
+          setBackgroundSyncSource(progress.source);
+          setSyncState({
+            status: 'syncing',
+            source: progress.source,
+            completedFeeds: progress.completedFeeds,
+            failedFeeds: progress.failedFeeds,
+            totalFeeds: progress.totalFeeds,
+          });
+        },
+      });
+
+      if (!isCurrentRequest(result.playlistId || id)) return;
+      setEpisodes(prev => result.episodes.length > 0 ? result.episodes : prev);
       setBackgroundSyncSource(result.source);
+      setSyncState({
+        status: result.episodes.length === 0
+          ? 'empty'
+          : result.failedFeeds > 0
+            ? (result.source === 'rss' ? 'partial' : 'failed-cache')
+            : 'success',
+        source: result.source,
+        completedFeeds: result.completedFeeds || playlist.rss_feeds.length,
+        failedFeeds: result.failedFeeds || 0,
+        totalFeeds: result.totalFeeds || playlist.rss_feeds.length,
+      });
     };
 
     // Start background sync immediately
@@ -173,11 +254,37 @@ export default function PlaylistDetail() {
     voxylApi.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
   };
 
-  const loadEpisodesRef = useRef(null);
   const handleRefresh = useCallback(() => loadEpisodesRef.current?.(), []);
   const { pullProgress, refreshing } = usePullToRefresh(handleRefresh, null);
   const [coverImage, setCoverImage] = useState(null);
   const gradient = GRADIENT_COLORS[id?.charCodeAt(0) % GRADIENT_COLORS.length];
+  const {
+    isSyncing: isSyncingEpisodes,
+    shouldShowEpisodeLoading,
+    shouldShowEmptyState,
+  } = getPlaylistEpisodeDisplayState({
+    episodeCount: episodes.length,
+    cacheLookupStatus,
+    syncStatus: syncState.status,
+    hasPlaylist: Boolean(playlist),
+  });
+  const feedProgressLabel = syncState.totalFeeds > 0
+    ? `${syncState.completedFeeds}/${syncState.totalFeeds}`
+    : '';
+  const episodeStatusText = (() => {
+    if (cacheLookupStatus === 'loading' && episodes.length === 0) return t('detailLoadingCachedEpisodes');
+    if (isSyncingEpisodes) {
+      const base = refreshing ? t('detailRefreshingEpisodes') : t('detailUpdatingEpisodes');
+      const failure = syncState.failedFeeds > 0 ? ` • ${t('detailSomeFeedsFailed')}` : '';
+      return feedProgressLabel ? `${base} ${feedProgressLabel}${failure}` : base;
+    }
+    if (syncState.status === 'success') return t('detailAllEpisodesUpdated');
+    if (syncState.status === 'partial') return `${t('detailEpisodesUpdatedWithFailures')} ${syncState.failedFeeds}/${syncState.totalFeeds}`;
+    if (syncState.status === 'failed-cache') return t('detailUpdateFailedCachedAvailable');
+    if (syncState.status === 'empty') return t('detailNoEpisodesAfterSync');
+    if (episodes.length > 0 && backgroundSyncSource === 'local') return t('detailCachedEpisodesReady');
+    return '';
+  })();
 
   useEffect(() => {
     if (!playlist) {
@@ -300,8 +407,19 @@ export default function PlaylistDetail() {
           <h2 className="font-semibold text-foreground flex items-center gap-2">
             <ListMusic size={16} className="text-primary" /> {t('detailEpisodes')}
             {episodes.length > 0 && <span className="text-muted-foreground text-sm font-normal">({episodes.length})</span>}
-            {backgroundSyncSource !== 'rss' && episodes.length > 0 && <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-muted text-muted-foreground font-medium"><Loader2 size={11} className="animate-spin" />{t('detailLoading')}</span>}
-            {backgroundSyncSource === 'rss' && episodes.length > 0 && <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium">{t('detailUpdated')}</span>}
+            {episodeStatusText && (
+              <span className={cn(
+                "flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium",
+                isSyncingEpisodes
+                  ? "bg-muted text-muted-foreground"
+                  : syncState.status === 'partial' || syncState.status === 'failed-cache'
+                    ? "bg-amber-500/10 text-amber-500"
+                    : "bg-primary/10 text-primary"
+              )}>
+                {isSyncingEpisodes && <Loader2 size={11} className="animate-spin" />}
+                {episodeStatusText}
+              </span>
+            )}
           </h2>
           {episodes.length > 0 && (
             <button
@@ -317,15 +435,15 @@ export default function PlaylistDetail() {
           )}
         </div>
 
-        {loadingEps ? (
+        {shouldShowEpisodeLoading ? (
           <div className="flex flex-col items-center py-12 gap-3 text-muted-foreground">
             <Loader2 size={24} className="animate-spin text-primary" />
-            <p className="text-sm">{t('detailLoadingFeeds')}</p>
+            <p className="text-sm">{episodeStatusText || t('detailLoadingFeeds')}</p>
           </div>
-        ) : episodes.length === 0 && playlist ? (
+        ) : shouldShowEmptyState ? (
           <div className="text-center py-12 text-muted-foreground">
             <p className="text-3xl mb-2">📭</p>
-            <p className="text-sm">{t('detailNoEpisodes')}</p>
+            <p className="text-sm">{syncState.status === 'empty' ? t('detailNoEpisodesAfterSync') : t('detailNoEpisodes')}</p>
             <p className="text-xs mt-1">{t('detailNoEpisodesHint')}</p>
           </div>
         ) : (
@@ -342,7 +460,7 @@ export default function PlaylistDetail() {
                 : 0;
               return (
                 <motion.div
-                   key={i}
+                  key={ep.audioUrl || ep.link || `${ep.feedUrl || 'episode'}-${ep.title || i}`}
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.02 }}
