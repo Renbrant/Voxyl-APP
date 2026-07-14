@@ -66,17 +66,19 @@ export default function PlaylistPreview() {
     setLoadingEps(true);
     Promise.allSettled(
       playlist.rss_feeds.slice(0, 2).map(f =>
-        voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 10 }).then(r => r.data)
+        voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 10 }).then(r => r.data || r)
       )
     )
       .then(results => {
         const eps = results
-          .filter(r => r.status === 'fulfilled' && r.value?.items)
-          .flatMap(r => r.value.items.map(ep => ({
-            ...ep,
-            audioUrl: ep.audioUrl?.replace(/&amp;/g, '&'),
-            image: ep.image?.replace(/&amp;/g, '&'),
-          })))
+          .flatMap(r => {
+            if (r.status !== 'fulfilled' || !r.value?.items) return [];
+            return r.value.items.map(ep => ({
+              ...ep,
+              audioUrl: ep.audioUrl?.replace(/&amp;/g, '&'),
+              image: ep.image?.replace(/&amp;/g, '&'),
+            }));
+          })
           .filter(ep => {
             if (!playlist.max_duration || playlist.max_duration === 0) return true;
             const secs = parseDurationToSeconds(ep.duration);

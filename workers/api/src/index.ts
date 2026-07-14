@@ -1,4 +1,5 @@
 import { verifyToken } from "@clerk/backend";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 const healthResponse = {
   ok: true,
@@ -41,6 +42,14 @@ const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
 const PODCAST_SEARCH_PROVIDER_MAX_RESULTS = 100;
+const RSS_FETCH_TIMEOUT_MS = 9000;
+const RSS_FETCH_MAX_BYTES = 2 * 1024 * 1024;
+const RSS_FETCH_MAX_REDIRECTS = 5;
+const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
+const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
+const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
+const RSS_FETCH_USER_AGENT = "Voxyl/3.0 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
   pt: ["pt", "portuguese", "portugues", "português"],
@@ -122,6 +131,64 @@ class PodcastSearchError extends Error {
     this.code = code;
   }
 }
+
+type RssFetchErrorCode =
+  | "invalid-request"
+  | "missing-feed-url"
+  | "invalid-feed-url"
+  | "unsafe-feed-url"
+  | "feed-too-large"
+  | "invalid-feed-xml"
+  | "upstream-timeout"
+  | "upstream-unavailable";
+
+class RssFetchError extends Error {
+  readonly status: number;
+  readonly code: RssFetchErrorCode;
+
+  constructor(status: number, code: RssFetchErrorCode, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+type RssFetchRequest = {
+  url: string;
+  count: number;
+};
+
+type NormalizedFeed = {
+  title: string;
+  description: string;
+  image: string;
+  author: string;
+  feedUrl: string;
+  link: string;
+  items: NormalizedEpisode[];
+};
+
+type NormalizedEpisode = {
+  id: string;
+  guid: string;
+  title: string;
+  description: string;
+  audioUrl: string;
+  link: string;
+  pubDate: string;
+  duration: string;
+  image: string;
+  author: string;
+  feedTitle: string;
+  feedUrl: string;
+};
+
+type RssCacheEntry = {
+  cachedAt: number;
+  data: NormalizedFeed;
+};
+
+type RssCacheStatus = "HIT" | "MISS" | "STALE";
 
 function jsonResponse(body: unknown, status = 200, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
@@ -266,6 +333,10 @@ function isPodcastSearchRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchPodcasts" || pathname === "/api/podcasts/search";
 }
 
+function isRssFetchRoute(pathname: string): boolean {
+  return pathname === "/api/functions/fetchRSSFeed" || pathname === "/functions/fetchRSSFeed" || pathname === "/api/rss/fetch";
+}
+
 function getPlaylistId(pathname: string): string | null {
   const prefixes = ["/playlists/", "/api/playlists/"];
 
@@ -310,6 +381,683 @@ function healthCheckResponse(request: Request): Response {
 async function sha1Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function rssFetchErrorResponse(error: RssFetchError, request: Request, env: Env): Response {
+  return jsonResponse(
+    {
+      ok: false,
+      code: error.code,
+      error: error.message,
+    },
+    error.status,
+    getCorsHeaders(request, env),
+  );
+}
+
+function parseOptionalCount(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return 30;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    throw new RssFetchError(400, "invalid-request", "count must be a number between 1 and 100");
+  }
+
+  return Math.min(Math.max(Math.trunc(parsed), 1), 100);
+}
+
+async function parseRssFetchRequest(request: Request): Promise<RssFetchRequest> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new RssFetchError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new RssFetchError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+
+  if (typeof payload.url !== "string" || !payload.url.trim()) {
+    throw new RssFetchError(400, "missing-feed-url", "url is required");
+  }
+
+  return {
+    url: validatePublicFeedUrl(payload.url),
+    count: parseOptionalCount(payload.count),
+  };
+}
+
+function isPrivateIpv4(parts: number[]): boolean {
+  const [first, second] = parts;
+
+  return first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0 && parts[2] === 0) ||
+    (first === 192 && second === 0 && parts[2] === 2) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51 && parts[2] === 100) ||
+    (first === 203 && second === 0 && parts[2] === 113) ||
+    parts.join(".") === "169.254.169.254" ||
+    parts.join(".") === "255.255.255.255";
+}
+
+function parseIpv4Literal(hostname: string): number[] | null {
+  const match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parts = match.slice(1).map(Number);
+  return parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? parts : null;
+}
+
+function parseIpv6Literal(hostname: string): bigint | null {
+  let address = hostname.toLowerCase();
+
+  if (address.startsWith("[") && address.endsWith("]")) {
+    address = address.slice(1, -1);
+  }
+
+  const zoneIndex = address.indexOf("%");
+
+  if (zoneIndex >= 0) {
+    address = address.slice(0, zoneIndex);
+  }
+
+  if (!address.includes(":")) {
+    return null;
+  }
+
+  const ipv4Match = address.match(/(.+:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  let tail: number[] = [];
+
+  if (ipv4Match) {
+    const ipv4 = parseIpv4Literal(ipv4Match[2]);
+
+    if (!ipv4) {
+      return null;
+    }
+
+    address = `${ipv4Match[1]}${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+    tail = ipv4;
+  }
+
+  const pieces = address.split("::");
+
+  if (pieces.length > 2) {
+    return null;
+  }
+
+  const left = pieces[0] ? pieces[0].split(":").filter(Boolean) : [];
+  const right = pieces[1] ? pieces[1].split(":").filter(Boolean) : [];
+  const missing = 8 - left.length - right.length;
+
+  if (missing < 0 || (pieces.length === 1 && missing !== 0)) {
+    return null;
+  }
+
+  const groups = [...left, ...Array(missing).fill("0"), ...right];
+
+  if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) {
+    return null;
+  }
+
+  const value = groups.reduce((acc, group) => (acc << 16n) + BigInt(parseInt(group, 16)), 0n);
+  const ipv4MappedPrefix = 0xffffn << 32n;
+
+  if (tail.length && (value >> 32n) === ipv4MappedPrefix) {
+    return value;
+  }
+
+  return value;
+}
+
+function isPrivateIpv6(value: bigint): boolean {
+  return value === 0n ||
+    value === 1n ||
+    (value >> 120n) === 0xffn ||
+    (value >> 121n) === 0b1111110n ||
+    (value >> 122n) === 0b1111111010n ||
+    (value >> 112n) === 0x64ff9bn ||
+    (value >> 32n) === 0xffffn;
+}
+
+function validatePublicFeedUrl(rawUrl: string): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new RssFetchError(400, "invalid-feed-url", "Feed URL must be a valid HTTP or HTTPS URL");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new RssFetchError(400, "invalid-feed-url", "Feed URL must use HTTP or HTTPS");
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL must not include credentials");
+  }
+
+  if (parsed.port && !((parsed.protocol === "http:" && parsed.port === "80") || (parsed.protocol === "https:" && parsed.port === "443"))) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL uses an unsupported port");
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+
+  if (!hostname ||
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".internal") ||
+      hostname.endsWith(".home") ||
+      hostname.endsWith(".lan")) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not allowed");
+  }
+
+  const ipv4 = parseIpv4Literal(hostname);
+
+  if (ipv4 && isPrivateIpv4(ipv4)) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not public");
+  }
+
+  const ipv6Hostname = hostname.replace(/^\[/, "").replace(/\]$/, "");
+
+  if (ipv6Hostname.includes(":") &&
+      (ipv6Hostname === "::" ||
+       ipv6Hostname === "::1" ||
+       ipv6Hostname.startsWith("fc") ||
+       ipv6Hostname.startsWith("fd") ||
+       ipv6Hostname.startsWith("fe80:") ||
+       ipv6Hostname.startsWith("ff"))) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not public");
+  }
+
+  const ipv6 = parseIpv6Literal(hostname);
+
+  if (ipv6 !== null && isPrivateIpv6(ipv6)) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not public");
+  }
+
+  if (ipv6Hostname.includes(":") && ipv6 === null) {
+    throw new RssFetchError(403, "unsafe-feed-url", "Feed URL host is not allowed");
+  }
+
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function asArray<T>(value: T | T[] | undefined | null): T[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (isRecord(value)) {
+    const text = value["#text"] ?? value["#cdata"];
+    return textValue(text);
+  }
+
+  return "";
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = textValue(Array.isArray(value) ? value[0] : value).trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function attr(value: unknown, name: string): string {
+  return isRecord(value) ? firstText(value[`@_${name}`]) : "";
+}
+
+function htmlToText(value: unknown): string {
+  const text = firstText(value)
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text.length > RSS_FETCH_MAX_DESCRIPTION_LENGTH ? `${text.slice(0, RSS_FETCH_MAX_DESCRIPTION_LENGTH).trim()}...` : text;
+}
+
+function absolutePublicUrl(value: unknown, baseUrl: string): string {
+  const text = firstText(value);
+
+  if (!text) {
+    return "";
+  }
+
+  try {
+    return validatePublicFeedUrl(new URL(text, baseUrl).toString());
+  } catch {
+    return "";
+  }
+}
+
+function firstImage(...values: unknown[]): string {
+  for (const value of values) {
+    for (const item of asArray(value)) {
+      const direct = firstText(item);
+      const href = attr(item, "href") || attr(item, "url");
+      const url = direct || href;
+
+      if (url) {
+        return url;
+      }
+    }
+  }
+
+  return "";
+}
+
+function getRssAudioUrl(item: Record<string, unknown>, baseUrl: string): string {
+  for (const enclosure of asArray(item.enclosure)) {
+    const url = attr(enclosure, "url");
+
+    if (url) {
+      return absolutePublicUrl(url, baseUrl);
+    }
+  }
+
+  for (const media of asArray(item["media:content"])) {
+    const url = attr(media, "url");
+    const type = attr(media, "type").toLowerCase();
+    const medium = attr(media, "medium").toLowerCase();
+
+    if (url && (type.startsWith("audio/") || medium === "audio" || /\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(url))) {
+      return absolutePublicUrl(url, baseUrl);
+    }
+  }
+
+  return "";
+}
+
+function getAtomAudioUrl(entry: Record<string, unknown>, baseUrl: string): string {
+  for (const link of asArray(entry.link)) {
+    const rel = attr(link, "rel") || "alternate";
+    const href = attr(link, "href");
+    const type = attr(link, "type").toLowerCase();
+
+    if (href && rel === "enclosure" && (type.startsWith("audio/") || /\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(href))) {
+      return absolutePublicUrl(href, baseUrl);
+    }
+  }
+
+  return "";
+}
+
+function getAtomAlternateLink(entry: Record<string, unknown>, baseUrl: string): string {
+  for (const link of asArray(entry.link)) {
+    const rel = attr(link, "rel") || "alternate";
+    const href = attr(link, "href");
+
+    if (href && rel === "alternate") {
+      return absolutePublicUrl(href, baseUrl);
+    }
+  }
+
+  return "";
+}
+
+function stableEpisodeId(...parts: string[]): string {
+  const source = parts.find((part) => part.trim()) || crypto.randomUUID();
+  let hash = 5381;
+
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) + hash + source.charCodeAt(index)) >>> 0;
+  }
+
+  return `ep_${hash.toString(36)}_${source.length.toString(36)}`;
+}
+
+function normalizeRssItem(item: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">): NormalizedEpisode | null {
+  const audioUrl = getRssAudioUrl(item, feed.feedUrl);
+
+  if (!audioUrl) {
+    return null;
+  }
+
+  const guid = firstText(item.guid);
+  const link = absolutePublicUrl(item.link, feed.feedUrl);
+  const image = absolutePublicUrl(firstImage(item["itunes:image"], item["media:thumbnail"], item["media:content"]), feed.feedUrl) || feed.image;
+
+  return {
+    id: stableEpisodeId(guid, audioUrl, link, firstText(item.title)),
+    guid,
+    title: firstText(item.title) || "Untitled episode",
+    description: htmlToText(item["content:encoded"] ?? item.description ?? item.summary),
+    audioUrl,
+    link,
+    pubDate: firstText(item.pubDate, item["dc:date"]),
+    duration: firstText(item["itunes:duration"], item.duration),
+    image,
+    author: firstText(item["itunes:author"], item.author, item["dc:creator"], feed.author),
+    feedTitle: feed.title,
+    feedUrl: feed.feedUrl,
+  };
+}
+
+function normalizeAtomItem(entry: Record<string, unknown>, feed: Omit<NormalizedFeed, "items">): NormalizedEpisode | null {
+  const audioUrl = getAtomAudioUrl(entry, feed.feedUrl);
+
+  if (!audioUrl) {
+    return null;
+  }
+
+  const guid = firstText(entry.id);
+  const link = getAtomAlternateLink(entry, feed.feedUrl);
+  const image = absolutePublicUrl(firstImage(entry["itunes:image"], entry["media:thumbnail"], entry["media:content"]), feed.feedUrl) || feed.image;
+
+  return {
+    id: stableEpisodeId(guid, audioUrl, link, firstText(entry.title)),
+    guid,
+    title: firstText(entry.title) || "Untitled episode",
+    description: htmlToText(entry.content ?? entry.summary),
+    audioUrl,
+    link,
+    pubDate: firstText(entry.published, entry.updated),
+    duration: firstText(entry["itunes:duration"]),
+    image,
+    author: firstText(entry.author, feed.author),
+    feedTitle: feed.title,
+    feedUrl: feed.feedUrl,
+  };
+}
+
+function parseNormalizedFeed(xml: string, feedUrl: string): NormalizedFeed {
+  let parsed: unknown;
+
+  try {
+    const validation = XMLValidator.validate(xml, { allowBooleanAttributes: true });
+
+    if (validation !== true) {
+      throw new Error("Invalid XML");
+    }
+
+    parsed = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: "@_",
+      textNodeName: "#text",
+      cdataPropName: "#cdata",
+      processEntities: true,
+      htmlEntities: true,
+      trimValues: true,
+      parseTagValue: false,
+      parseAttributeValue: false,
+      allowBooleanAttributes: true,
+    }).parse(xml);
+  } catch {
+    throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+  }
+
+  if (!isRecord(parsed)) {
+    throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+  }
+
+  const rssChannel = isRecord(parsed.rss) && isRecord(parsed.rss.channel) ? parsed.rss.channel : null;
+  const rdfChannel = isRecord(parsed["rdf:RDF"]) && isRecord(parsed["rdf:RDF"].channel) ? parsed["rdf:RDF"].channel : null;
+  const atomFeed = isRecord(parsed.feed) ? parsed.feed : null;
+
+  if (rssChannel || rdfChannel) {
+    const channel = (rssChannel || rdfChannel) as Record<string, unknown>;
+    const feedImage = absolutePublicUrl(firstImage(channel["itunes:image"], isRecord(channel.image) ? channel.image.url : undefined), feedUrl);
+    const feed: Omit<NormalizedFeed, "items"> = {
+      title: firstText(channel.title),
+      description: htmlToText(channel.description),
+      image: feedImage,
+      author: firstText(channel["itunes:author"], channel["dc:creator"], channel.managingEditor),
+      feedUrl,
+      link: absolutePublicUrl(channel.link, feedUrl),
+    };
+    const sourceItems = rssChannel ? asArray(channel.item) : asArray((parsed["rdf:RDF"] as Record<string, unknown>).item);
+    const items = sourceItems
+      .filter(isRecord)
+      .map((item) => normalizeRssItem(item, feed))
+      .filter((item): item is NormalizedEpisode => item !== null);
+
+    if (!feed.title && items.length === 0) {
+      throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+    }
+
+    return { ...feed, items };
+  }
+
+  if (atomFeed) {
+    const feedImage = absolutePublicUrl(firstImage(atomFeed["itunes:image"], atomFeed.logo, atomFeed.icon), feedUrl);
+    const feed: Omit<NormalizedFeed, "items"> = {
+      title: firstText(atomFeed.title),
+      description: htmlToText(atomFeed.subtitle),
+      image: feedImage,
+      author: firstText(atomFeed.author),
+      feedUrl,
+      link: getAtomAlternateLink(atomFeed, feedUrl),
+    };
+    const items = asArray(atomFeed.entry)
+      .filter(isRecord)
+      .map((entry) => normalizeAtomItem(entry, feed))
+      .filter((item): item is NormalizedEpisode => item !== null);
+
+    if (!feed.title && items.length === 0) {
+      throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+    }
+
+    return { ...feed, items };
+  }
+
+  throw new RssFetchError(422, "invalid-feed-xml", "Feed XML is invalid or unsupported");
+}
+
+function cloneFeedWithCount(feed: NormalizedFeed, count: number): NormalizedFeed {
+  return {
+    ...feed,
+    items: feed.items.slice(0, count),
+  };
+}
+
+async function readResponseBodyLimited(response: Response): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+
+  if (contentLength && Number(contentLength) > RSS_FETCH_MAX_BYTES) {
+    throw new RssFetchError(413, "feed-too-large", "Feed response is too large");
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      if (value) {
+        total += value.byteLength;
+
+        if (total > RSS_FETCH_MAX_BYTES) {
+          throw new RssFetchError(413, "feed-too-large", "Feed response is too large");
+        }
+
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new TextDecoder().decode(body);
+}
+
+async function fetchFeedXml(initialUrl: string): Promise<{ xml: string; finalUrl: string }> {
+  let currentUrl = validatePublicFeedUrl(initialUrl);
+  const visited = new Set<string>();
+
+  for (let redirects = 0; redirects <= RSS_FETCH_MAX_REDIRECTS; redirects += 1) {
+    if (visited.has(currentUrl)) {
+      throw new RssFetchError(502, "upstream-unavailable", "Feed redirect loop detected");
+    }
+
+    visited.add(currentUrl);
+
+    let response: Response;
+
+    try {
+      response = await fetch(currentUrl, {
+        redirect: "manual",
+        headers: {
+          "User-Agent": RSS_FETCH_USER_AGENT,
+          Accept: RSS_FETCH_ACCEPT,
+        },
+        signal: AbortSignal.timeout(RSS_FETCH_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new RssFetchError(504, "upstream-timeout", "Feed origin timed out");
+      }
+
+      throw new RssFetchError(502, "upstream-unavailable", "Feed origin is unavailable");
+    }
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+
+      if (!location) {
+        throw new RssFetchError(502, "upstream-unavailable", "Feed redirect did not include a destination");
+      }
+
+      if (redirects === RSS_FETCH_MAX_REDIRECTS) {
+        throw new RssFetchError(502, "upstream-unavailable", "Feed redirect limit was reached");
+      }
+
+      currentUrl = validatePublicFeedUrl(new URL(location, currentUrl).toString());
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new RssFetchError(502, "upstream-unavailable", "Feed origin returned an error");
+    }
+
+    return {
+      xml: await readResponseBodyLimited(response),
+      finalUrl: currentUrl,
+    };
+  }
+
+  throw new RssFetchError(502, "upstream-unavailable", "Feed redirect limit was reached");
+}
+
+async function getRssCacheEntry(env: Env, key: string): Promise<RssCacheEntry | null> {
+  if (!env.VOXYL_CACHE) {
+    return null;
+  }
+
+  try {
+    const entry = await env.VOXYL_CACHE.get<RssCacheEntry>(key, "json");
+    return entry?.data?.items ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+async function putRssCacheEntry(env: Env, key: string, feed: NormalizedFeed): Promise<void> {
+  if (!env.VOXYL_CACHE) {
+    return;
+  }
+
+  try {
+    await env.VOXYL_CACHE.put(
+      key,
+      JSON.stringify({ cachedAt: Date.now(), data: cloneFeedWithCount(feed, 100) }),
+      { expirationTtl: RSS_FETCH_KV_TTL_SECONDS },
+    );
+  } catch {
+    // Cache writes should not make a valid feed request fail.
+  }
+}
+
+async function rssFetchResponse(request: Request, env: Env): Promise<Response> {
+  const payload = await parseRssFetchRequest(request);
+  const cacheKey = `rss-feed:v1:${await sha256Hex(payload.url)}`;
+  const cached = await getRssCacheEntry(env, cacheKey);
+
+  if (cached && Date.now() - cached.cachedAt <= RSS_FETCH_FRESH_TTL_MS) {
+    return jsonResponse(cloneFeedWithCount(cached.data, payload.count), 200, {
+      ...getCorsHeaders(request, env),
+      "X-Voxyl-Cache": "HIT",
+    });
+  }
+
+  try {
+    const { xml, finalUrl } = await fetchFeedXml(payload.url);
+    const feed = parseNormalizedFeed(xml, finalUrl);
+    await putRssCacheEntry(env, cacheKey, feed);
+
+    return jsonResponse(cloneFeedWithCount(feed, payload.count), 200, {
+      ...getCorsHeaders(request, env),
+      "X-Voxyl-Cache": "MISS",
+    });
+  } catch (error) {
+    if (cached) {
+      return jsonResponse(cloneFeedWithCount(cached.data, payload.count), 200, {
+        ...getCorsHeaders(request, env),
+        "X-Voxyl-Cache": "STALE",
+      });
+    }
+
+    throw error;
+  }
 }
 
 export async function generatePodcastIndexAuthHeaders(
@@ -1599,6 +2347,10 @@ export default {
         return withCors(await podcastSearchResponse(request, env), request, env);
       }
 
+      if (request.method === "POST" && isRssFetchRoute(pathname)) {
+        return withCors(await rssFetchResponse(request, env), request, env);
+      }
+
       const playlistId = getPlaylistId(pathname);
 
       if (request.method === "GET" && playlistId) {
@@ -1609,6 +2361,10 @@ export default {
     } catch (error) {
       if (error instanceof PodcastSearchError) {
         return withCors(podcastSearchErrorResponse(error, request, env), request, env);
+      }
+
+      if (error instanceof RssFetchError) {
+        return withCors(rssFetchErrorResponse(error, request, env), request, env);
       }
 
       console.error("Unhandled Worker error", error instanceof Error ? error.message : error);
