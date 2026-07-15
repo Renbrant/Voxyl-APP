@@ -14,8 +14,6 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
-    "@base44/sdk": "^0.8.37",
-    "@base44/vite-plugin": "^1.0.30",
     "@capacitor/android": "^8.4.0",
     "@capacitor/app": "^8.1.0",
     "@capacitor/browser": "^8.0.3",
