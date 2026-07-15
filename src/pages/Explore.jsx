@@ -11,7 +11,7 @@ import AddToPlaylistModal from '@/components/explore/AddToPlaylistModal';
 import UserSearchCard from '@/components/explore/UserSearchCard';
 import SelectBottomSheet from '@/components/common/SelectBottomSheet';
 import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
-import { Compass, Radio, Users } from 'lucide-react';
+import { Compass, Radio, RefreshCcw, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -122,10 +122,20 @@ export default function Explore() {
   };
 
   // Fetch Voxyl playlists ordered by last week's plays across all users
-  const { data: playlists = [], isLoading: playlistsLoading } = useQuery({
+  const {
+    data: playlists = [],
+    isLoading: playlistsLoading,
+    isFetching: playlistsFetching,
+    isError: playlistsError,
+    error: playlistsQueryError,
+    refetch: refetchPlaylists,
+  } = useQuery({
     queryKey: ['explore-playlists'],
     queryFn: async () => {
       const res = await voxylApi.functions.invoke('getTopPlaylistsByPlayback', {});
+      if (res.data?.ok === false) {
+        throw new Error('Playlist discovery request failed');
+      }
       return res.data?.playlists || [];
     },
   });
@@ -231,8 +241,8 @@ export default function Explore() {
         p.name?.toLowerCase().includes(voxylSearch.toLowerCase()) ||
         p.description?.toLowerCase().includes(voxylSearch.toLowerCase()) ||
         p.creator_name?.toLowerCase().includes(voxylSearch.toLowerCase());
-    })
-    .sort((a, b) => (b.plays_count || 0) - (a.plays_count || 0));
+    });
+  const canRetryPlaylists = playlistsError && Boolean(playlistsQueryError) && !playlistsFetching;
 
   // Build user list based on active filter
   const filteredUsers = (() => {
@@ -394,6 +404,20 @@ export default function Explore() {
           playlistsLoading ? (
             <div className="space-y-3">
               {[...Array(5)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
+            </div>
+          ) : playlistsError ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-4xl mb-3">⚠️</p>
+              <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
+              <button
+                type="button"
+                onClick={() => refetchPlaylists()}
+                disabled={!canRetryPlaylists}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+              >
+                <RefreshCcw size={14} />
+                {t('retry')}
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
