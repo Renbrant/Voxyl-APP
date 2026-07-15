@@ -23,6 +23,7 @@ const translations = {
   // Common
   loading: { pt: 'Carregando...', en: 'Loading...' },
   noResults: { pt: 'Nenhum resultado encontrado', en: 'No results found' },
+  retry: { pt: 'Tentar novamente', en: 'Retry' },
   search: { pt: 'Buscar', en: 'Search' },
 
   // Navigation
@@ -54,6 +55,7 @@ const translations = {
   exploreUsers: { pt: 'Usuários', en: 'Users' },
   exploreSearchPlaylists: { pt: 'Buscar playlists...', en: 'Search playlists...' },
   exploreSearchPodcasts: { pt: 'Ex: tecnologia, true crime, notícias...', en: 'E.g.: technology, true crime, news...' },
+  explorePlaylistsError: { pt: 'Não foi possível carregar playlists. Tente novamente.', en: 'Could not load playlists. Please try again.' },
   exploreConnections: { pt: 'Conexões', en: 'Connections' },
   explorePending: { pt: 'Aguardando', en: 'Pending' },
   exploreFollowers: { pt: 'Seguidores', en: 'Followers' },

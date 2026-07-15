@@ -346,6 +346,15 @@ function isTopPodcastsRoute(pathname: string): boolean {
   return pathname === "/functions/getTopPodcastsByPlayback" || pathname === "/api/functions/getTopPodcastsByPlayback";
 }
 
+function isTopPlaylistsDiscoveryRoute(pathname: string): boolean {
+  return pathname === "/api/discovery/top-playlists" || pathname === "/discovery/top-playlists";
+}
+
+function isTopPlaylistsLegacyRoute(pathname: string): boolean {
+  return pathname === "/api/functions/getTopPlaylistsByPlayback" ||
+    pathname === "/functions/getTopPlaylistsByPlayback";
+}
+
 function isPodcastSearchRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchPodcasts" || pathname === "/api/podcasts/search";
 }
@@ -2222,11 +2231,24 @@ type PublicPlaylist = Omit<D1Playlist, "rss_feeds"> & {
   updated_date: string;
 };
 
+type D1RankedPlaylist = D1Playlist & {
+  recent_plays_count: number;
+};
+
+type RankedPublicPlaylist = PublicPlaylist & {
+  recent_plays_count: number;
+};
+
 const playlistSelect = `SELECT id, legacy_base44_playlist_id, creator_id, creator_clerk_user_id,
   creator_legacy_base44_user_id, title, description, cover_image, visibility, rss_feeds,
   likes_count, plays_count, creator_username, creator_picture, creator_hidden, created_at,
   updated_at
  FROM playlists`;
+
+const rankedPlaylistSelect = `SELECT p.id, p.legacy_base44_playlist_id, p.creator_id, p.creator_clerk_user_id,
+  p.creator_legacy_base44_user_id, p.title, p.description, p.cover_image, p.visibility, p.rss_feeds,
+  p.likes_count, p.plays_count, p.creator_username, p.creator_picture, p.creator_hidden, p.created_at,
+  p.updated_at`;
 
 function parseRssFeeds(value: string | null): unknown[] {
   if (!value) {
@@ -2263,6 +2285,13 @@ function toPublicPlaylist(playlist: D1Playlist): PublicPlaylist {
     updated_at: playlist.updated_at,
     created_date: playlist.created_at,
     updated_date: playlist.updated_at,
+  };
+}
+
+function toRankedPublicPlaylist(playlist: D1RankedPlaylist): RankedPublicPlaylist {
+  return {
+    ...toPublicPlaylist(playlist),
+    recent_plays_count: Number(playlist.recent_plays_count) || 0,
   };
 }
 
@@ -2560,6 +2589,35 @@ async function topPodcastsByPlaybackResponse(request: Request, env: Env): Promis
   );
 }
 
+async function topPlaylistsByPlaybackResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const { results } = await env.DB.prepare(
+    `${rankedPlaylistSelect},
+       COUNT(pp.id) AS recent_plays_count
+     FROM playlists p
+     LEFT JOIN podcast_plays pp
+       ON pp.playlist_id = p.id
+      AND datetime(COALESCE(NULLIF(TRIM(pp.played_at), ''), pp.created_at)) >= datetime('now', '-7 days')
+     WHERE p.visibility = 'public'
+     GROUP BY p.id, p.legacy_base44_playlist_id, p.creator_id, p.creator_clerk_user_id,
+       p.creator_legacy_base44_user_id, p.title, p.description, p.cover_image, p.visibility,
+       p.rss_feeds, p.likes_count, p.plays_count, p.creator_username, p.creator_picture,
+       p.creator_hidden, p.created_at, p.updated_at
+     ORDER BY recent_plays_count DESC, p.plays_count DESC, p.likes_count DESC,
+       p.updated_at DESC, p.id ASC
+     LIMIT 50`,
+  ).all<D1RankedPlaylist>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      playlists: (results || []).map(toRankedPublicPlaylist),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -2607,6 +2665,11 @@ export default {
 
       if ((request.method === "GET" || request.method === "POST") && isTopPodcastsRoute(pathname)) {
         return withCors(await topPodcastsByPlaybackResponse(request, env), request, env);
+      }
+
+      if ((request.method === "GET" && isTopPlaylistsDiscoveryRoute(pathname)) ||
+        (request.method === "POST" && isTopPlaylistsLegacyRoute(pathname))) {
+        return withCors(await topPlaylistsByPlaybackResponse(request, env), request, env);
       }
 
       if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
