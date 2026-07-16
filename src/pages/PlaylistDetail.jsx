@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
 import { getInitialPlaylistEpisodes, mergePlaylistEpisodeLists, refreshAndSyncPlaylistEpisodes } from '@/lib/playlistCacheManager';
@@ -31,6 +31,13 @@ import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import BottomNav from '@/components/common/BottomNav';
+import {
+  loadPlaylistLikeRecords,
+  playlistLikeIds,
+  refreshPlaylistLikeQuery,
+  savedContentQueryKeys,
+  togglePlaylistLikeOptimistically,
+} from '@/lib/savedContentQueries';
 
 const GRADIENT_COLORS = [
   'from-purple-600 to-cyan-400',
@@ -54,6 +61,7 @@ export default function PlaylistDetail() {
   const [following, setFollowing] = useState(false);
   const [followingLoader, setFollowingLoader] = useState(false);
   const { requireAuth } = useRequireAuth();
+  const queryClient = useQueryClient();
   const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, autoplay, setAutoplay, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
   const currentPlaylistIdRef = useRef(id);
   const cacheRequestGuardRef = useRef(null);
@@ -66,22 +74,48 @@ export default function PlaylistDetail() {
     syncRequestGuardRef.current = createPlaylistRequestGuard(() => currentPlaylistIdRef.current);
   }
 
+  const {
+    data: playlistLikeRecords = [],
+    isLoading: playlistLikeLoading,
+    isFetching: playlistLikeFetching,
+    isError: playlistLikeError,
+    refetch: refetchPlaylistLikes,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.playlistLikes(user?.id),
+    enabled: Boolean(user && id),
+    queryFn: async () => {
+      try {
+        return await loadPlaylistLikeRecords(user.id);
+      } catch (error) {
+        console.error('[PlaylistDetail] Failed to load playlist like state', { playlistId: id, userId: user.id, error });
+        throw error;
+      }
+    },
+  });
+
   useEffect(() => {
-    if (!user || !id) return;
-    voxylApi.entities.PlaylistLike.filter({ playlist_id: id, user_id: user.id })
-      .then(records => setLiked(records.length > 0))
-      .catch(() => {});
-  }, [user, id]);
+    if (!user || !id || playlistLikeError) return;
+    setLiked(playlistLikeIds(playlistLikeRecords).includes(id));
+  }, [user, id, playlistLikeRecords, playlistLikeError]);
 
   const handleLike = requireAuth(async (e) => {
     e?.preventDefault?.();
     e?.stopPropagation?.();
     if (!playlist) return;
-    setLiked(v => !v);
+    if (playlistLikeLoading || playlistLikeError) {
+      if (playlistLikeError) refetchPlaylistLikes();
+      return;
+    }
     try {
-      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id });
-    } catch {
-      setLiked(v => !v); // revert on failure
+      const result = await togglePlaylistLikeOptimistically({
+        queryClient,
+        userId: user.id,
+        playlistId: id,
+        toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id }),
+      });
+      setLiked(Boolean(result.liked));
+    } catch (error) {
+      console.error('[PlaylistDetail] Failed to toggle playlist like', { playlistId: id, error });
     }
   });
 
@@ -95,11 +129,24 @@ export default function PlaylistDetail() {
       localStorage.removeItem('voxyl_pending_playlist');
       localStorage.removeItem('voxyl_pending_creator_id');
       // Auto-like the playlist as the first action post-signup
-      voxylApi.entities.PlaylistLike.filter({ playlist_id: id, user_id: u.id })
+      voxylApi.entities.PlaylistLike.filter({ playlist_id: id }, '-created_date', 1)
         .then(existing => {
-          if (existing.length === 0) {
-            voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id }).catch(() => {});
+          const alreadyLiked = Array.isArray(existing) && existing.some(record => record.playlist_id === id);
+          if (!alreadyLiked) {
+            togglePlaylistLikeOptimistically({
+              queryClient,
+              userId: u.id,
+              playlistId: id,
+              toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: id }),
+            })
+              .then(result => setLiked(Boolean(result.liked)))
+              .catch(error => {
+                console.error('[PlaylistDetail] Failed to auto-like pending playlist', { playlistId: id, error });
+              });
           }
+        })
+        .catch(error => {
+          console.error('[PlaylistDetail] Failed to inspect pending playlist like state', { playlistId: id, error });
         });
         // Auto-follow the creator if they came from a share link
         if (pendingCreatorId && pendingCreatorId !== u.id) {
@@ -107,7 +154,7 @@ export default function PlaylistDetail() {
         }
       }
     }).catch(() => {});
-  }, [id]);
+  }, [id, queryClient]);
 
   const {
     data: playlist,
@@ -330,8 +377,8 @@ export default function PlaylistDetail() {
             <Share2 size={16} className="text-foreground" />
           </button>
           {!isOwner && (
-            <button onClick={handleLike} className={cn("w-9 h-9 rounded-full bg-secondary flex items-center justify-center", liked ? "text-red-400" : "text-muted-foreground")}>
-              <Heart size={16} fill={liked ? "currentColor" : "none"} />
+            <button onClick={handleLike} disabled={playlistLikeLoading || playlistLikeFetching || playlistLikeError} className={cn("w-9 h-9 rounded-full bg-secondary flex items-center justify-center disabled:opacity-50", !playlistLikeError && !playlistLikeLoading && liked ? "text-red-400" : "text-muted-foreground")}>
+              <Heart size={16} fill={!playlistLikeError && !playlistLikeLoading && liked ? "currentColor" : "none"} />
             </button>
           )}
           {!isOwner && (
@@ -383,6 +430,15 @@ export default function PlaylistDetail() {
           )}
         </div>
       </div>
+
+      {playlistLikeError && !isOwner && (
+        <div className="mx-4 mb-3 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+          <span>{t('explorePlaylistsError')}</span>
+          <button type="button" onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+            {t('retry')}
+          </button>
+        </div>
+      )}
 
       {(playlist?.max_duration > 0 || playlist?.time_filter_hours > 0) && (
         <div className="mx-4 mt-3 px-3 py-2 bg-primary/10 border border-primary/30 rounded-xl flex items-center gap-3 flex-wrap">

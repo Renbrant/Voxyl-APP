@@ -15,7 +15,18 @@ import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import DownloadedEpisodeCard from '@/components/downloads/DownloadedEpisodeCard';
 import { getDownloads } from '@/lib/downloads';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
-import { getCachedContent, setCachedContent, clearAllContentCache } from '@/lib/savedContentCache';
+import { getCachedContent, setCachedContent } from '@/lib/savedContentCache';
+import {
+  handlePodcastLikeMutationSuccess,
+  loadLikedPlaylistsForRecords,
+  loadPlaylistLikeRecords,
+  loadPodcastLikeRecords,
+  playlistLikeIds,
+  refreshPlaylistLikeQuery,
+  refreshPodcastLikeQuery,
+  savedContentQueryKeys,
+  togglePlaylistLikeOptimistically,
+} from '@/lib/savedContentQueries';
 
 const TABS = () => [
 { key: 'playlists', label: t('playlistsTabPlaylists'), icon: ListMusic },
@@ -33,13 +44,12 @@ export default function Playlists() {
   const canLoadUserData = Boolean(user && !user.account_sync_pending && !accountSyncError);
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
-    if (canLoadUserData) clearAllContentCache(user.id);
     invalidateCache(`my-playlists-${user?.id}`);
-    invalidateCache(`liked-playlists-${user?.id}`);
-    invalidateCache(`liked-podcasts-${user?.id}`);
     queryClient.invalidateQueries({ queryKey: ['my-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['liked-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['liked-podcasts'] });
+    if (canLoadUserData) {
+      refreshPlaylistLikeQuery(queryClient, user.id);
+      refreshPodcastLikeQuery(queryClient, user.id);
+    }
   }, containerRef);
 
   useEffect(() => {
@@ -67,17 +77,21 @@ export default function Playlists() {
   });
 
   // Liked playlist IDs
-  const { data: likedPlaylistRecords = [] } = useQuery({
-    queryKey: ['liked-playlists', user?.id],
+  const {
+    data: likedPlaylistRecords = [],
+    isLoading: likedPlaylistsLoading,
+    isFetching: likedPlaylistsFetching,
+    isError: likedPlaylistsError,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.playlistLikes(user?.id),
     enabled: canLoadUserData && tab === 'playlists',
     queryFn: async () => {
-      const cacheKey = `liked-playlists-${user.id}`;
-      const cached = getCache(cacheKey);
-      if (cached) return cached;
-      const data = await voxylApi.entities.PlaylistLike.filter({ user_id: user.id });
-      setCache(cacheKey, data, TTL_5MIN);
-      setCachedContent(user.id, 'LIKED_PLAYLISTS', data);
-      return data;
+      try {
+        return await loadPlaylistLikeRecords(user.id);
+      } catch (error) {
+        console.error('[Playlists] Failed to load saved playlist likes', { userId: user.id, error });
+        throw error;
+      }
     },
     initialData: () => {
       if (!canLoadUserData) return undefined;
@@ -86,20 +100,25 @@ export default function Playlists() {
     }
   });
 
-  const likedPlaylistIds = likedPlaylistRecords.map((r) => r.playlist_id);
-  const myPlaylistIds = new Set(myPlaylists.map((p) => p.id));
+  const likedPlaylistIds = playlistLikeIds(likedPlaylistRecords);
 
   // Liked playlists data (excluding ones I own, since they already appear above)
-  const { data: likedPlaylists = [] } = useQuery({
-    queryKey: ['liked-playlists-data', likedPlaylistIds.join(',')],
-    enabled: likedPlaylistIds.length > 0,
+  const {
+    data: likedPlaylists = [],
+    isLoading: likedPlaylistDataLoading,
+    isFetching: likedPlaylistDataFetching,
+    isError: likedPlaylistDataError,
+    refetch: refetchLikedPlaylistData,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.likedPlaylists(user?.id, likedPlaylistIds),
+    enabled: canLoadUserData && tab === 'playlists' && likedPlaylistIds.length > 0,
     queryFn: async () => {
-      const results = await Promise.all(
-        likedPlaylistIds.
-        filter((id) => !myPlaylistIds.has(id)).
-        map((id) => voxylApi.entities.Playlist.filter({ id }).then((r) => r[0]).catch(() => null))
-      );
-      return results.filter(Boolean);
+      try {
+        return await loadLikedPlaylistsForRecords(likedPlaylistRecords, myPlaylists);
+      } catch (error) {
+        console.error('[Playlists] Failed to load liked playlist metadata', { userId: user.id, likedPlaylistIds, error });
+        throw error;
+      }
     }
   });
 
@@ -119,17 +138,22 @@ export default function Playlists() {
   });
 
   // Liked podcasts
-  const { data: likedPodcasts = [], refetch: refetchPodcasts } = useQuery({
-    queryKey: ['liked-podcasts', user?.id],
+  const {
+    data: likedPodcasts = [],
+    refetch: refetchPodcasts,
+    isLoading: likedPodcastsLoading,
+    isFetching: likedPodcastsFetching,
+    isError: likedPodcastsError,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.podcastLikes(user?.id),
     enabled: canLoadUserData && tab === 'podcasts',
     queryFn: async () => {
-      const cacheKey = `liked-podcasts-${user.id}`;
-      const cached = getCache(cacheKey);
-      if (cached) return cached;
-      const data = await voxylApi.entities.PodcastLike.filter({ user_id: user.id }, '-created_date', 100);
-      setCache(cacheKey, data, TTL_5MIN);
-      setCachedContent(user.id, 'LIKED_PODCASTS', data);
-      return data;
+      try {
+        return await loadPodcastLikeRecords(user.id);
+      } catch (error) {
+        console.error('[Playlists] Failed to load saved podcasts', { userId: user.id, error });
+        throw error;
+      }
     },
     initialData: () => {
       if (!canLoadUserData) return undefined;
@@ -139,14 +163,27 @@ export default function Playlists() {
   });
 
   const handleUnlikePodcast = async (podcastLike) => {
-    await voxylApi.entities.PodcastLike.delete(podcastLike.id);
-    refetchPodcasts();
+    try {
+      await voxylApi.entities.PodcastLike.delete(podcastLike.id);
+      handlePodcastLikeMutationSuccess(queryClient, user?.id);
+      refetchPodcasts();
+    } catch (error) {
+      console.error('[Playlists] Failed to remove saved podcast', { podcastLikeId: podcastLike.id, error });
+    }
   };
 
   const handleLikePlaylist = async (playlist) => {
     if (!user) return;
-    await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
-    queryClient.invalidateQueries({ queryKey: ['liked-playlists', user?.id] });
+    try {
+      await togglePlaylistLikeOptimistically({
+        queryClient,
+        userId: user.id,
+        playlistId: playlist.id,
+        toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id }),
+      });
+    } catch (error) {
+      console.error('[Playlists] Failed to toggle playlist like', { playlistId: playlist.id, error });
+    }
   };
 
   if (!isLoadingAuth && !isAuthenticated) {
@@ -239,10 +276,10 @@ export default function Playlists() {
                   return bLast - aLast;
                 }).map((pl, i) =>
             <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                    <PlaylistCard
+                <PlaylistCard
                 playlist={pl}
                 compact
-                liked={likedPlaylistIds.includes(pl.id)}
+                liked={!likedPlaylistsError && !likedPlaylistsLoading && likedPlaylistIds.includes(pl.id)}
                 currentUser={user}
                 onEdited={refetchMine} />
               
@@ -252,7 +289,49 @@ export default function Playlists() {
           }
 
             {/* Liked playlists from others */}
-            {likedPlaylists.length > 0 &&
+            {(likedPlaylistsLoading || likedPlaylistsFetching) &&
+          <div className="pt-3 space-y-2">
+                <div className="h-4 w-28 rounded bg-secondary animate-pulse" />
+                <div className="h-20 rounded-2xl bg-secondary animate-pulse" />
+              </div>
+          }
+
+            {likedPlaylistsError &&
+          <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
+                <button
+                  type="button"
+                  onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+                >
+                  <RefreshCw size={14} />
+                  {t('retry')}
+                </button>
+              </div>
+          }
+
+            {!likedPlaylistsError && !likedPlaylistsLoading && !likedPlaylistsFetching && likedPlaylistIds.length > 0 && (likedPlaylistDataLoading || likedPlaylistDataFetching) &&
+          <div className="pt-3 space-y-2">
+                <div className="h-4 w-32 rounded bg-secondary animate-pulse" />
+                <div className="h-20 rounded-2xl bg-secondary animate-pulse" />
+              </div>
+          }
+
+            {likedPlaylistDataError &&
+          <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
+                <button
+                  type="button"
+                  onClick={() => refetchLikedPlaylistData()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+                >
+                  <RefreshCw size={14} />
+                  {t('retry')}
+                </button>
+              </div>
+          }
+
+            {!likedPlaylistsError && !likedPlaylistDataError && likedPlaylists.length > 0 &&
           <>
                 <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium pt-3 pb-1">{t('playlistsLiked')}</p>
                 {[...likedPlaylists].sort((a, b) => {
@@ -273,7 +352,9 @@ export default function Playlists() {
               </>
           }
 
-            {myPlaylists.length === 0 && likedPlaylists.length === 0 &&
+            {myPlaylists.length === 0 && !likedPlaylistDataError && likedPlaylists.length === 0 &&
+              !likedPlaylistsError && !likedPlaylistsLoading && !likedPlaylistsFetching &&
+              !likedPlaylistDataLoading && !likedPlaylistDataFetching &&
           <div className="text-center py-16 text-muted-foreground">
                 <p className="text-4xl mb-3">🎵</p>
                 <p className="font-medium text-foreground">{t('playlistsEmpty')}</p>
@@ -307,6 +388,22 @@ export default function Playlists() {
 
         {/* Podcasts tab */}
         {tab === 'podcasts' && (
+        likedPodcastsLoading || likedPodcastsFetching ?
+        <div className="space-y-2">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
+            </div> :
+        likedPodcastsError ?
+        <div className="text-center py-16 text-muted-foreground">
+              <p className="text-sm mb-4">{t('podcastSearchFailed')}</p>
+              <button
+                type="button"
+                  onClick={() => refreshPodcastLikeQuery(queryClient, user?.id)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+              >
+                <RefreshCw size={14} />
+                {t('retry')}
+              </button>
+            </div> :
         likedPodcasts.length === 0 ?
         <div className="text-center py-16 text-muted-foreground">
               <p className="text-4xl mb-3">🎙️</p>

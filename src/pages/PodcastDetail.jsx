@@ -2,8 +2,17 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import { usePlayer } from '@/lib/PlayerContext';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
 import { getFeedFromCache, saveFeedToCache, getRSSCacheFromCloud } from '@/lib/feedCache';
+import {
+  handlePodcastLikeMutationSuccess,
+  loadPodcastLikeRecords,
+  normalizePodcastFeedUrl,
+  podcastFeedUrlSet,
+  refreshPodcastLikeQuery,
+  savedContentQueryKeys,
+} from '@/lib/savedContentQueries';
 import { t } from '@/lib/i18n';
 import { ArrowLeft, Play, Loader2, ListMusic, Heart, Info, X } from 'lucide-react';
 import PageTransition from '@/components/common/PageTransition';
@@ -19,6 +28,7 @@ import { ptBR } from 'date-fns/locale';
 export default function PodcastDetail() {
   const { feedUrl: encodedFeedUrl } = useParams();
   const feedUrl = decodeURIComponent(encodedFeedUrl);
+  const canonicalFeedUrl = normalizePodcastFeedUrl(feedUrl);
   const navigate = useNavigate();
   const [episodes, setEpisodes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -29,15 +39,35 @@ export default function PodcastDetail() {
   const [showInfo, setShowInfo] = useState(false);
   const [feedSource, setFeedSource] = useState('none');
   const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
-    voxylApi.auth.me().then(u => {
-      setUser(u);
-      voxylApi.entities.PodcastLike.filter({ user_id: u.id, feed_url: feedUrl })
-        .then(r => setLiked(r.length > 0))
-        .catch(() => {});
-    }).catch(() => {});
-  }, [feedUrl]);
+    voxylApi.auth.me().then(u => setUser(u)).catch(() => {});
+  }, []);
+
+  const {
+    data: podcastLikeRecords = [],
+    isLoading: podcastLikeLoading,
+    isFetching: podcastLikeFetching,
+    isError: podcastLikeError,
+    refetch: refetchPodcastLikes,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.podcastLikes(user?.id),
+    enabled: Boolean(user && feedUrl),
+    queryFn: async () => {
+      try {
+        return await loadPodcastLikeRecords(user.id);
+      } catch (error) {
+        console.error('[PodcastDetail] Failed to load saved podcast state', { feedUrl, userId: user.id, error });
+        throw error;
+      }
+    },
+  });
+
+  useEffect(() => {
+    if (!user || podcastLikeError) return;
+    setLiked(podcastFeedUrlSet(podcastLikeRecords).has(canonicalFeedUrl));
+  }, [user, canonicalFeedUrl, podcastLikeRecords, podcastLikeError]);
 
   useEffect(() => {
     if (!feedUrl) return;
@@ -121,22 +151,37 @@ export default function PodcastDetail() {
 
   const handleLike = async () => {
     if (!user) return;
-    if (liked) {
-      const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: feedUrl });
-      if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
-      setLiked(false);
-    } else {
-      await voxylApi.entities.PodcastLike.create({
-        user_id: user.id,
-        user_email: user.email,
-        feed_url: feedUrl,
-        podcast_title: podcastMeta?.title || '',
-        podcast_author: podcastMeta?.author || '',
-        podcast_image: podcastMeta?.image || '',
-        podcast_description: podcastMeta?.description || '',
-      });
-      setLiked(true);
+    if (podcastLikeLoading || podcastLikeError) {
+      if (podcastLikeError) refetchPodcastLikes();
+      return;
     }
+    const wasLiked = liked;
+    setLiked(!wasLiked);
+    if (liked) {
+      try {
+        const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: canonicalFeedUrl });
+        if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
+      } catch (error) {
+        console.error('[PodcastDetail] Failed to remove saved podcast', { feedUrl, error });
+        setLiked(wasLiked);
+        return;
+      }
+    } else {
+      try {
+        await voxylApi.entities.PodcastLike.create({
+          feed_url: canonicalFeedUrl,
+          podcast_title: podcastMeta?.title || '',
+          podcast_author: podcastMeta?.author || '',
+          podcast_image: podcastMeta?.image || '',
+          podcast_description: podcastMeta?.description || '',
+        });
+      } catch (error) {
+        console.error('[PodcastDetail] Failed to save podcast', { feedUrl, error });
+        setLiked(wasLiked);
+        return;
+      }
+    }
+    handlePodcastLikeMutationSuccess(queryClient, user.id);
   };
 
   const gradient = 'from-purple-600 to-cyan-400';
@@ -155,9 +200,10 @@ export default function PodcastDetail() {
             </button>
             <button
               onClick={handleLike}
-              className={cn("w-9 h-9 rounded-full bg-secondary flex items-center justify-center", liked ? "text-red-400" : "text-muted-foreground")}
+              disabled={podcastLikeLoading || podcastLikeFetching || podcastLikeError}
+              className={cn("w-9 h-9 rounded-full bg-secondary flex items-center justify-center disabled:opacity-50", !podcastLikeError && !podcastLikeLoading && liked ? "text-red-400" : "text-muted-foreground")}
             >
-              <Heart size={16} fill={liked ? "currentColor" : "none"} />
+              <Heart size={16} fill={!podcastLikeError && !podcastLikeLoading && liked ? "currentColor" : "none"} />
             </button>
           </div>
         </div>
@@ -180,6 +226,15 @@ export default function PodcastDetail() {
             )}
           </div>
         </div>
+
+        {podcastLikeError && (
+          <div className="mx-4 mb-3 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+            <span>{t('podcastSearchFailed')}</span>
+            <button type="button" onClick={() => refreshPodcastLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+              {t('retry')}
+            </button>
+          </div>
+        )}
 
         {/* Episodes */}
         <div className="px-4 mt-4">

@@ -394,6 +394,42 @@ function isPodcastPlayHistoryRoute(pathname: string): boolean {
     pathname === "/entities/podcast-play";
 }
 
+function isPlaylistLikeRoute(pathname: string): boolean {
+  return pathname === "/api/entities/playlist-like" || pathname === "/entities/playlist-like";
+}
+
+function isTogglePlaylistLikeRoute(pathname: string): boolean {
+  return pathname === "/api/functions/togglePlaylistLike" || pathname === "/functions/togglePlaylistLike";
+}
+
+function isPodcastLikeRoute(pathname: string): boolean {
+  return pathname === "/api/entities/podcast-like" || pathname === "/entities/podcast-like";
+}
+
+function getPodcastLikeId(pathname: string): string | null {
+  const prefixes = ["/api/entities/podcast-like/", "/entities/podcast-like/"];
+
+  for (const prefix of prefixes) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+
+    const encodedId = pathname.slice(prefix.length);
+
+    if (!encodedId || encodedId.includes("/")) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(encodedId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function getPlaylistId(pathname: string): string | null {
   const prefixes = ["/playlists/", "/api/playlists/"];
 
@@ -2400,6 +2436,542 @@ function toPublicFollow(follow: D1Follow): PublicFollow {
   };
 }
 
+type PublicPlaylistLike = {
+  id: string;
+  playlist_id: string;
+  created_at: string;
+  created_date: string;
+};
+
+type D1PlaylistLike = {
+  id: string;
+  playlist_id: string;
+  created_at: string;
+  base44_created_date: string | null;
+};
+
+type D1PodcastLike = {
+  id: string;
+  feed_url: string;
+  podcast_title: string | null;
+  podcast_author: string | null;
+  podcast_image: string | null;
+  podcast_description: string | null;
+  created_at: string;
+  updated_at: string;
+  base44_created_date: string | null;
+  base44_updated_date: string | null;
+};
+
+type PublicPodcastLike = {
+  id: string;
+  feed_url: string;
+  podcast_title: string | null;
+  podcast_author: string | null;
+  podcast_image: string | null;
+  podcast_description: string | null;
+  created_at: string;
+  created_date: string;
+  updated_at: string;
+  updated_date: string;
+};
+
+type PlaylistLikePayload = {
+  playlistId: string;
+};
+
+type PodcastLikePayload = {
+  originalFeedUrl: string;
+  feedUrl: string;
+  feedUrlCandidates: string[];
+  podcastTitle: string | null;
+  podcastAuthor: string | null;
+  podcastImage: string | null;
+  podcastDescription: string | null;
+};
+
+type SavedIdentityScope = {
+  predicates: string[];
+  params: string[];
+  legacyUserId: string | null;
+};
+
+function parseSavedContentLimit(request: Request): number {
+  const value = new URL(request.url).searchParams.get("limit");
+  const parsed = Number(value);
+
+  if (!value || !Number.isFinite(parsed)) {
+    return 100;
+  }
+
+  return Math.min(Math.max(Math.trunc(parsed), 1), 100);
+}
+
+function getSavedIdentityScope(user: D1User, clerkUserId: string): SavedIdentityScope {
+  const predicates = ["user_id = ?", "clerk_user_id = ?"];
+  const params = [user.id, clerkUserId];
+  const legacyUserId = user.legacy_base44_user_id?.trim() || null;
+
+  if (legacyUserId) {
+    predicates.push("legacy_base44_user_id = ?");
+    params.push(legacyUserId);
+  }
+
+  return { predicates, params, legacyUserId };
+}
+
+async function requireSavedContentUser(request: Request, env: Env): Promise<{ response?: Response; claims?: ClerkClaims; user?: D1User }> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return { response: jsonResponse(unauthenticatedResponse, 401, corsHeaders) };
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+
+  if (!user) {
+    return { response: jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders) };
+  }
+
+  return { claims, user };
+}
+
+function toPublicPlaylistLike(row: D1PlaylistLike): PublicPlaylistLike {
+  const createdAt = row.base44_created_date || row.created_at;
+
+  return {
+    id: row.id,
+    playlist_id: row.playlist_id,
+    created_at: createdAt,
+    created_date: createdAt,
+  };
+}
+
+function toPublicPodcastLike(row: D1PodcastLike): PublicPodcastLike {
+  const createdAt = row.base44_created_date || row.created_at;
+  const updatedAt = row.base44_updated_date || row.updated_at;
+
+  return {
+    id: row.id,
+    feed_url: row.feed_url,
+    podcast_title: row.podcast_title,
+    podcast_author: row.podcast_author,
+    podcast_image: row.podcast_image,
+    podcast_description: row.podcast_description,
+    created_at: createdAt,
+    created_date: createdAt,
+    updated_at: updatedAt,
+    updated_date: updatedAt,
+  };
+}
+
+function parsePlaylistLikePayloadValue(value: unknown): PlaylistLikePayload {
+  const playlistId = validateBoundedString(value, "playlist_id", 128, true);
+
+  if (!playlistId) {
+    throw new PodcastPlayError(400, "invalid-request", "playlist_id is required");
+  }
+
+  return { playlistId };
+}
+
+async function parsePlaylistLikePayload(request: Request): Promise<PlaylistLikePayload> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  return parsePlaylistLikePayloadValue((body as Record<string, unknown>).playlist_id);
+}
+
+function parsePodcastLikePayloadValue(payload: Record<string, unknown>): PodcastLikePayload {
+  const originalFeedUrl = validateBoundedString(payload.feed_url, "feed_url", 2048, true) || "";
+  const feedUrl = validateAbsoluteHttpUrl(originalFeedUrl, "feed_url", true) || "";
+
+  return {
+    originalFeedUrl,
+    feedUrl,
+    feedUrlCandidates: getSavedPodcastFeedUrlCandidates(originalFeedUrl, feedUrl),
+    podcastTitle: validateBoundedString(payload.podcast_title, "podcast_title", 500),
+    podcastAuthor: validateBoundedString(payload.podcast_author, "podcast_author", 500),
+    podcastImage: validateAbsoluteHttpUrl(payload.podcast_image, "podcast_image", false),
+    podcastDescription: validateBoundedString(payload.podcast_description, "podcast_description", 4000),
+  };
+}
+
+async function parsePodcastLikePayload(request: Request): Promise<PodcastLikePayload> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  return parsePodcastLikePayloadValue(body as Record<string, unknown>);
+}
+
+function getSavedPodcastFeedUrlCandidates(originalFeedUrl: string, canonicalFeedUrl: string): string[] {
+  const candidates = [canonicalFeedUrl, originalFeedUrl.trim()].filter(Boolean);
+
+  try {
+    const parsed = new URL(canonicalFeedUrl);
+
+    if (parsed.pathname === "/" && !parsed.search) {
+      candidates.push(`${parsed.protocol}//${parsed.host}`);
+    }
+  } catch {}
+
+  return [...new Set(candidates)];
+}
+
+function getSavedPodcastFeedUrlFilterCandidates(rawFeedUrl: string): string[] {
+  const originalFeedUrl = validateBoundedString(rawFeedUrl, "feed_url", 2048, true) || "";
+  const canonicalFeedUrl = validateAbsoluteHttpUrl(originalFeedUrl, "feed_url", true) || "";
+  return getSavedPodcastFeedUrlCandidates(originalFeedUrl, canonicalFeedUrl);
+}
+
+async function playlistLikesResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const url = new URL(request.url);
+  const playlistId = url.searchParams.get("playlist_id")?.trim();
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const where = [`(${scope.predicates.join(" OR ")})`];
+  const params = [...scope.params];
+
+  if (playlistId) {
+    where.push("playlist_id = ?");
+    params.push(playlistId);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, playlist_id, created_at, base44_created_date
+     FROM playlist_likes
+     WHERE ${where.join(" AND ")}
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(base44_created_date), ''), created_at)) DESC,
+       created_at DESC,
+       id DESC
+     LIMIT ?`,
+  )
+    .bind(...params, parseSavedContentLimit(request))
+    .all<D1PlaylistLike>();
+  const likes = (results || []).map(toPublicPlaylistLike);
+
+  return jsonResponse({ ok: true, items: likes, data: likes }, 200, corsHeaders);
+}
+
+async function canLikePlaylist(env: Env, playlist: PlaybackPlaylist, user: D1User, claims: ClerkClaims): Promise<boolean> {
+  if (playlist.visibility === "public") {
+    return true;
+  }
+
+  const legacyUserId = user.legacy_base44_user_id?.trim();
+  const legacyCreatorId = (playlist as PlaybackPlaylist & { creator_legacy_base44_user_id?: string | null }).creator_legacy_base44_user_id?.trim();
+
+  if (playlist.creator_id === user.id ||
+    playlist.creator_clerk_user_id === claims.userId ||
+    Boolean(legacyUserId && legacyCreatorId && legacyUserId === legacyCreatorId)) {
+    return true;
+  }
+
+  if (playlist.visibility !== "friends_only") {
+    return false;
+  }
+
+  const followerScope = getSavedIdentityScope(user, claims.userId);
+  const followingPredicates = ["following_id = ?"];
+  const followingParams = [playlist.creator_id];
+
+  if (playlist.creator_clerk_user_id) {
+    followingPredicates.push("following_clerk_user_id = ?");
+    followingParams.push(playlist.creator_clerk_user_id);
+  }
+
+  if (legacyCreatorId) {
+    followingPredicates.push("following_legacy_base44_user_id = ?");
+    followingParams.push(legacyCreatorId);
+  }
+
+  const follow = await env.DB.prepare(
+    `SELECT id
+     FROM follows
+     WHERE status = 'accepted'
+       AND (${followerScope.predicates.map((predicate) => predicate.replace(/^user_id/, "follower_id").replace(/^clerk_user_id/, "follower_clerk_user_id").replace(/^legacy_base44_user_id/, "follower_legacy_base44_user_id")).join(" OR ")})
+       AND (${followingPredicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(...followerScope.params, ...followingParams)
+    .first<{ id: string }>();
+
+  return Boolean(follow);
+}
+
+async function togglePlaylistLikeResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parsePlaylistLikePayload(request);
+  const playlist = await env.DB.prepare(
+    `SELECT id, creator_id, creator_clerk_user_id, creator_legacy_base44_user_id, visibility, rss_feeds
+     FROM playlists
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(payload.playlistId)
+    .first<PlaybackPlaylist & { creator_legacy_base44_user_id?: string | null }>();
+
+  if (!playlist) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (!(await canLikePlaylist(env, playlist, auth.user!, auth.claims!))) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const existing = await env.DB.prepare(
+    `SELECT id
+     FROM playlist_likes
+     WHERE playlist_id = ?
+       AND (${scope.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(payload.playlistId, ...scope.params)
+    .first<{ id: string }>();
+
+  let liked = false;
+  const updateCountStatement = env.DB.prepare(
+    `UPDATE playlists
+     SET likes_count = (
+       SELECT COUNT(*)
+       FROM playlist_likes
+       WHERE playlist_id = ?
+     ),
+     updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).bind(payload.playlistId, payload.playlistId);
+
+  if (existing) {
+    const mutationStatement = env.DB.prepare(
+      `DELETE FROM playlist_likes
+       WHERE id = ?`,
+    )
+      .bind(existing.id);
+    await env.DB.batch([mutationStatement, updateCountStatement]);
+  } else {
+    const mutationStatement = env.DB.prepare(
+      `INSERT OR IGNORE INTO playlist_likes (
+         id, playlist_id, user_id, clerk_user_id, legacy_base44_user_id, created_at
+       )
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    )
+      .bind(crypto.randomUUID(), payload.playlistId, auth.user!.id, auth.claims!.userId, scope.legacyUserId);
+    await env.DB.batch([mutationStatement, updateCountStatement]);
+    liked = true;
+  }
+
+  const countRow = await env.DB.prepare(
+    `SELECT likes_count
+     FROM playlists
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(payload.playlistId)
+    .first<{ likes_count: number }>();
+  const likesCount = Number(countRow?.likes_count || 0);
+
+  return jsonResponse({ liked, likes_count: likesCount }, 200, corsHeaders);
+}
+
+async function podcastLikesResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const url = new URL(request.url);
+  const rawFeedUrl = url.searchParams.get("feed_url");
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const where = [`(${scope.predicates.join(" OR ")})`];
+  const params = [...scope.params];
+
+  if (rawFeedUrl) {
+    const feedUrlCandidates = getSavedPodcastFeedUrlFilterCandidates(rawFeedUrl);
+    where.push(`feed_url IN (${feedUrlCandidates.map(() => "?").join(", ")})`);
+    params.push(...feedUrlCandidates);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, feed_url, podcast_title, podcast_author, podcast_image, podcast_description,
+       created_at, updated_at, base44_created_date, base44_updated_date
+     FROM podcast_likes
+     WHERE ${where.join(" AND ")}
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(base44_created_date), ''), created_at)) DESC,
+       created_at DESC,
+       id DESC
+     LIMIT ?`,
+  )
+    .bind(...params, parseSavedContentLimit(request))
+    .all<D1PodcastLike>();
+  const likes = (results || []).map(toPublicPodcastLike);
+
+  return jsonResponse({ ok: true, items: likes, data: likes }, 200, corsHeaders);
+}
+
+async function fetchPodcastLikeByUserAndFeedUrl(env: Env, userId: string, feedUrlCandidates: string[]): Promise<D1PodcastLike | null> {
+  return env.DB.prepare(
+    `SELECT id, feed_url, podcast_title, podcast_author, podcast_image, podcast_description,
+       created_at, updated_at, base44_created_date, base44_updated_date
+     FROM podcast_likes
+     WHERE user_id = ?
+       AND feed_url IN (${feedUrlCandidates.map(() => "?").join(", ")})
+     ORDER BY CASE WHEN feed_url = ? THEN 0 ELSE 1 END,
+       created_at DESC,
+       id DESC
+     LIMIT 1`,
+  )
+    .bind(userId, ...feedUrlCandidates, feedUrlCandidates[0])
+    .first<D1PodcastLike>();
+}
+
+async function createPodcastLikeResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parsePodcastLikePayload(request);
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const existing = await env.DB.prepare(
+    `SELECT id
+     FROM podcast_likes
+     WHERE feed_url IN (${payload.feedUrlCandidates.map(() => "?").join(", ")})
+       AND (${scope.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(...payload.feedUrlCandidates, ...scope.params)
+    .first<{ id: string }>();
+  const id = existing?.id || crypto.randomUUID();
+
+  if (existing) {
+    await env.DB.prepare(
+      `UPDATE podcast_likes
+       SET user_id = ?,
+           clerk_user_id = ?,
+           legacy_base44_user_id = ?,
+           feed_url = ?,
+           podcast_title = COALESCE(?, podcast_title),
+           podcast_author = COALESCE(?, podcast_author),
+           podcast_image = COALESCE(?, podcast_image),
+           podcast_description = COALESCE(?, podcast_description),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(
+        auth.user!.id,
+        auth.claims!.userId,
+        scope.legacyUserId,
+        payload.feedUrl,
+        payload.podcastTitle,
+        payload.podcastAuthor,
+        payload.podcastImage,
+        payload.podcastDescription,
+        id,
+      )
+      .run();
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO podcast_likes (
+         id, user_id, clerk_user_id, legacy_base44_user_id, feed_url,
+         podcast_title, podcast_author, podcast_image, podcast_description,
+         created_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, feed_url) DO UPDATE SET
+         clerk_user_id = excluded.clerk_user_id,
+         legacy_base44_user_id = excluded.legacy_base44_user_id,
+         podcast_title = COALESCE(excluded.podcast_title, podcast_likes.podcast_title),
+         podcast_author = COALESCE(excluded.podcast_author, podcast_likes.podcast_author),
+         podcast_image = COALESCE(excluded.podcast_image, podcast_likes.podcast_image),
+         podcast_description = COALESCE(excluded.podcast_description, podcast_likes.podcast_description),
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(
+        id,
+        auth.user!.id,
+        auth.claims!.userId,
+        scope.legacyUserId,
+        payload.feedUrl,
+        payload.podcastTitle,
+        payload.podcastAuthor,
+        payload.podcastImage,
+        payload.podcastDescription,
+      )
+      .run();
+  }
+
+  const item = await fetchPodcastLikeByUserAndFeedUrl(env, auth.user!.id, payload.feedUrlCandidates);
+
+  if (!item) {
+    throw new PodcastPlayError(500, "internal-error", "Saved podcast unavailable");
+  }
+
+  const publicItem = toPublicPodcastLike(item);
+
+  return jsonResponse({ ok: true, item: publicItem, data: publicItem }, 200, corsHeaders);
+}
+
+async function deletePodcastLikeResponse(request: Request, env: Env, id: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const result = await env.DB.prepare(
+    `DELETE FROM podcast_likes
+     WHERE id = ?
+       AND (${scope.predicates.join(" OR ")})`,
+  )
+    .bind(id, ...scope.params)
+    .run();
+  const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+  if (changes === 0) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ ok: true, deleted: true }, 200, corsHeaders);
+}
+
 async function playlistsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const url = new URL(request.url);
@@ -2538,7 +3110,7 @@ async function playlistResponse(request: Request, env: Env, playlistId: string):
   const corsHeaders = getCorsHeaders(request, env);
   const playlist = await env.DB.prepare(
     `${playlistSelect}
-     WHERE id = ? AND visibility = 'public'
+     WHERE id = ?
      LIMIT 1`,
   )
     .bind(playlistId)
@@ -2546,6 +3118,20 @@ async function playlistResponse(request: Request, env: Env, playlistId: string):
 
   if (!playlist) {
     return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (playlist.visibility !== "public") {
+    const claims = await getOptionalVerifiedClerkClaims(request, env);
+
+    if (!claims) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
+
+    const user = await resolveD1UserFromClerkClaims(env, claims);
+
+    if (!user || !(await canLikePlaylist(env, playlist as D1Playlist & PlaybackPlaylist, user, claims))) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
   }
 
   return jsonResponse(
@@ -3038,6 +3624,28 @@ export default {
 
       if (request.method === "GET" && isPodcastPlayHistoryRoute(pathname)) {
         return withCors(await podcastPlayHistoryResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isPlaylistLikeRoute(pathname)) {
+        return withCors(await playlistLikesResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isTogglePlaylistLikeRoute(pathname)) {
+        return withCors(await togglePlaylistLikeResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isPodcastLikeRoute(pathname)) {
+        return withCors(await podcastLikesResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isPodcastLikeRoute(pathname)) {
+        return withCors(await createPodcastLikeResponse(request, env), request, env);
+      }
+
+      const podcastLikeId = getPodcastLikeId(pathname);
+
+      if (request.method === "DELETE" && podcastLikeId) {
+        return withCors(await deletePodcastLikeResponse(request, env, podcastLikeId), request, env);
       }
 
       const playlistId = getPlaylistId(pathname);

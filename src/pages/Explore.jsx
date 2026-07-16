@@ -17,6 +17,18 @@ import { motion } from 'framer-motion';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
+import {
+  handlePodcastLikeMutationSuccess,
+  loadPlaylistLikeRecords,
+  loadPodcastLikeRecords,
+  normalizePodcastFeedUrl,
+  podcastFeedUrlSet,
+  playlistLikeIds,
+  refreshPlaylistLikeQuery,
+  refreshPodcastLikeQuery,
+  savedContentQueryKeys,
+  togglePlaylistLikeOptimistically,
+} from '@/lib/savedContentQueries';
 
 export default function Explore() {
   const location = useLocation();
@@ -34,14 +46,12 @@ export default function Explore() {
   const [voxylSearch, setVoxylSearch] = useState(params.get('vq') || '');
   const [userSearch, setUserSearch] = useState('');
   const [userFilter, setUserFilter] = useState('connections');
-  const [likes, setLikes] = useState([]);
   const [blockedIds, setBlockedIds] = useState([]);
   const [followStatuses, setFollowStatuses] = useState({});
   const [theyFollowMeIds, setTheyFollowMeIds] = useState(new Set());
   const [podcastSortBy, setPodcastSortBy] = useState(params.get('sort') || 'relevance');
   const [podcastLanguage, setPodcastLanguage] = useState(params.get('lang') || '');
   const [podcastCategory, setPodcastCategory] = useState(params.get('cat') || '');
-  const [likedFeedUrls, setLikedFeedUrls] = useState(new Set());
 
   // Sync state to URL so it survives navigation
   useEffect(() => {
@@ -65,15 +75,15 @@ export default function Explore() {
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
     queryClient.invalidateQueries({ queryKey: ['explore-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['my-likes'] });
+    if (user?.id) {
+      refreshPlaylistLikeQuery(queryClient, user.id);
+      refreshPodcastLikeQuery(queryClient, user.id);
+    }
   }, containerRef);
 
   useEffect(() => {
     voxylApi.auth.me().then(u => {
       setUser(u);
-      voxylApi.entities.PodcastLike.filter({ user_id: u.id })
-        .then(likes => setLikedFeedUrls(new Set(likes.map(l => l.feed_url))))
-        .catch(() => {});
       Promise.all([
         voxylApi.entities.Block.filter({ blocker_id: u.id }),
         voxylApi.entities.Block.filter({ blocked_id: u.id }),
@@ -99,25 +109,61 @@ export default function Explore() {
     }).catch(() => {});
   }, []);
 
-  useQuery({
-    queryKey: ['my-likes', user?.id],
+  const {
+    data: likedPlaylistRecords = [],
+    isLoading: playlistLikesLoading,
+    isFetching: playlistLikesFetching,
+    isError: playlistLikesError,
+    refetch: refetchPlaylistLikes,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.playlistLikes(user?.id),
     enabled: !!user,
     queryFn: async () => {
-      const l = await voxylApi.entities.PlaylistLike.filter({ user_id: user.id });
-      setLikes(l.map(x => x.playlist_id));
-      return l;
+      try {
+        return await loadPlaylistLikeRecords(user.id);
+      } catch (error) {
+        console.error('[Explore] Failed to load saved playlist likes', { userId: user.id, error });
+        throw error;
+      }
     },
   });
+  const likedPlaylistIds = playlistLikeIds(likedPlaylistRecords);
+
+  const {
+    data: likedPodcastRecords = [],
+    isLoading: podcastLikesLoading,
+    isFetching: podcastLikesFetching,
+    isError: podcastLikesError,
+    refetch: refetchPodcastLikes,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.podcastLikes(user?.id),
+    enabled: !!user,
+    queryFn: async () => {
+      try {
+        return await loadPodcastLikeRecords(user.id);
+      } catch (error) {
+        console.error('[Explore] Failed to load saved podcasts', { userId: user.id, error });
+        throw error;
+      }
+    },
+  });
+  const likedFeedUrls = podcastFeedUrlSet(likedPodcastRecords);
 
   const handleLike = async (playlist) => {
     if (!user) return;
-    const liked = likes.includes(playlist.id);
-    setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
+    if (playlistLikesLoading || playlistLikesError) {
+      if (playlistLikesError) refetchPlaylistLikes();
+      return;
+    }
     try {
-      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
-    } catch {
-      // Revert optimistic update on failure
-      setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));
+      await togglePlaylistLikeOptimistically({
+        queryClient,
+        userId: user.id,
+        playlistId: playlist.id,
+        toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id }),
+      });
+    } catch (error) {
+      console.error('[Explore] Failed to toggle playlist like', { playlistId: playlist.id, error });
     }
   };
 
@@ -183,22 +229,54 @@ export default function Explore() {
 
   const handleLikePodcast = async (podcast) => {
     if (!user) return;
-    if (likedFeedUrls.has(podcast.feedUrl)) {
-      const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: podcast.feedUrl });
-      if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
-      setLikedFeedUrls(prev => { const s = new Set(prev); s.delete(podcast.feedUrl); return s; });
-    } else {
-      await voxylApi.entities.PodcastLike.create({
-        user_id: user.id,
-        user_email: user.email,
-        feed_url: podcast.feedUrl,
-        podcast_title: podcast.title,
-        podcast_author: podcast.author || '',
-        podcast_image: podcast.image || '',
-        podcast_description: podcast.description || '',
-      });
-      setLikedFeedUrls(prev => new Set([...prev, podcast.feedUrl]));
+    if (podcastLikesLoading || podcastLikesError) {
+      if (podcastLikesError) refetchPodcastLikes();
+      return;
     }
+    const canonicalFeedUrl = normalizePodcastFeedUrl(podcast.feedUrl);
+    const podcastLikeQueryKey = savedContentQueryKeys.podcastLikes(user.id);
+    const cachedPodcastLikes = queryClient.getQueryData(podcastLikeQueryKey);
+    const previousPodcastLikes = Array.isArray(cachedPodcastLikes) ? cachedPodcastLikes : [];
+    const wasLiked = likedFeedUrls.has(canonicalFeedUrl);
+    queryClient.setQueryData(
+      podcastLikeQueryKey,
+      wasLiked
+        ? previousPodcastLikes.filter((record) => normalizePodcastFeedUrl(record.feed_url) !== canonicalFeedUrl)
+        : [{
+            id: `optimistic-${canonicalFeedUrl}`,
+            feed_url: canonicalFeedUrl,
+            podcast_title: podcast.title,
+            podcast_author: podcast.author || '',
+            podcast_image: podcast.image || '',
+            podcast_description: podcast.description || '',
+          }, ...previousPodcastLikes],
+    );
+
+    if (wasLiked) {
+      try {
+        const records = await voxylApi.entities.PodcastLike.filter({ user_id: user.id, feed_url: canonicalFeedUrl });
+        if (records[0]) await voxylApi.entities.PodcastLike.delete(records[0].id);
+      } catch (error) {
+        console.error('[Explore] Failed to remove saved podcast', { feedUrl: canonicalFeedUrl, error });
+        queryClient.setQueryData(podcastLikeQueryKey, previousPodcastLikes);
+        return;
+      }
+    } else {
+      try {
+        await voxylApi.entities.PodcastLike.create({
+          feed_url: canonicalFeedUrl,
+          podcast_title: podcast.title,
+          podcast_author: podcast.author || '',
+          podcast_image: podcast.image || '',
+          podcast_description: podcast.description || '',
+        });
+      } catch (error) {
+        console.error('[Explore] Failed to save podcast', { feedUrl: canonicalFeedUrl, error });
+        queryClient.setQueryData(podcastLikeQueryKey, previousPodcastLikes);
+        return;
+      }
+    }
+    handlePodcastLikeMutationSuccess(queryClient, user.id);
   };
 
   // Podcast Index search
@@ -421,9 +499,21 @@ export default function Explore() {
             </div>
           ) : (
             <div className="space-y-2">
+              {playlistLikesError && (
+                <div className="mb-3 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+                  <span>{t('explorePlaylistsError')}</span>
+                  <button type="button" onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+                    <RefreshCcw size={12} />
+                    {t('retry')}
+                  </button>
+                </div>
+              )}
+              {playlistLikesLoading && (
+                <div className="mb-3 h-10 rounded-2xl bg-secondary animate-pulse" />
+              )}
               {filteredPlaylists.map((pl, i) => (
                 <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                  <PlaylistCard playlist={pl} compact liked={likes.includes(pl.id)} onLike={handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                  <PlaylistCard playlist={pl} compact liked={!playlistLikesError && !playlistLikesLoading && likedPlaylistIds.includes(pl.id)} onLike={playlistLikesLoading || playlistLikesFetching || playlistLikesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
                 </motion.div>
               ))}
               {filteredPlaylists.length === 0 && (
@@ -530,6 +620,18 @@ export default function Explore() {
         {/* Podcasts tab */}
         {tab === 'podcasts' && (
           <div className="space-y-2">
+            {podcastLikesError && (
+              <div className="rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+                <span>{t('podcastSearchFailed')}</span>
+                <button type="button" onClick={() => refreshPodcastLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+                  <RefreshCcw size={12} />
+                  {t('retry')}
+                </button>
+              </div>
+            )}
+            {podcastLikesLoading && (
+              <div className="h-10 rounded-2xl bg-secondary animate-pulse" />
+            )}
             {!search.trim() && !podcastLoading && podcastResults.length === 0 && (
               <div className="py-6 text-muted-foreground">
                 <div className="text-center mb-6">
@@ -571,8 +673,8 @@ export default function Explore() {
                 podcast={podcast}
                 index={i}
                 onAdd={setSelectedPodcast}
-                onLike={handleLikePodcast}
-                liked={likedFeedUrls.has(podcast.feedUrl)}
+                onLike={podcastLikesLoading || podcastLikesFetching || podcastLikesError ? undefined : handleLikePodcast}
+                liked={!podcastLikesError && !podcastLikesLoading && likedFeedUrls.has(normalizePodcastFeedUrl(podcast.feedUrl))}
               />
             ))}
             {!podcastLoading && !podcastError && search.trim() && podcastResults.length === 0 && (

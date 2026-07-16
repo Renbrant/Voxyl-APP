@@ -1,4 +1,6 @@
-export const API_BASE_URL = import.meta.env.VITE_VOXYL_API_URL || "https://api.voxyl.renbrant.com/api";
+const metaEnv = import.meta.env || {};
+
+export const API_BASE_URL = metaEnv.VITE_VOXYL_API_URL || "https://api.voxyl.renbrant.com/api";
 
 let authTokenGetter = null;
 
@@ -7,12 +9,12 @@ export function setAuthTokenGetter(getter) {
 }
 
 function devAuthLog(message, details = {}) {
-  if (!import.meta.env.DEV) return;
+  if (!metaEnv.DEV) return;
   console.debug(`[VOXYL API] ${message}`, details);
 }
 
 function getCallerHint() {
-  if (!import.meta.env.DEV) return undefined;
+  if (!metaEnv.DEV) return undefined;
   const stack = new Error().stack || "";
   return stack
     .split("\n")
