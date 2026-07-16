@@ -12,7 +12,7 @@ export default function DownloadedEpisodeCard({ episode, onRemoved }) {
 
   const handlePlay = () => {
     if (isActive) { togglePlay(); return; }
-    play(episode, [episode]);
+    play(episode, [episode], { type: 'download', id: null });
   };
 
   const handleRemove = (e) => {

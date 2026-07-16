@@ -194,7 +194,7 @@ export default function PodcastDetail() {
               <button
                 onClick={() => {
                   const next = episodes.find(ep => !finishedUrls.has(ep.audioUrl)) || episodes[0];
-                  play(next, episodes);
+                  play(next, episodes, { type: 'podcast', id: feedUrl });
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full gradient-primary text-white text-xs font-medium"
               >

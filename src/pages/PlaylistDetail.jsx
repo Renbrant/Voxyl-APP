@@ -251,7 +251,6 @@ export default function PlaylistDetail() {
     if (currentEpisode?.audioUrl === ep.audioUrl) { togglePlay(); return; }
     play(ep, episodes, { type: 'playlist', id });
     setPlayedUrls(prev => new Set([...prev, ep.audioUrl]));
-    voxylApi.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
   };
 
   const handleRefresh = useCallback(() => loadEpisodesRef.current?.(), []);
@@ -425,8 +424,7 @@ export default function PlaylistDetail() {
             <button
               onClick={() => {
                 const nextUnplayed = episodes.find(ep => !finishedUrls.has(ep.audioUrl)) || episodes[0];
-                play(nextUnplayed, episodes);
-                voxylApi.functions.invoke('incrementPlaylistPlays', { playlist_id: id }).catch(() => {});
+                play(nextUnplayed, episodes, { type: 'playlist', id });
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full gradient-primary text-white text-xs font-medium"
             >
