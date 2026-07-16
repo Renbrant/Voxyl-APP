@@ -14,10 +14,16 @@ import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
 import { t } from '@/lib/i18n';
 import { asArray } from '@/lib/arrayUtils';
+import {
+  loadPlaylistLikeRecords,
+  playlistLikeIds,
+  refreshPlaylistLikeQuery,
+  savedContentQueryKeys,
+  togglePlaylistLikeOptimistically,
+} from '@/lib/savedContentQueries';
 
 export default function Feed() {
   const [user, setUser] = useState(null);
-  const [likes, setLikes] = useState([]);
   const [blockedIds, setBlockedIds] = useState([]);
   const [followingIds, setFollowingIds] = useState(new Set());
   const [tab, setTab] = useState('trending');
@@ -50,15 +56,14 @@ export default function Feed() {
   const { pullProgress, refreshing } = usePullToRefresh(() => {
     invalidateCache('feed-playlists');
     invalidateCache('all-playlists-feed');
-    invalidateCache(`my-likes-${user?.id}`);
     invalidateCache(`my-playlists-${user?.id}`);
     invalidateCache(`user-podcast-plays-${user?.id}`);
     queryClient.invalidateQueries({ queryKey: ['feed-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['my-likes'] });
     queryClient.invalidateQueries({ queryKey: ['top-podcasts'] });
     queryClient.invalidateQueries({ queryKey: ['my-playlists'] });
     queryClient.invalidateQueries({ queryKey: ['all-playlists-feed'] });
     queryClient.invalidateQueries({ queryKey: ['user-podcast-plays'] });
+    if (user?.id) refreshPlaylistLikeQuery(queryClient, user.id);
   }, containerRef);
 
   const { data: playlists = [], isLoading } = useQuery({
@@ -73,25 +78,32 @@ export default function Feed() {
     initialData: () => getCache('feed-playlists') || undefined,
   });
 
-  const { data: likedIds = [] } = useQuery({
-    queryKey: ['my-likes', user?.id],
+  const {
+    data: likedRecords = [],
+    isLoading: likesLoading,
+    isFetching: likesFetching,
+    isError: likesError,
+    refetch: refetchLikes,
+  } = useQuery({
+    queryKey: savedContentQueryKeys.playlistLikes(user?.id),
     enabled: !!user,
     queryFn: async () => {
-      const cacheKey = `my-likes-${user.id}`;
-      const cached = getCache(cacheKey);
-      if (cached) { setLikes(cached); return cached; }
-      const l = asArray(await voxylApi.entities.PlaylistLike.filter({ user_id: user.id }));
-      const ids = l.map(x => x.playlist_id);
-      setLikes(ids);
-      setCache(cacheKey, ids, TTL_5MIN);
-      return ids;
+      try {
+        return await loadPlaylistLikeRecords(user.id);
+      } catch (error) {
+        console.error('[Feed] Failed to load saved playlist likes', { userId: user.id, error });
+        throw error;
+      }
     },
     initialData: () => {
-      const cached = user ? getCache(`my-likes-${user.id}`) : null;
-      if (cached) { setLikes(cached); return cached; }
+      const cached = user ? getCache(`liked-playlists-${user.id}`) : null;
+      if (Array.isArray(cached)) {
+        return cached;
+      }
       return undefined;
     },
   });
+  const likedIds = playlistLikeIds(likedRecords);
 
   const { data: topPodcasts = [] } = useQuery({
     queryKey: ['top-podcasts'],
@@ -108,13 +120,19 @@ export default function Feed() {
   });
 
   const handleLike = requireAuth(async (playlist) => {
-    const liked = likes.includes(playlist.id);
-    setLikes(prev => liked ? prev.filter(id => id !== playlist.id) : [...prev, playlist.id]);
+    if (likesLoading || likesError) {
+      if (likesError) refetchLikes();
+      return;
+    }
     try {
-      await voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id });
-    } catch {
-      // Revert optimistic update on failure
-      setLikes(prev => liked ? [...prev, playlist.id] : prev.filter(id => id !== playlist.id));
+      await togglePlaylistLikeOptimistically({
+        queryClient,
+        userId: user.id,
+        playlistId: playlist.id,
+        toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id }),
+      });
+    } catch (error) {
+      console.error('[Feed] Failed to toggle playlist like', { playlistId: playlist.id, error });
     }
   });
 
@@ -198,7 +216,7 @@ export default function Feed() {
           <MyPlaylistsContent
             user={user}
             likedIds={likedIds}
-            handleLike={handleLike}
+            handleLike={likesLoading || likesFetching || likesError ? undefined : handleLike}
             blockedIds={blockedIds}
             setBlockedIds={setBlockedIds}
           />
@@ -207,6 +225,17 @@ export default function Feed() {
         {/* Trending / Recent Tabs */}
         {tab !== 'my-playlists' && (
           <>
+            {likesError && (
+              <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+                <span>{t('explorePlaylistsError')}</span>
+                <button type="button" onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+                  {t('retry')}
+                </button>
+              </div>
+            )}
+            {likesLoading && (
+              <div className="mb-4 h-10 rounded-2xl bg-secondary animate-pulse" />
+            )}
             {/* Recent: newest playlists with >5 plays */}
             {tab === 'recent' && recentPlaylists.length > 0 && (
               <div className="mb-8">
@@ -214,7 +243,7 @@ export default function Feed() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                   {recentPlaylists.map((pl, i) => (
                     <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
-                      <PlaylistCard playlist={pl} liked={likes.includes(pl.id)} onLike={handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                      <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
                     </motion.div>
                   ))}
                 </div>
@@ -252,7 +281,7 @@ export default function Feed() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mb-3">
                       {displayedTrendingPlaylists.map((pl, i) => (
                         <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                          <PlaylistCard playlist={pl} liked={likes.includes(pl.id)} onLike={handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                          <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
                         </motion.div>
                       ))}
                     </div>
