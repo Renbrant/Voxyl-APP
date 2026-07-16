@@ -2811,19 +2811,26 @@ async function podcastPlayHistoryResponse(request: Request, env: Env): Promise<R
     throw new PodcastPlayError(500, "internal-error", "User bootstrap failed");
   }
 
+  const identityPredicates = ["user_id = ?", "clerk_user_id = ?"];
+  const identityParams = [user.id, claims.userId];
+  const legacyUserId = user.legacy_base44_user_id?.trim();
+
+  if (legacyUserId) {
+    identityPredicates.push("legacy_base44_user_id = ?");
+    identityParams.push(legacyUserId);
+  }
+
   const { results } = await env.DB.prepare(
     `SELECT id, playlist_id, feed_url, podcast_title, podcast_image, audio_url,
        episode_title, played_at, created_at
      FROM podcast_plays
-     WHERE user_id = ?
-       OR clerk_user_id = ?
-       OR legacy_base44_user_id = ?
+     WHERE ${identityPredicates.join(" OR ")}
      ORDER BY datetime(COALESCE(NULLIF(TRIM(played_at), ''), created_at)) DESC,
        created_at DESC,
        id DESC
      LIMIT ?`,
   )
-    .bind(user.id, claims.userId, user.legacy_base44_user_id || "", parsePodcastPlayHistoryLimit(request))
+    .bind(...identityParams, parsePodcastPlayHistoryLimit(request))
     .all<PublicPodcastPlay>();
   const plays = results || [];
 

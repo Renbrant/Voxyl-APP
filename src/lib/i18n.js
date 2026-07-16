@@ -2,10 +2,9 @@
 const detectLang = () => {
   if (typeof localStorage === 'undefined' || typeof navigator === 'undefined') return 'pt';
   const saved = localStorage.getItem('voxyl_language');
-  if (saved === 'en' || saved === 'pt' || saved === 'es') return saved;
+  if (saved === 'en' || saved === 'pt') return saved;
   
   const browserLang = navigator.language || navigator.languages?.[0] || 'pt';
-  if (browserLang.startsWith('es')) return 'es';
   return browserLang.startsWith('pt') ? 'pt' : 'en';
 };
 
@@ -14,7 +13,7 @@ export const isEn = lang === 'en';
 
 // Allow changing language preference
 export const setLanguage = (newLang) => {
-  if (newLang === 'en' || newLang === 'pt' || newLang === 'es') {
+  if (newLang === 'en' || newLang === 'pt') {
     localStorage.setItem('voxyl_language', newLang);
     window.location.reload();
   }
@@ -22,7 +21,7 @@ export const setLanguage = (newLang) => {
 
 const translations = {
   // Common
-  loading: { pt: 'Carregando...', en: 'Loading...', es: 'Cargando...' },
+  loading: { pt: 'Carregando...', en: 'Loading...' },
   noResults: { pt: 'Nenhum resultado encontrado', en: 'No results found' },
   retry: { pt: 'Tentar novamente', en: 'Retry' },
   search: { pt: 'Buscar', en: 'Search' },

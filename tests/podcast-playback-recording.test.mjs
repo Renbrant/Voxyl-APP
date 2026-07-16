@@ -143,11 +143,14 @@ function createPlaybackDb() {
             async all() {
               state.calls.push({ kind: 'all', sql, params });
               if (/FROM podcast_plays/s.test(sql)) {
-                const [user_id, clerk_user_id, legacy_base44_user_id, limit] = params;
+                const hasLegacyPredicate = /legacy_base44_user_id = \?/s.test(sql);
+                const [user_id, clerk_user_id] = params;
+                const legacy_base44_user_id = hasLegacyPredicate ? params[2] : undefined;
+                const limit = params[hasLegacyPredicate ? 3 : 2];
                 const results = orderPlaysNewestFirst(state.plays.filter((row) =>
                   row.user_id === user_id ||
                   row.clerk_user_id === clerk_user_id ||
-                  (legacy_base44_user_id && row.legacy_base44_user_id === legacy_base44_user_id)
+                  (hasLegacyPredicate && row.legacy_base44_user_id === legacy_base44_user_id)
                 ))
                   .slice(0, limit)
                   .map(({
@@ -418,6 +421,98 @@ describe('podcast playback recording Worker route', () => {
     const data = await body(response);
 
     assert.deepEqual(data.items.map((row) => row.id), ['own-play']);
+  });
+
+  it('does not match empty legacy playback rows for authenticated users without a legacy id', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    assert.equal(db.state.users[0].legacy_base44_user_id, null);
+    db.state.plays.push(
+      {
+        id: 'own-play',
+        user_id: 'd1-real-user',
+        clerk_user_id: 'clerk-user-1',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/show.xml',
+        podcast_title: 'Example Show',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/own.mp3',
+        episode_title: 'Own',
+        played_at: '2026-07-12T10:00:00.000Z',
+        created_at: '2026-07-12T09:59:00.000Z',
+      },
+      {
+        id: 'unrelated-empty-legacy',
+        user_id: 'other-user',
+        clerk_user_id: 'clerk-other',
+        legacy_base44_user_id: '',
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/empty-legacy.xml',
+        podcast_title: 'Unrelated Empty Legacy',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/empty-legacy.mp3',
+        episode_title: 'Should Not Leak',
+        played_at: '2026-07-13T10:00:00.000Z',
+        created_at: '2026-07-13T09:59:00.000Z',
+      },
+    );
+
+    const response = await worker.fetch(request('/api/plays', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+    const historyCall = db.state.calls.find((call) => call.kind === 'all' && /FROM podcast_plays/s.test(call.sql));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.items.map((row) => row.id), ['own-play']);
+    assert.doesNotMatch(historyCall.sql, /legacy_base44_user_id = \?/);
+    assert.deepEqual(historyCall.params, ['d1-real-user', 'clerk-user-1', 100]);
+  });
+
+  it('returns legitimate legacy playback rows for authenticated users with a matching legacy id', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    db.state.users[0].legacy_base44_user_id = 'legacy-real-user';
+    db.state.plays.push(
+      {
+        id: 'legacy-play',
+        user_id: 'legacy-only-user',
+        clerk_user_id: null,
+        legacy_base44_user_id: 'legacy-real-user',
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/legacy.xml',
+        podcast_title: 'Legacy Show',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/legacy.mp3',
+        episode_title: 'Legacy',
+        played_at: '2026-07-12T10:00:00.000Z',
+        created_at: '2026-07-12T09:59:00.000Z',
+      },
+      {
+        id: 'other-legacy-play',
+        user_id: 'other-user',
+        clerk_user_id: null,
+        legacy_base44_user_id: 'legacy-other-user',
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/other-legacy.xml',
+        podcast_title: 'Other Legacy',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/other-legacy.mp3',
+        episode_title: 'Other Legacy',
+        played_at: '2026-07-13T10:00:00.000Z',
+        created_at: '2026-07-13T09:59:00.000Z',
+      },
+    );
+
+    const response = await worker.fetch(request('/api/plays', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+    const historyCall = db.state.calls.find((call) => call.kind === 'all' && /FROM podcast_plays/s.test(call.sql));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.items.map((row) => row.id), ['legacy-play']);
+    assert.match(historyCall.sql, /legacy_base44_user_id = \?/);
+    assert.deepEqual(historyCall.params, ['d1-real-user', 'clerk-user-1', 'legacy-real-user', 100]);
   });
 
   it('orders playback history newest first and bounds limit to 100', async () => {
