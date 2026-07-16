@@ -253,6 +253,21 @@ export function getCachedProgress(audioUrl) {
   return readCache()[audioUrl] || null;
 }
 
+export function getEpisodeResumeState(episode, skipResume = false) {
+  const savedProgress = getCachedProgress(episode?.audioUrl);
+  const cachedPosition = Number(savedProgress?.position_seconds);
+  const cachedDuration = Number(savedProgress?.duration_seconds);
+  const resumeAt = !skipResume && cachedPosition > MIN_SAVE_POSITION && !savedProgress?.finished
+    ? cachedPosition
+    : (episode?.skip_start_seconds || 0);
+
+  return {
+    savedProgress,
+    resumeAt,
+    durationSeconds: Number.isFinite(cachedDuration) && cachedDuration > 0 ? cachedDuration : 0,
+  };
+}
+
 export function setCachedProgress(audioUrl, position, duration, finished) {
   const cache = readCache();
   const current = cache[audioUrl];

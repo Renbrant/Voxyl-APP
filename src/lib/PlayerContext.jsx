@@ -8,6 +8,7 @@ import {
   setCachedProgress,
   getAllFinishedFromCache,
   activateProgressCacheScope,
+  getEpisodeResumeState,
   getProgressScopeDecision,
   getProgressPlaybackTransition,
   loadProgressFromDB,
@@ -15,6 +16,12 @@ import {
   FINISH_THRESHOLD,
   MIN_SAVE_POSITION,
 } from '@/lib/episodeProgressCache';
+import {
+  beginWebEpisodeSourceSwitch,
+  createWebPlaybackTransitionCoordinator,
+  isObsoleteWebPlaybackError,
+  requestGuardedWebPlayback,
+} from '@/lib/webPlaybackTransition';
 import { nativeAudioPlayer, isNative } from '@/lib/nativeAudioPlayer';
 import {
   clearPodcastPlayRetryTimer,
@@ -59,6 +66,7 @@ export function PlayerProvider({ children }) {
   const finishedUrlsRef = useRef(new Set());
   const transitioningRef = useRef(false);
   const loadingWatchdogRef = useRef(null);
+  const webPlaybackTransitionRef = useRef(createWebPlaybackTransitionCoordinator());
 
   // ─── Save / progress refs ────────────────────────────────────────────────
   const localSaveTimerRef = useRef(null);
@@ -168,6 +176,7 @@ export function PlayerProvider({ children }) {
 
   const clearPlaybackForIdentityChange = useCallback(() => {
     const currentSession = podcastPlaySessionRef.current;
+    webPlaybackTransitionRef.current.cancel();
     if (isNative && nativeAudioPlayer.isReady()) {
       nativeAudioPlayer.clearNativeQueue().catch(() => {});
       nativeAudioPlayer.stop().catch(() => {});
@@ -234,43 +243,14 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('canplaythrough', finish, { once: true });
   }), []);
 
-  const requestWebPlayback = useCallback(async (audio, transitionLabel) => {
-    let lastError = null;
-
-    for (let attempt = 0; attempt < PLAY_RETRY_DELAYS_MS.length; attempt += 1) {
-      const delay = PLAY_RETRY_DELAYS_MS[attempt];
-      if (delay > 0) await waitForMediaReady(audio, delay);
-
-      try {
-        console.log('[PLAYLIST] play() requested', {
-          transition: transitionLabel,
-          attempt: attempt + 1,
-          src: audio.currentSrc || audio.src,
-        });
-        await audio.play();
-        console.log('[PLAYLIST] play() resolved', {
-          transition: transitionLabel,
-          attempt: attempt + 1,
-        });
-        return;
-      } catch (error) {
-        lastError = error;
-        console.error('[PLAYLIST] play() rejected', {
-          transition: transitionLabel,
-          attempt: attempt + 1,
-          name: error?.name,
-          message: error?.message,
-        });
-
-        const recoverable = error?.name === 'AbortError' ||
-          error?.name === 'NotAllowedError' ||
-          audio.networkState === HTMLMediaElement.NETWORK_LOADING;
-        if (!recoverable) break;
-      }
-    }
-
-    throw lastError || new Error('Audio playback did not start');
-  }, [waitForMediaReady]);
+  const requestWebPlayback = useCallback((audio, transitionLabel, transition) =>
+    requestGuardedWebPlayback({
+      audio,
+      transitionLabel,
+      retryDelays: PLAY_RETRY_DELAYS_MS,
+      waitForMediaReady,
+      isCurrent: () => !transition || webPlaybackTransitionRef.current.isCurrent(transition),
+    }), [waitForMediaReady]);
 
   // ── Web-only: MediaSession metadata ───────────────────────────────────────
   const updateMediaSession = useCallback((episode) => {
@@ -289,6 +269,41 @@ export function PlayerProvider({ children }) {
         : [],
     });
   }, []);
+
+  // ── Web Wake Lock ─────────────────────────────────────────────────────────
+  const requestWakeLock = useCallback(async () => {
+    if (isNative || !('wakeLock' in navigator)) return;
+    try {
+      if (wakeLockRef.current) return;
+      wakeLockRef.current = await navigator.wakeLock.request('screen');
+      wakeLockRef.current.addEventListener('release', () => { wakeLockRef.current = null; });
+    } catch (_) {}
+  }, []);
+
+  const releaseWakeLock = useCallback(async () => {
+    if (wakeLockRef.current) {
+      await wakeLockRef.current.release().catch(() => {});
+      wakeLockRef.current = null;
+    }
+  }, []);
+
+  const cleanupFailedWebTransition = useCallback((transition) => {
+    if (isNative || !transition || !webPlaybackTransitionRef.current.isCurrent(transition)) return false;
+    webPlaybackTransitionRef.current.cancel(transition);
+    stopSaveTimers();
+    pausePodcastPlaySessionTimer();
+    clearPodcastPlayRetry(podcastPlaySessionRef.current);
+    clearLoadingState();
+    setIsPlaying(false);
+    void releaseWakeLock();
+    return true;
+  }, [
+    clearLoadingState,
+    clearPodcastPlayRetry,
+    pausePodcastPlaySessionTimer,
+    releaseWakeLock,
+    stopSaveTimers,
+  ]);
 
   // ── Advance to next episode ───────────────────────────────────────────────
   const advanceToNextEpisodeRef = useRef(null);
@@ -317,6 +332,7 @@ export function PlayerProvider({ children }) {
 
     if (!nextEpisode) {
       console.log('[AUDIO_NEXT] no next episode available — end of queue');
+      webPlaybackTransitionRef.current.cancel();
       if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.stop().catch(() => {});
       transitioningRef.current = false;
       setIsPlaying(false);
@@ -332,6 +348,7 @@ export function PlayerProvider({ children }) {
 
     // Save + mark current as finished
     saveCurrentProgress(true);
+    stopSaveTimers();
     const prevUrl = currentEpisodeRef.current?.audioUrl;
     if (prevUrl) {
       finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
@@ -339,17 +356,17 @@ export function PlayerProvider({ children }) {
       setCachedProgress(prevUrl, dur, dur, true);
     }
 
-    currentEpisodeRef.current = nextEpisode;
-    currentIndexRef.current = nextIdx;
-    startPodcastPlaySession(nextEpisode);
-    setCurrentEpisode(nextEpisode);
-    setCurrentTime(0);
-    setDuration(0);
-    setFinishedUrls(new Set(finishedUrlsRef.current));
-    armLoadingWatchdog(`advance:${source}`);
-
+    let webTransition = null;
     try {
       if (isNative && nativeAudioPlayer.isReady()) {
+        currentEpisodeRef.current = nextEpisode;
+        currentIndexRef.current = nextIdx;
+        startPodcastPlaySession(nextEpisode);
+        setCurrentEpisode(nextEpisode);
+        setCurrentTime(0);
+        setDuration(0);
+        setFinishedUrls(new Set(finishedUrlsRef.current));
+        armLoadingWatchdog(`advance:${source}`);
         await nativeAudioPlayer.updateQueue(currentQueue, nextIdx, autoplayRef.current);
         console.log('[AUDIO_NEXT] next episode load/preload started (native)', { url: nextEpisode.audioUrl });
         await nativeAudioPlayer.play(nextEpisode, nextEpisode.skip_start_seconds || 0);
@@ -363,49 +380,79 @@ export function PlayerProvider({ children }) {
         const audio = audioRef.current;
         if (!audio) throw new Error('Shared audio element is unavailable');
 
-        audio.pause();
-        audio.src = nextEpisode.audioUrl;
+        const startAt = nextEpisode.skip_start_seconds || 0;
+        webTransition = beginWebEpisodeSourceSwitch({
+          coordinator: webPlaybackTransitionRef.current,
+          audio,
+          audioUrl: nextEpisode.audioUrl,
+          resumeAt: startAt,
+          durationSeconds: 0,
+          onBeforeSource: () => {
+            audio.pause();
+            currentEpisodeRef.current = nextEpisode;
+            currentIndexRef.current = nextIdx;
+            startPodcastPlaySession(nextEpisode);
+            setCurrentEpisode(nextEpisode);
+            setCurrentTime(startAt);
+            setDuration(0);
+            setFinishedUrls(new Set(finishedUrlsRef.current));
+            armLoadingWatchdog(`advance:${source}`);
+          },
+        });
         audio.volume = volumeRef.current ?? 1;
         console.log('[PLAYLIST] next URL assigned', {
           title: nextEpisode.title,
           url: nextEpisode.audioUrl,
         });
-        audio.load();
         console.log('[PLAYLIST] load() called', {
           title: nextEpisode.title,
           url: nextEpisode.audioUrl,
         });
 
-        const startAt = nextEpisode.skip_start_seconds || 0;
         if (startAt > 0) {
           await waitForMediaReady(audio, 2000);
+          webPlaybackTransitionRef.current.assertCurrent(webTransition);
           audio.currentTime = startAt;
         }
 
-        await requestWebPlayback(audio, `advance:${source}`);
+        webPlaybackTransitionRef.current.assertCurrent(webTransition);
+        await requestWebPlayback(audio, `advance:${source}`, webTransition);
+        webPlaybackTransitionRef.current.assertCurrent(webTransition);
+        webPlaybackTransitionRef.current.markEstablished(webTransition);
         setIsPlaying(true);
         clearLoadingState();
+        markPodcastPlaySessionPlaying();
+        startSaveTimers();
+        requestWakeLock();
         updateMediaSession(nextEpisode);
         notifyServiceWorker(nextEpisode, currentQueue);
       }
     } catch (error) {
+      if (isObsoleteWebPlaybackError(error)) return;
       console.error('[AUDIO_NEXT] error during auto-next', {
         source,
         title: nextEpisode.title,
         name: error?.name,
         message: error?.message,
       });
-      clearLoadingState();
-      setIsPlaying(false);
+      if (!cleanupFailedWebTransition(webTransition)) {
+        clearLoadingState();
+        setIsPlaying(false);
+      }
     } finally {
       transitioningRef.current = false;
     }
   }, [
     armLoadingWatchdog,
     clearLoadingState,
+    cleanupFailedWebTransition,
+    markPodcastPlaySessionPlaying,
     requestWebPlayback,
+    requestWakeLock,
     saveCurrentProgress,
     startPodcastPlaySession,
+    startSaveTimers,
+    stopSaveTimers,
     updateMediaSession,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -524,6 +571,7 @@ export function PlayerProvider({ children }) {
 
     // ── Audio error diagnostics ───────────────────────────────────────────
     audio.addEventListener('error', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('error', audio)) return;
       console.error('[PLAYLIST] audio error', {
         code: audio.error?.code,
         message: audio.error?.message,
@@ -538,6 +586,7 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('timeupdate', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('timeupdate', audio)) return;
       setCurrentTime(audio.currentTime);
       const ep = currentEpisodeRef.current;
       const skipEnd = ep?.skip_end_seconds || 0;
@@ -549,10 +598,12 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('durationchange', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('durationchange', audio)) return;
       setDuration(isNaN(audio.duration) ? 0 : audio.duration);
     });
 
     audio.addEventListener('stalled', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('stalled', audio)) return;
       console.warn('[PLAYLIST] audio stalled', {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
@@ -562,6 +613,7 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('waiting', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('waiting', audio)) return;
       console.warn('[PLAYLIST] audio waiting', {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
@@ -570,10 +622,17 @@ export function PlayerProvider({ children }) {
       armLoadingWatchdog('waiting');
     });
 
-    audio.addEventListener('canplay', clearLoadingState);
-    audio.addEventListener('canplaythrough', clearLoadingState);
+    audio.addEventListener('canplay', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('canplay', audio)) return;
+      clearLoadingState();
+    });
+    audio.addEventListener('canplaythrough', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('canplaythrough', audio)) return;
+      clearLoadingState();
+    });
 
     audio.addEventListener('playing', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('playing', audio)) return;
       console.log('[PLAYLIST] audio playing', {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
@@ -586,6 +645,7 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('pause', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('pause', audio)) return;
       console.log('[PLAYLIST] audio paused', {
         title: currentEpisodeRef.current?.title,
         ended: audio.ended,
@@ -597,6 +657,7 @@ export function PlayerProvider({ children }) {
     });
 
     audio.addEventListener('ended', () => {
+      if (webPlaybackTransitionRef.current.shouldIgnoreEvent('ended', audio)) return;
       console.log('[PLAYLIST] ended fired', {
         source: 'web',
         title: currentEpisodeRef.current?.title,
@@ -606,6 +667,7 @@ export function PlayerProvider({ children }) {
     });
 
     return () => {
+      webPlaybackTransitionRef.current.cancel();
       audio.pause();
       audio.src = '';
       stopSaveTimers();
@@ -639,23 +701,6 @@ export function PlayerProvider({ children }) {
       });
     } catch (_) {}
   }, [currentTime, duration]);
-
-  // ── Web Wake Lock ─────────────────────────────────────────────────────────
-  const requestWakeLock = useCallback(async () => {
-    if (isNative || !('wakeLock' in navigator)) return;
-    try {
-      if (wakeLockRef.current) return;
-      wakeLockRef.current = await navigator.wakeLock.request('screen');
-      wakeLockRef.current.addEventListener('release', () => { wakeLockRef.current = null; });
-    } catch (_) {}
-  }, []);
-
-  const releaseWakeLock = useCallback(async () => {
-    if (wakeLockRef.current) {
-      await wakeLockRef.current.release().catch(() => {});
-      wakeLockRef.current = null;
-    }
-  }, []);
 
   // ── Service Worker helpers (web) ──────────────────────────────────────────
   const notifyServiceWorker = (episode, q) => {
@@ -838,20 +883,20 @@ export function PlayerProvider({ children }) {
   const playEpisodeInternal = useCallback(async (episode, q, skipResume = false) => {
     transitioningRef.current = false;
     saveCurrentProgress(true);
+    stopSaveTimers();
     pausePodcastPlaySessionTimer();
 
+    const { resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
+
     armLoadingWatchdog('manual-play');
+    setCurrentTime(resumeAt);
+    setDuration(durationSeconds);
     setCurrentEpisode(episode);
     currentEpisodeRef.current = episode;
     startPodcastPlaySession(episode);
 
     const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);
     currentIndexRef.current = idx;
-
-    const savedProgress = getCachedProgress(episode.audioUrl);
-    const resumeAt = !skipResume && savedProgress?.position_seconds > MIN_SAVE_POSITION && !savedProgress?.finished
-      ? savedProgress.position_seconds
-      : (episode.skip_start_seconds || 0);
 
     if (isNative && !nativeAudioPlayer.isReady()) {
       await nativeAudioPlayer.waitUntilReady();
@@ -896,13 +941,18 @@ export function PlayerProvider({ children }) {
         console.error('[PLAYLIST] shared audio element unavailable');
         return;
       }
-      audio.src = episode.audioUrl;
+      const transition = beginWebEpisodeSourceSwitch({
+        coordinator: webPlaybackTransitionRef.current,
+        audio,
+        audioUrl: episode.audioUrl,
+        resumeAt,
+        durationSeconds,
+      });
       audio.volume = volumeRef.current ?? 1;
       console.log('[PLAYLIST] next URL assigned', {
         title: episode.title,
         url: episode.audioUrl,
       });
-      audio.load();
       console.log('[PLAYLIST] load() called', {
         title: episode.title,
         url: episode.audioUrl,
@@ -911,32 +961,46 @@ export function PlayerProvider({ children }) {
       try {
         if (resumeAt > 0) {
           await waitForMediaReady(audio, 2000);
+          webPlaybackTransitionRef.current.assertCurrent(transition);
           audio.currentTime = resumeAt;
         }
-        await requestWebPlayback(audio, 'manual-play');
+        webPlaybackTransitionRef.current.assertCurrent(transition);
+        await requestWebPlayback(audio, 'manual-play', transition);
+        webPlaybackTransitionRef.current.assertCurrent(transition);
+        webPlaybackTransitionRef.current.markEstablished(transition);
         setIsPlaying(true);
         clearLoadingState();
+        markPodcastPlaySessionPlaying();
+        startSaveTimers();
+        requestWakeLock();
       } catch (error) {
+        if (isObsoleteWebPlaybackError(error)) return;
         console.error('[PLAYLIST] manual play failed', {
           title: episode.title,
           name: error?.name,
           message: error?.message,
         });
-        clearLoadingState();
-        setIsPlaying(false);
+        if (!cleanupFailedWebTransition(transition)) {
+          clearLoadingState();
+          setIsPlaying(false);
+        }
       }
 
+      if (!webPlaybackTransitionRef.current.isCurrent(transition)) return;
       updateMediaSession(episode);
       notifyServiceWorker(episode, q);
     }
   }, [
     armLoadingWatchdog,
     clearLoadingState,
+    cleanupFailedWebTransition,
     markPodcastPlaySessionPlaying,
     pausePodcastPlaySessionTimer,
+    requestWakeLock,
     requestWebPlayback,
     saveCurrentProgress,
     startPodcastPlaySession,
+    stopSaveTimers,
     updateMediaSession,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -951,7 +1015,17 @@ export function PlayerProvider({ children }) {
     if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
       // Resume same episode
       if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.resume();
-      else audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+      else {
+        const activeTransition = webPlaybackTransitionRef.current.getCurrent();
+        if (
+          activeTransition?.audioUrl === episode.audioUrl &&
+          webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+        ) {
+          playEpisodeInternal(episode, updatedQueue);
+          return;
+        }
+        audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
       return;
     }
 
@@ -974,6 +1048,16 @@ export function PlayerProvider({ children }) {
       if (!audio) return;
       if (isPlaying) { audio.pause(); setIsPlaying(false); }
       else {
+        const activeEpisode = currentEpisodeRef.current;
+        const activeTransition = webPlaybackTransitionRef.current.getCurrent();
+        if (
+          activeEpisode?.audioUrl &&
+          activeTransition?.audioUrl === activeEpisode.audioUrl &&
+          webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+        ) {
+          playEpisodeInternal(activeEpisode, queueRef.current);
+          return;
+        }
         console.log('[WEB AUDIO] togglePlay — play() call',
           'src:', audio.src, 'readyState:', audio.readyState);
         audio.play().then(() => setIsPlaying(true)).catch(e =>
@@ -981,7 +1065,7 @@ export function PlayerProvider({ children }) {
         );
       }
     }
-  }, [isPlaying]);
+  }, [isPlaying, playEpisodeInternal]);
 
   const seek = useCallback((time) => {
     if (isNative && nativeAudioPlayer.isReady()) {
