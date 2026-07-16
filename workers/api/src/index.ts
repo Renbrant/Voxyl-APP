@@ -153,6 +153,23 @@ class RssFetchError extends Error {
   }
 }
 
+type PodcastPlayErrorCode =
+  | "invalid-request"
+  | "unauthorized"
+  | "invalid-playlist"
+  | "internal-error";
+
+class PodcastPlayError extends Error {
+  readonly status: number;
+  readonly code: PodcastPlayErrorCode;
+
+  constructor(status: number, code: PodcastPlayErrorCode, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 type RssFetchRequest = {
   url: string;
   count: number;
@@ -363,6 +380,13 @@ function isRssFetchRoute(pathname: string): boolean {
   return pathname === "/api/functions/fetchRSSFeed" || pathname === "/functions/fetchRSSFeed" || pathname === "/api/rss/fetch";
 }
 
+function isPodcastPlayRoute(pathname: string): boolean {
+  return pathname === "/api/plays" ||
+    pathname === "/plays" ||
+    pathname === "/api/functions/recordPodcastPlay" ||
+    pathname === "/functions/recordPodcastPlay";
+}
+
 function getPlaylistId(pathname: string): string | null {
   const prefixes = ["/playlists/", "/api/playlists/"];
 
@@ -415,6 +439,18 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 function rssFetchErrorResponse(error: RssFetchError, request: Request, env: Env): Response {
+  return jsonResponse(
+    {
+      ok: false,
+      code: error.code,
+      error: error.message,
+    },
+    error.status,
+    getCorsHeaders(request, env),
+  );
+}
+
+function podcastPlayErrorResponse(error: PodcastPlayError, request: Request, env: Env): Response {
   return jsonResponse(
     {
       ok: false,
@@ -1969,6 +2005,22 @@ async function getVerifiedClerkClaims(request: Request, env: Env): Promise<Clerk
   }
 }
 
+async function getOptionalVerifiedClerkClaims(request: Request, env: Env): Promise<ClerkClaims | null> {
+  const authorization = request.headers.get("authorization");
+
+  if (authorization === null) {
+    return null;
+  }
+
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    throw new PodcastPlayError(401, "unauthorized", "Unauthorized");
+  }
+
+  return claims;
+}
+
 function normalizeEmail(email: string | null): string | null {
   return email?.trim().toLowerCase() || null;
 }
@@ -2150,22 +2202,7 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
     .run();
 }
 
-function toClientUser(user: D1User): D1User & { full_name: string | null; picture: string | null } {
-  return {
-    ...user,
-    full_name: user.name,
-    picture: user.profile_picture,
-  };
-}
-
-async function meResponse(request: Request, env: Env): Promise<Response> {
-  const corsHeaders = getCorsHeaders(request, env);
-  const claims = await getVerifiedClerkClaims(request, env);
-
-  if (!claims) {
-    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
-  }
-
+async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<D1User | null> {
   const profile = !claims.email || !claims.name ? await getClerkProfile(env, claims.userId) : { email: null, name: null };
   const enrichedClaims = {
     ...claims,
@@ -2196,6 +2233,27 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     await createUserFromClerkClaims(env, enrichedClaims);
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
   }
+
+  return user;
+}
+
+function toClientUser(user: D1User): D1User & { full_name: string | null; picture: string | null } {
+  return {
+    ...user,
+    full_name: user.name,
+    picture: user.profile_picture,
+  };
+}
+
+async function meResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
 
   if (!user) {
     return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
@@ -2493,6 +2551,222 @@ async function playlistResponse(request: Request, env: Env, playlistId: string):
   );
 }
 
+type PodcastPlayRequest = {
+  eventId: string;
+  playlistId: string | null;
+  feedUrl: string;
+  podcastTitle: string | null;
+  podcastImage: string | null;
+  audioUrl: string;
+  episodeTitle: string | null;
+};
+
+type PlaybackPlaylist = {
+  id: string;
+  creator_id: string;
+  creator_clerk_user_id: string | null;
+  visibility: string;
+  rss_feeds: string | null;
+};
+
+function validateBoundedString(value: unknown, fieldName: string, maxLength: number, required = false): string | null {
+  if (value === undefined || value === null || value === "") {
+    if (required) {
+      throw new PodcastPlayError(400, "invalid-request", `${fieldName} is required`);
+    }
+
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must be a string`);
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    if (required) {
+      throw new PodcastPlayError(400, "invalid-request", `${fieldName} is required`);
+    }
+
+    return null;
+  }
+
+  if (trimmed.length > maxLength) {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} is too long`);
+  }
+
+  return trimmed;
+}
+
+function validateClientEventId(value: unknown): string {
+  const eventId = validateBoundedString(value, "event_id", 128, true);
+
+  if (!eventId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) {
+    throw new PodcastPlayError(400, "invalid-request", "event_id must be a valid UUID");
+  }
+
+  return eventId;
+}
+
+function validateAbsoluteHttpUrl(value: unknown, fieldName: string, required = true): string | null {
+  const rawUrl = validateBoundedString(value, fieldName, 2048, required);
+
+  if (!rawUrl) {
+    return null;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must be a valid absolute HTTP or HTTPS URL`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must use HTTP or HTTPS`);
+  }
+
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function normalizePlaybackFeedUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl.trim());
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getConfiguredPlaylistFeedUrl(feed: unknown): string | null {
+  if (typeof feed === "string") {
+    return normalizePlaybackFeedUrl(feed);
+  }
+
+  if (!feed || typeof feed !== "object") {
+    return null;
+  }
+
+  const value = (feed as { url?: unknown; feed_url?: unknown }).url ?? (feed as { feed_url?: unknown }).feed_url;
+  return typeof value === "string" ? normalizePlaybackFeedUrl(value) : null;
+}
+
+async function parsePodcastPlayRequest(request: Request): Promise<PodcastPlayRequest> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+
+  return {
+    eventId: validateClientEventId(payload.event_id),
+    playlistId: validateBoundedString(payload.playlist_id, "playlist_id", 128),
+    feedUrl: validateAbsoluteHttpUrl(payload.feed_url, "feed_url", true) || "",
+    podcastTitle: validateBoundedString(payload.podcast_title, "podcast_title", 500),
+    podcastImage: validateAbsoluteHttpUrl(payload.podcast_image, "podcast_image", false),
+    audioUrl: validateAbsoluteHttpUrl(payload.audio_url, "audio_url", true) || "",
+    episodeTitle: validateBoundedString(payload.episode_title, "episode_title", 500),
+  };
+}
+
+async function validatePlaybackPlaylist(env: Env, playlistId: string, feedUrl: string, user: D1User | null): Promise<void> {
+  const playlist = await env.DB.prepare(
+    `SELECT id, creator_id, creator_clerk_user_id, visibility, rss_feeds
+     FROM playlists
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(playlistId)
+    .first<PlaybackPlaylist>();
+
+  if (!playlist) {
+    throw new PodcastPlayError(400, "invalid-playlist", "Invalid playlist");
+  }
+
+  const hasAccess = playlist.visibility === "public" ||
+    Boolean(user && (playlist.creator_id === user.id || playlist.creator_clerk_user_id === user.clerk_user_id));
+
+  if (!hasAccess) {
+    throw new PodcastPlayError(400, "invalid-playlist", "Invalid playlist");
+  }
+
+  const suppliedFeedUrl = normalizePlaybackFeedUrl(feedUrl);
+  const configuredFeedUrls = new Set(
+    parseRssFeeds(playlist.rss_feeds)
+      .map(getConfiguredPlaylistFeedUrl)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  if (!suppliedFeedUrl || !configuredFeedUrls.has(suppliedFeedUrl)) {
+    throw new PodcastPlayError(400, "invalid-playlist", "Invalid playlist");
+  }
+}
+
+async function podcastPlayResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getOptionalVerifiedClerkClaims(request, env);
+  const payload = await parsePodcastPlayRequest(request);
+  const user = claims ? await resolveD1UserFromClerkClaims(env, claims) : null;
+
+  if (claims && !user) {
+    throw new PodcastPlayError(500, "internal-error", "User bootstrap failed");
+  }
+
+  if (payload.playlistId) {
+    await validatePlaybackPlaylist(env, payload.playlistId, payload.feedUrl, user);
+  }
+
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO podcast_plays (
+       id, client_event_id, user_id, clerk_user_id, playlist_id, feed_url,
+       podcast_title, podcast_image, audio_url, episode_title, played_at,
+       created_at, updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      payload.eventId,
+      user?.id || null,
+      claims?.userId || null,
+      payload.playlistId,
+      payload.feedUrl,
+      payload.podcastTitle,
+      payload.podcastImage,
+      payload.audioUrl,
+      payload.episodeTitle,
+    )
+    .run();
+  const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+  return jsonResponse(
+    {
+      ok: true,
+      recorded: true,
+      duplicate: changes === 0,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 type TopPodcast = {
   feedUrl: string;
   title: string | null;
@@ -2680,6 +2954,10 @@ export default {
         return withCors(await rssFetchResponse(request, env), request, env);
       }
 
+      if (request.method === "POST" && isPodcastPlayRoute(pathname)) {
+        return withCors(await podcastPlayResponse(request, env), request, env);
+      }
+
       const playlistId = getPlaylistId(pathname);
 
       if (request.method === "GET" && playlistId) {
@@ -2694,6 +2972,10 @@ export default {
 
       if (error instanceof RssFetchError) {
         return withCors(rssFetchErrorResponse(error, request, env), request, env);
+      }
+
+      if (error instanceof PodcastPlayError) {
+        return withCors(podcastPlayErrorResponse(error, request, env), request, env);
       }
 
       console.error("Unhandled Worker error", error instanceof Error ? error.message : error);

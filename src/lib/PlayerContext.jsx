@@ -11,6 +11,13 @@ import {
   MIN_SAVE_POSITION,
 } from '@/lib/episodeProgressCache';
 import { nativeAudioPlayer, isNative } from '@/lib/nativeAudioPlayer';
+import {
+  clearPodcastPlayRetryTimer,
+  createPodcastPlayRecorder,
+  createPodcastPlaySession,
+  markPodcastSessionPlaying,
+  pausePodcastSession,
+} from '@/lib/podcastPlaybackSession';
 
 const PlayerContext = createContext(null);
 
@@ -49,7 +56,8 @@ export function PlayerProvider({ children }) {
   // ─── Save / progress refs ────────────────────────────────────────────────
   const localSaveTimerRef = useRef(null);
   const dbSaveTimerRef = useRef(null);
-  const podcastPlayRecordedRef = useRef(new Set());
+  const podcastPlaySessionRef = useRef(null);
+  const currentPlaybackSourceRef = useRef(null);
   const userRef = useRef(null);
   const wakeLockRef = useRef(null);
 
@@ -79,27 +87,42 @@ export function PlayerProvider({ children }) {
     if (u) saveProgressToDB(voxylApi, u.id, audioUrl).catch(() => {});
   }, []);
 
-  const recordPodcastPlay = useCallback(() => {
-    const ep = currentEpisodeRef.current;
-    if (!ep?.audioUrl) return;
-    if (podcastPlayRecordedRef.current.has(ep.audioUrl)) return;
-    const useNative = isNative && nativeAudioPlayer.isReady();
-    const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
-    const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
-    if (dur > 0 && pos / dur >= 0.5) {
-      podcastPlayRecordedRef.current.add(ep.audioUrl);
-      voxylApi.functions.invoke('recordPodcastPlay', {
-        feed_url: ep.feedUrl || ep.id || '',
-        podcast_title: ep.feedTitle || '',
-        podcast_image: ep.image || '',
-        audio_url: ep.audioUrl,
-        episode_title: ep.title || '',
-      }).then(() => {
-        const u = userRef.current;
-        if (u?.id) invalidateCache(`user-podcast-plays-${u.id}`);
-      }).catch(() => {});
-    }
+  const clearPodcastPlayRetry = useCallback((session = podcastPlaySessionRef.current) => {
+    clearPodcastPlayRetryTimer(session);
   }, []);
+
+  const pausePodcastPlaySessionTimer = useCallback(() => {
+    pausePodcastSession(podcastPlaySessionRef.current);
+  }, []);
+
+  const markPodcastPlaySessionPlaying = useCallback(() => {
+    markPodcastSessionPlaying(podcastPlaySessionRef.current);
+  }, []);
+
+  const startPodcastPlaySession = useCallback((episode, source = currentPlaybackSourceRef.current) => {
+    const previousSession = podcastPlaySessionRef.current;
+    pausePodcastSession(previousSession);
+    clearPodcastPlayRetry(previousSession);
+    podcastPlaySessionRef.current = createPodcastPlaySession(episode, source);
+  }, [clearPodcastPlayRetry]);
+
+  const podcastPlayRecorderRef = useRef(null);
+
+  const recordPodcastPlay = useCallback((expectedEventId = null) => {
+    void podcastPlayRecorderRef.current?.attempt(expectedEventId);
+  }, []);
+
+  podcastPlayRecorderRef.current = createPodcastPlayRecorder({
+    invoke: (payload) => voxylApi.functions.invoke('recordPodcastPlay', payload),
+    getCurrentSession: () => podcastPlaySessionRef.current,
+    getCurrentEpisode: () => currentEpisodeRef.current,
+    onSuccess: (result) => {
+      const u = userRef.current;
+      if (u?.id && (result?.data?.recorded || result?.data?.duplicate || result?.recorded)) {
+        invalidateCache(`user-podcast-plays-${u.id}`);
+      }
+    },
+  });
 
   const saveCurrentProgress = useCallback((forceDB = false) => {
     const ep = currentEpisodeRef.current;
@@ -278,6 +301,7 @@ export function PlayerProvider({ children }) {
 
     currentEpisodeRef.current = nextEpisode;
     currentIndexRef.current = nextIdx;
+    startPodcastPlaySession(nextEpisode);
     setCurrentEpisode(nextEpisode);
     setCurrentTime(0);
     setDuration(0);
@@ -341,6 +365,7 @@ export function PlayerProvider({ children }) {
     clearLoadingState,
     requestWebPlayback,
     saveCurrentProgress,
+    startPodcastPlaySession,
     updateMediaSession,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -384,8 +409,8 @@ export function PlayerProvider({ children }) {
       // backgrounded. Sync UI/index to reality — do NOT call play() again.
       onStateChange: (playing) => {
         setIsPlaying(playing);
-        if (playing) startSaveTimers();
-        else { stopSaveTimers(); saveCurrentProgress(true); }
+        if (playing) { markPodcastPlaySessionPlaying(); startSaveTimers(); }
+        else { pausePodcastPlaySessionTimer(); stopSaveTimers(); saveCurrentProgress(true); }
       },
       onNativeTrackChanged: (track = {}) => {
         const url = track?.url || track?.audioUrl;
@@ -402,6 +427,7 @@ export function PlayerProvider({ children }) {
 
         currentEpisodeRef.current = nextEpisode;
         currentIndexRef.current = index;
+        startPodcastPlaySession(nextEpisode);
         setCurrentEpisode(nextEpisode);
         setCurrentTime(0);
         setDuration(0);
@@ -412,11 +438,13 @@ export function PlayerProvider({ children }) {
       },
       onPlaybackError: (error) => {
         console.error('[AUDIO_NEXT] native playback error', error);
+        pausePodcastPlaySessionTimer();
         clearLoadingState();
         setIsPlaying(false);
         transitioningRef.current = false;
       },
       onQueueCompleted: () => {
+        pausePodcastPlaySessionTimer();
         clearLoadingState();
         setIsPlaying(false);
         transitioningRef.current = false;
@@ -463,6 +491,7 @@ export function PlayerProvider({ children }) {
         networkState: audio.networkState,
         readyState: audio.readyState,
       });
+      pausePodcastPlaySessionTimer();
       clearLoadingState();
       setIsPlaying(false);
       transitioningRef.current = false;
@@ -488,6 +517,7 @@ export function PlayerProvider({ children }) {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
       });
+      pausePodcastPlaySessionTimer();
       armLoadingWatchdog('stalled');
     });
 
@@ -496,6 +526,7 @@ export function PlayerProvider({ children }) {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
       });
+      pausePodcastPlaySessionTimer();
       armLoadingWatchdog('waiting');
     });
 
@@ -509,6 +540,7 @@ export function PlayerProvider({ children }) {
       });
       clearLoadingState();
       setIsPlaying(true);
+      markPodcastPlaySessionPlaying();
       startSaveTimers();
       requestWakeLock();
     });
@@ -518,6 +550,7 @@ export function PlayerProvider({ children }) {
         title: currentEpisodeRef.current?.title,
         ended: audio.ended,
       });
+      pausePodcastPlaySessionTimer();
       stopSaveTimers();
       saveCurrentProgress(true);
       releaseWakeLock();
@@ -536,6 +569,8 @@ export function PlayerProvider({ children }) {
       audio.pause();
       audio.src = '';
       stopSaveTimers();
+      pausePodcastPlaySessionTimer();
+      clearPodcastPlayRetry(podcastPlaySessionRef.current);
       clearTimeout(loadingWatchdogRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -683,10 +718,12 @@ export function PlayerProvider({ children }) {
   const playEpisodeInternal = useCallback(async (episode, q, skipResume = false) => {
     transitioningRef.current = false;
     saveCurrentProgress(true);
+    pausePodcastPlaySessionTimer();
 
     armLoadingWatchdog('manual-play');
     setCurrentEpisode(episode);
     currentEpisodeRef.current = episode;
+    startPodcastPlaySession(episode);
 
     const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);
     currentIndexRef.current = idx;
@@ -775,8 +812,11 @@ export function PlayerProvider({ children }) {
   }, [
     armLoadingWatchdog,
     clearLoadingState,
+    markPodcastPlaySessionPlaying,
+    pausePodcastPlaySessionTimer,
     requestWebPlayback,
     saveCurrentProgress,
+    startPodcastPlaySession,
     updateMediaSession,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -784,7 +824,9 @@ export function PlayerProvider({ children }) {
   const play = useCallback((episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
     if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
-    if (source) setEpisodeSource(source);
+    const nextSource = source ?? null;
+    currentPlaybackSourceRef.current = nextSource;
+    setEpisodeSource(nextSource);
 
     if (currentEpisodeRef.current?.audioUrl === episode.audioUrl) {
       // Resume same episode
