@@ -800,6 +800,24 @@ describe('podcast playback frontend integration', () => {
     );
   });
 
+  it('does not fall back to feed_url when a recorded playlist_id is unavailable', () => {
+    const playlists = [
+      {
+        id: 'available-shared-feed',
+        rss_feeds: [{ url: 'https://feeds.example.com/shared.xml' }],
+      },
+    ];
+    const plays = [
+      {
+        playlist_id: 'private-or-missing-playlist',
+        feed_url: 'https://feeds.example.com/shared.xml',
+        played_at: '2026-07-12T10:00:00.000Z',
+      },
+    ];
+
+    assert.deepEqual(getRecentlyPlayedPlaylists(plays, playlists), []);
+  });
+
   it('includes playlist source in the analytics payload and no longer increments playlist plays directly', () => {
     const playerSource = fs.readFileSync(new URL('../src/lib/PlayerContext.jsx', import.meta.url), 'utf8');
     const playlistSource = fs.readFileSync(new URL('../src/pages/PlaylistDetail.jsx', import.meta.url), 'utf8');

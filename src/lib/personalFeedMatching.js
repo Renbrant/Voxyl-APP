@@ -4,8 +4,8 @@ export function getFeedUrlFromPlaylistFeed(feed) {
 }
 
 export function getPlayedPlaylistId(play, playlists) {
-  if (play?.playlist_id && playlists.some(playlist => playlist.id === play.playlist_id)) {
-    return play.playlist_id;
+  if (play?.playlist_id) {
+    return playlists.some(playlist => playlist.id === play.playlist_id) ? play.playlist_id : null;
   }
 
   if (!play?.feed_url) return null;
