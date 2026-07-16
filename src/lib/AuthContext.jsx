@@ -4,8 +4,20 @@ import { voxylApi, setAuthTokenGetter } from '@/api/voxylApiClient';
 import { redirectToLogin } from '@/lib/authRedirect';
 import { isClerkConfigured } from '@/lib/clerkConfig';
 import { clearStoredNativeToken, getStoredNativeToken, isNativePlatform, restoreNativeAuthSession } from '@/lib/nativeAuthSession';
+import { toast } from '@/components/ui/use-toast';
 
 const AuthContext = createContext();
+
+const LOGIN_UNAVAILABLE_MESSAGE = 'Sign-in is temporarily unavailable. Please try again shortly.';
+
+function notifyLoginRedirectFailed(error) {
+  console.error('Login redirect failed:', error);
+  toast({
+    title: 'Unable to start sign-in',
+    description: LOGIN_UNAVAILABLE_MESSAGE,
+    variant: 'destructive',
+  });
+}
 
 function devAuthLog(message, details = {}) {
   if (!import.meta.env.DEV) return;
@@ -147,10 +159,19 @@ const FallbackAuthProvider = ({ children }) => {
     }
   };
 
-  const navigateToLogin = () => {
-    redirectToLogin(window.location.href).catch(error => {
-      console.error('Login redirect failed:', error);
-    });
+  const navigateToLogin = async () => {
+    setAuthError(null);
+    try {
+      return (await redirectToLogin(window.location.href)) ?? true;
+    } catch (error) {
+      notifyLoginRedirectFailed(error);
+      setAuthError({
+        type: 'login_unavailable',
+        code: error?.code || 'LOGIN_REDIRECT_FAILED',
+        message: LOGIN_UNAVAILABLE_MESSAGE,
+      });
+      return false;
+    }
   };
 
   return (
@@ -327,10 +348,19 @@ const ClerkAuthProvider = ({ children }) => {
     await signOut?.({ redirectUrl: shouldRedirect ? window.location.href : undefined });
   };
 
-  const navigateToLogin = () => {
-    redirectToLogin(window.location.href).catch(error => {
-      console.error('Login redirect failed:', error);
-    });
+  const navigateToLogin = async () => {
+    setAuthError(null);
+    try {
+      return (await redirectToLogin(window.location.href)) ?? true;
+    } catch (error) {
+      notifyLoginRedirectFailed(error);
+      setAuthError({
+        type: 'login_unavailable',
+        code: error?.code || 'LOGIN_REDIRECT_FAILED',
+        message: LOGIN_UNAVAILABLE_MESSAGE,
+      });
+      return false;
+    }
   };
 
   return (

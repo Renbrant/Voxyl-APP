@@ -12,6 +12,7 @@ async function loadClient() {
 
 afterEach(() => {
   mock.restoreAll();
+  delete globalThis.window;
 });
 
 describe('voxyl API entity client', () => {
@@ -113,5 +114,59 @@ describe('voxyl API entity client', () => {
 
     assert.equal(requestUrl.pathname, '/api/entities/playlist-like/like-1');
     assert.deepEqual(like, { id: 'like-1' });
+  });
+});
+
+describe('voxyl API auth redirect', () => {
+  it('starts Clerk sign-in when redirectToSignIn is available', async () => {
+    const { voxylApi } = await loadClient();
+    const redirectToSignIn = mock.fn(async (options) => ({ started: true, options }));
+    globalThis.window = {
+      Clerk: { redirectToSignIn },
+      location: { href: 'https://voxyl.test/current' },
+    };
+
+    const result = await voxylApi.auth.redirectToLogin('https://voxyl.test/from');
+
+    assert.deepEqual(result, {
+      started: true,
+      options: { redirectUrl: 'https://voxyl.test/from' },
+    });
+    assert.equal(redirectToSignIn.mock.callCount(), 1);
+  });
+
+  it('throws a descriptive error when Clerk is unavailable', async () => {
+    const { voxylApi } = await loadClient();
+    globalThis.window = {
+      location: { href: 'https://voxyl.test/current' },
+    };
+
+    await assert.rejects(
+      async () => voxylApi.auth.redirectToLogin('https://voxyl.test/from'),
+      (error) => {
+        assert.equal(error.code, 'CLERK_NOT_CONFIGURED');
+        assert.equal(error.status, 0);
+        assert.match(error.message, /not configured/i);
+        return true;
+      },
+    );
+  });
+
+  it('rejects instead of resolving when Clerk sign-in is not ready', async () => {
+    const { voxylApi } = await loadClient();
+    globalThis.window = {
+      Clerk: { loaded: false },
+      location: { href: 'https://voxyl.test/current' },
+    };
+
+    let resolved = false;
+    await assert.rejects(
+      voxylApi.auth.redirectToLogin('https://voxyl.test/from').then(() => {
+        resolved = true;
+      }),
+      (error) => error.code === 'CLERK_NOT_READY',
+    );
+
+    assert.equal(resolved, false);
   });
 });
