@@ -44,6 +44,10 @@ const translations = {
   feedRepros: { pt: 'reproduções', en: 'plays' },
   feedNoPlaylists: { pt: 'Nenhuma playlist pública ainda.', en: 'No public playlists yet.' },
   feedCreateFirst: { pt: 'Crie a primeira!', en: 'Be the first to create one!' },
+  feedNoListeningHistory: { pt: 'Nenhum histórico de escuta ainda', en: 'No listening history yet', es: 'Aún no hay historial de escucha' },
+  feedNoListeningHistoryHint: { pt: 'Toque um episódio de uma playlist e ele aparecerá aqui.', en: 'Play an episode from a playlist and it will appear here.', es: 'Reproduce un episodio de una playlist y aparecerá aquí.' },
+  feedListeningHistoryError: { pt: 'Não foi possível carregar seu histórico de escuta', en: 'Could not load your listening history', es: 'No se pudo cargar tu historial de escucha' },
+  feedListeningHistoryErrorHint: { pt: 'Tente novamente em instantes.', en: 'Please try again in a moment.', es: 'Inténtalo de nuevo en un momento.' },
   feedSeeMore: { pt: '+ Ver mais', en: '+ See more' },
   feedSeeLess: { pt: '← Ver menos', en: '← See less' },
 

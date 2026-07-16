@@ -387,6 +387,13 @@ function isPodcastPlayRoute(pathname: string): boolean {
     pathname === "/functions/recordPodcastPlay";
 }
 
+function isPodcastPlayHistoryRoute(pathname: string): boolean {
+  return pathname === "/api/plays" ||
+    pathname === "/plays" ||
+    pathname === "/api/entities/podcast-play" ||
+    pathname === "/entities/podcast-play";
+}
+
 function getPlaylistId(pathname: string): string | null {
   const prefixes = ["/playlists/", "/api/playlists/"];
 
@@ -2569,6 +2576,29 @@ type PlaybackPlaylist = {
   rss_feeds: string | null;
 };
 
+type PublicPodcastPlay = {
+  id: string;
+  playlist_id: string | null;
+  feed_url: string | null;
+  podcast_title: string | null;
+  podcast_image: string | null;
+  audio_url: string | null;
+  episode_title: string | null;
+  played_at: string | null;
+  created_at: string;
+};
+
+function parsePodcastPlayHistoryLimit(request: Request): number {
+  const value = new URL(request.url).searchParams.get("limit");
+  const parsed = Number(value);
+
+  if (!value || !Number.isFinite(parsed)) {
+    return 100;
+  }
+
+  return Math.min(Math.max(Math.trunc(parsed), 1), 100);
+}
+
 function validateBoundedString(value: unknown, fieldName: string, maxLength: number, required = false): string | null {
   if (value === undefined || value === null || value === "") {
     if (required) {
@@ -2767,6 +2797,54 @@ async function podcastPlayResponse(request: Request, env: Env): Promise<Response
   );
 }
 
+async function podcastPlayHistoryResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+
+  if (!user) {
+    throw new PodcastPlayError(500, "internal-error", "User bootstrap failed");
+  }
+
+  const identityPredicates = ["user_id = ?", "clerk_user_id = ?"];
+  const identityParams = [user.id, claims.userId];
+  const legacyUserId = user.legacy_base44_user_id?.trim();
+
+  if (legacyUserId) {
+    identityPredicates.push("legacy_base44_user_id = ?");
+    identityParams.push(legacyUserId);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, playlist_id, feed_url, podcast_title, podcast_image, audio_url,
+       episode_title, played_at, created_at
+     FROM podcast_plays
+     WHERE ${identityPredicates.join(" OR ")}
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(played_at), ''), created_at)) DESC,
+       created_at DESC,
+       id DESC
+     LIMIT ?`,
+  )
+    .bind(...identityParams, parsePodcastPlayHistoryLimit(request))
+    .all<PublicPodcastPlay>();
+  const plays = results || [];
+
+  return jsonResponse(
+    {
+      ok: true,
+      items: plays,
+      data: plays,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 type TopPodcast = {
   feedUrl: string;
   title: string | null;
@@ -2956,6 +3034,10 @@ export default {
 
       if (request.method === "POST" && isPodcastPlayRoute(pathname)) {
         return withCors(await podcastPlayResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isPodcastPlayHistoryRoute(pathname)) {
+        return withCors(await podcastPlayHistoryResponse(request, env), request, env);
       }
 
       const playlistId = getPlaylistId(pathname);

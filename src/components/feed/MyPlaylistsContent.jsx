@@ -5,9 +5,10 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { getCache, setCache, TTL_5MIN } from '@/lib/appCache';
+import { getRecentlyPlayedPlaylists } from '@/lib/personalFeedMatching';
 import { motion } from 'framer-motion';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
-import { Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 
 const GRADIENT_COLORS = [
   'from-purple-600 to-cyan-400',
@@ -31,40 +32,31 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
     initialData: () => getCache('all-playlists-feed') || undefined,
   });
 
-  const { data: userPodcastPlays = [], isLoading: isLoadingPlays } = useQuery({
+  const {
+    data: userPodcastPlays = [],
+    isError: isPlaysError,
+    isLoading: isLoadingPlays,
+  } = useQuery({
     queryKey: ['user-podcast-plays', user?.id],
     enabled: !!user,
     queryFn: async () => {
       const cached = getCache(`user-podcast-plays-${user.id}`);
       if (cached) return cached;
-      const data = await voxylApi.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 100);
-      setCache(`user-podcast-plays-${user.id}`, data, TTL_5MIN);
-      return data;
+      try {
+        const data = await voxylApi.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 100);
+        setCache(`user-podcast-plays-${user.id}`, data, TTL_5MIN);
+        return data;
+      } catch (error) {
+        console.error('[Feed] Failed to load user podcast plays', error);
+        throw error;
+      }
     },
     initialData: () => getCache(`user-podcast-plays-${user?.id}`) || undefined,
   });
 
   // Playlists recently listened to by this user (any creator), sorted by last play
   const sortedMyPlaylists = useMemo(() => {
-    if (!allPlaylists.length || !userPodcastPlays.length) return [];
-
-    const playlistLastPlayedMap = new Map();
-    userPodcastPlays.forEach(play => {
-      const matchingPlaylist = allPlaylists.find(pl =>
-        pl.rss_feeds?.some(feed => feed.url === play.feed_url)
-      );
-      if (matchingPlaylist) {
-        const current = playlistLastPlayedMap.get(matchingPlaylist.id);
-        if (!current || new Date(play.played_at) > new Date(current)) {
-          playlistLastPlayedMap.set(matchingPlaylist.id, play.played_at);
-        }
-      }
-    });
-
-    // Only return playlists the user actually played
-    return allPlaylists
-      .filter(pl => playlistLastPlayedMap.has(pl.id))
-      .sort((a, b) => new Date(playlistLastPlayedMap.get(b.id)) - new Date(playlistLastPlayedMap.get(a.id)));
+    return getRecentlyPlayedPlaylists(userPodcastPlays, allPlaylists);
   }, [allPlaylists, userPodcastPlays]);
 
   const lastPlayedPodcasts = useMemo(() => {
@@ -87,12 +79,24 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
     );
   }
 
+  if (isPlaysError) {
+    return (
+      <div className="flex flex-col items-center py-16 gap-3 text-center text-muted-foreground">
+        <AlertCircle size={28} className="text-destructive" />
+        <div>
+          <p className="font-medium text-foreground">{t('feedListeningHistoryError')}</p>
+          <p className="text-sm mt-1">{t('feedListeningHistoryErrorHint')}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!isLoading && !sortedMyPlaylists.length && !lastPlayedPodcasts.length) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <p className="text-4xl mb-3">🎧</p>
-        <p className="font-medium">{t('feedNoPlaylists')}</p>
-        <p className="text-sm mt-1">{t('feedCreateFirst')}</p>
+        <p className="font-medium">{t('feedNoListeningHistory')}</p>
+        <p className="text-sm mt-1">{t('feedNoListeningHistoryHint')}</p>
       </div>
     );
   }
