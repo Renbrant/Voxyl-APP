@@ -100,6 +100,13 @@ export async function getClerkToken() {
   return null;
 }
 
+function createClerkLoginError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = 0;
+  return error;
+}
+
 function withDataEnvelope(data) {
   return data && Object.prototype.hasOwnProperty.call(data, "data") ? data : { data };
 }
@@ -179,8 +186,15 @@ export const voxylApi = {
       const data = await apiFetch("/me", { method: "PATCH", body: payload });
       return data?.user || data;
     },
-    redirectToLogin(fromUrl = window.location.href) {
-      return window.Clerk?.redirectToSignIn?.({ redirectUrl: fromUrl }) || Promise.resolve();
+    async redirectToLogin(fromUrl = window.location.href) {
+      const clerk = window.Clerk;
+      if (!clerk) {
+        throw createClerkLoginError("CLERK_NOT_CONFIGURED", "Clerk sign-in is not configured.");
+      }
+      if (typeof clerk.redirectToSignIn !== "function") {
+        throw createClerkLoginError("CLERK_NOT_READY", "Clerk sign-in is not ready.");
+      }
+      return await clerk.redirectToSignIn({ redirectUrl: fromUrl });
     },
     logout(redirectUrl) {
       return window.Clerk?.signOut?.({ redirectUrl: redirectUrl || "/" }) || Promise.resolve();

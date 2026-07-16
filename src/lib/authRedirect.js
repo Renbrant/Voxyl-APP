@@ -4,5 +4,5 @@ const log = (...args) => console.log('[AUTH]', ...args);
 
 export async function redirectToLogin(fromUrl = window.location.href) {
   log('redirectToLogin called:', fromUrl);
-  await voxylApi.auth.redirectToLogin(fromUrl);
+  return await voxylApi.auth.redirectToLogin(fromUrl);
 }
