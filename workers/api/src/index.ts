@@ -406,8 +406,36 @@ function isPodcastLikeRoute(pathname: string): boolean {
   return pathname === "/api/entities/podcast-like" || pathname === "/entities/podcast-like";
 }
 
+function isEpisodeProgressRoute(pathname: string): boolean {
+  return pathname === "/api/entities/episode-progress" || pathname === "/entities/episode-progress";
+}
+
 function getPodcastLikeId(pathname: string): string | null {
   const prefixes = ["/api/entities/podcast-like/", "/entities/podcast-like/"];
+
+  for (const prefix of prefixes) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+
+    const encodedId = pathname.slice(prefix.length);
+
+    if (!encodedId || encodedId.includes("/")) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(encodedId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getEpisodeProgressId(pathname: string): string | null {
+  const prefixes = ["/api/entities/episode-progress/", "/entities/episode-progress/"];
 
   for (const prefix of prefixes) {
     if (!pathname.startsWith(prefix)) {
@@ -2476,6 +2504,39 @@ type PublicPodcastLike = {
   updated_date: string;
 };
 
+type D1EpisodeProgress = {
+  id: string;
+  feed_url: string | null;
+  podcast_title: string | null;
+  episode_title: string | null;
+  audio_url: string;
+  position_seconds: number | null;
+  duration_seconds: number | null;
+  completed: number | string | boolean | null;
+  finished: number | string | boolean | null;
+  last_played_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  base44_created_date: string | null;
+  base44_updated_date: string | null;
+};
+
+type PublicEpisodeProgress = {
+  id: string;
+  audio_url: string;
+  feed_url: string | null;
+  podcast_title: string | null;
+  episode_title: string | null;
+  position_seconds: number;
+  duration_seconds: number;
+  finished: boolean;
+  last_played_at: string | null;
+  created_at: string | null;
+  created_date: string | null;
+  updated_at: string | null;
+  updated_date: string | null;
+};
+
 type PlaylistLikePayload = {
   playlistId: string;
 };
@@ -2488,6 +2549,18 @@ type PodcastLikePayload = {
   podcastAuthor: string | null;
   podcastImage: string | null;
   podcastDescription: string | null;
+};
+
+type EpisodeProgressPayload = {
+  audioUrl?: string;
+  audioUrlCandidates?: string[];
+  feedUrl?: string | null;
+  podcastTitle?: string | null;
+  episodeTitle?: string | null;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  finished?: boolean;
+  lastPlayedAt?: string;
 };
 
 type SavedIdentityScope = {
@@ -2559,6 +2632,62 @@ function toPublicPodcastLike(row: D1PodcastLike): PublicPodcastLike {
     podcast_author: row.podcast_author,
     podcast_image: row.podcast_image,
     podcast_description: row.podcast_description,
+    created_at: createdAt,
+    created_date: createdAt,
+    updated_at: updatedAt,
+    updated_date: updatedAt,
+  };
+}
+
+function coerceNonNegativeInteger(value: unknown): number {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+
+  return Math.trunc(numeric);
+}
+
+function normalizeTimestamp(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function episodeProgressTimestampValue(value: unknown): number {
+  if (typeof value !== "string") {
+    return 0;
+  }
+
+  const parsed = Date.parse(value.trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isIncomingEpisodeProgressCurrent(incoming: string, existing: Pick<D1EpisodeProgress, "last_played_at"> | null): boolean {
+  return episodeProgressTimestampValue(incoming) >= episodeProgressTimestampValue(existing?.last_played_at);
+}
+
+function isEpisodeProgressFinished(row: Pick<D1EpisodeProgress, "finished" | "completed">): boolean {
+  return row.finished === true ||
+    row.finished === 1 ||
+    row.finished === "1" ||
+    row.completed === 1 ||
+    row.completed === "1";
+}
+
+function toPublicEpisodeProgress(row: D1EpisodeProgress): PublicEpisodeProgress {
+  const createdAt = normalizeTimestamp(row.base44_created_date) || normalizeTimestamp(row.created_at);
+  const updatedAt = normalizeTimestamp(row.base44_updated_date) || normalizeTimestamp(row.updated_at);
+
+  return {
+    id: row.id,
+    audio_url: row.audio_url,
+    feed_url: row.feed_url || null,
+    podcast_title: row.podcast_title || null,
+    episode_title: row.episode_title || null,
+    position_seconds: coerceNonNegativeInteger(row.position_seconds),
+    duration_seconds: coerceNonNegativeInteger(row.duration_seconds),
+    finished: isEpisodeProgressFinished(row),
+    last_played_at: normalizeTimestamp(row.last_played_at),
     created_at: createdAt,
     created_date: createdAt,
     updated_at: updatedAt,
@@ -2641,6 +2770,490 @@ function getSavedPodcastFeedUrlFilterCandidates(rawFeedUrl: string): string[] {
   const originalFeedUrl = validateBoundedString(rawFeedUrl, "feed_url", 2048, true) || "";
   const canonicalFeedUrl = validateAbsoluteHttpUrl(originalFeedUrl, "feed_url", true) || "";
   return getSavedPodcastFeedUrlCandidates(originalFeedUrl, canonicalFeedUrl);
+}
+
+function parseEpisodeProgressLimit(request: Request): number {
+  const value = new URL(request.url).searchParams.get("limit");
+  const parsed = Number(value);
+
+  if (!value || !Number.isFinite(parsed)) {
+    return 500;
+  }
+
+  return Math.min(Math.max(Math.trunc(parsed), 1), 500);
+}
+
+function getEpisodeProgressOrderBy(request: Request): string {
+  const sort = new URL(request.url).searchParams.get("sort") || "-last_played_at";
+  const allowed: Record<string, string> = {
+    last_played_at: "datetime(COALESCE(NULLIF(TRIM(last_played_at), ''), updated_at, created_at)) ASC, updated_at ASC, id ASC",
+    "-last_played_at": "datetime(COALESCE(NULLIF(TRIM(last_played_at), ''), updated_at, created_at)) DESC, updated_at DESC, id DESC",
+    created_at: "datetime(COALESCE(NULLIF(TRIM(base44_created_date), ''), created_at)) ASC, created_at ASC, id ASC",
+    "-created_at": "datetime(COALESCE(NULLIF(TRIM(base44_created_date), ''), created_at)) DESC, created_at DESC, id DESC",
+    updated_at: "datetime(COALESCE(NULLIF(TRIM(base44_updated_date), ''), updated_at)) ASC, updated_at ASC, id ASC",
+    "-updated_at": "datetime(COALESCE(NULLIF(TRIM(base44_updated_date), ''), updated_at)) DESC, updated_at DESC, id DESC",
+  };
+
+  return allowed[sort] || allowed["-last_played_at"];
+}
+
+function getEpisodeAudioUrlCandidates(originalAudioUrl: string, canonicalAudioUrl: string): string[] {
+  const candidates = [canonicalAudioUrl, originalAudioUrl.trim()].filter(Boolean);
+
+  try {
+    const parsed = new URL(canonicalAudioUrl);
+
+    if (parsed.pathname.endsWith("/") && parsed.pathname.length > 1 && !parsed.search) {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+      candidates.push(parsed.toString());
+    } else if (!parsed.search) {
+      parsed.pathname = `${parsed.pathname}/`;
+      candidates.push(parsed.toString());
+    }
+  } catch {}
+
+  return [...new Set(candidates)];
+}
+
+function getEpisodeAudioUrlFilterCandidates(rawAudioUrl: string): string[] {
+  const originalAudioUrl = validateBoundedString(rawAudioUrl, "audio_url", 4096, true) || "";
+  const canonicalAudioUrl = validateAbsoluteHttpUrl(originalAudioUrl, "audio_url", true) || "";
+  return getEpisodeAudioUrlCandidates(originalAudioUrl, canonicalAudioUrl);
+}
+
+function validateEpisodeInteger(value: unknown, fieldName: string, required: boolean): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    if (required) {
+      throw new PodcastPlayError(400, "invalid-request", `${fieldName} is required`);
+    }
+
+    return undefined;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2147483647) {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must be a finite non-negative number`);
+  }
+
+  return Math.trunc(value);
+}
+
+function validateEpisodeFinished(value: unknown, required: boolean): boolean | undefined {
+  if (value === undefined || value === null || value === "") {
+    if (required) {
+      throw new PodcastPlayError(400, "invalid-request", "finished is required");
+    }
+
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (value === 0 || value === 1) {
+    return value === 1;
+  }
+
+  throw new PodcastPlayError(400, "invalid-request", "finished must be a boolean");
+}
+
+function validateEpisodeTimestamp(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new PodcastPlayError(400, "invalid-request", "last_played_at must be an ISO timestamp");
+  }
+
+  const trimmed = value.trim();
+  const time = Date.parse(trimmed);
+
+  if (!trimmed || !Number.isFinite(time)) {
+    throw new PodcastPlayError(400, "invalid-request", "last_played_at must be an ISO timestamp");
+  }
+
+  return new Date(time).toISOString();
+}
+
+async function parseEpisodeProgressPayload(request: Request, mode: "create" | "update"): Promise<EpisodeProgressPayload> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+  const rawAudioUrl = mode === "create" || payload.audio_url !== undefined
+    ? validateBoundedString(payload.audio_url, "audio_url", 4096, true) || ""
+    : undefined;
+  const audioUrl = rawAudioUrl === undefined ? undefined : validateAbsoluteHttpUrl(rawAudioUrl, "audio_url", true) || "";
+
+  return {
+    audioUrl,
+    audioUrlCandidates: rawAudioUrl === undefined || audioUrl === undefined ? undefined : getEpisodeAudioUrlCandidates(rawAudioUrl, audioUrl),
+    feedUrl: payload.feed_url === undefined ? undefined : validateAbsoluteHttpUrl(payload.feed_url, "feed_url", false),
+    podcastTitle: payload.podcast_title === undefined ? undefined : validateBoundedString(payload.podcast_title, "podcast_title", 500),
+    episodeTitle: payload.episode_title === undefined ? undefined : validateBoundedString(payload.episode_title, "episode_title", 500),
+    positionSeconds: validateEpisodeInteger(payload.position_seconds, "position_seconds", mode === "create"),
+    durationSeconds: validateEpisodeInteger(payload.duration_seconds, "duration_seconds", false),
+    finished: validateEpisodeFinished(payload.finished, false),
+    lastPlayedAt: validateEpisodeTimestamp(payload.last_played_at),
+  };
+}
+
+function episodeProgressSelect(): string {
+  return `SELECT id, feed_url, podcast_title, episode_title, audio_url,
+       position_seconds, duration_seconds, completed, finished, last_played_at,
+       created_at, updated_at, base44_created_date, base44_updated_date
+     FROM episode_progress`;
+}
+
+async function episodeProgressResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const url = new URL(request.url);
+  const rawAudioUrl = url.searchParams.get("audio_url");
+  const rawFinished = url.searchParams.get("finished");
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const where = [`(${scope.predicates.join(" OR ")})`];
+  const params = [...scope.params];
+
+  if (rawAudioUrl) {
+    const audioUrlCandidates = getEpisodeAudioUrlFilterCandidates(rawAudioUrl);
+    where.push(`audio_url IN (${audioUrlCandidates.map(() => "?").join(", ")})`);
+    params.push(...audioUrlCandidates);
+  }
+
+  if (rawFinished !== null && rawFinished !== "") {
+    const finished = rawFinished === "true" ? 1 : rawFinished === "false" ? 0 : rawFinished === "1" ? 1 : rawFinished === "0" ? 0 : null;
+
+    if (finished === null) {
+      throw new PodcastPlayError(400, "invalid-request", "finished filter must be true, false, 1, or 0");
+    }
+
+    const finishedExpression = "(COALESCE(CAST(finished AS INTEGER), 0) = 1 OR COALESCE(CAST(completed AS INTEGER), 0) = 1)";
+    const unfinishedExpression = "(COALESCE(CAST(finished AS INTEGER), 0) = 0 AND COALESCE(CAST(completed AS INTEGER), 0) = 0)";
+    where.push(finished === 1 ? finishedExpression : unfinishedExpression);
+  }
+
+  const { results } = await env.DB.prepare(
+    `${episodeProgressSelect()}
+     WHERE ${where.join(" AND ")}
+     ORDER BY ${getEpisodeProgressOrderBy(request)}
+     LIMIT ?`,
+  )
+    .bind(...params, parseEpisodeProgressLimit(request))
+    .all<D1EpisodeProgress>();
+  const items = (results || []).map(toPublicEpisodeProgress);
+
+  return jsonResponse({ ok: true, items, data: items }, 200, corsHeaders);
+}
+
+async function fetchEpisodeProgressByOwnedId(env: Env, id: string, scope: SavedIdentityScope): Promise<D1EpisodeProgress | null> {
+  return env.DB.prepare(
+    `${episodeProgressSelect()}
+     WHERE id = ?
+       AND (${scope.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(id, ...scope.params)
+    .first<D1EpisodeProgress>();
+}
+
+async function fetchEpisodeProgressByUserAndAudioUrl(env: Env, userId: string, audioUrlCandidates: string[]): Promise<D1EpisodeProgress | null> {
+  return env.DB.prepare(
+    `${episodeProgressSelect()}
+     WHERE user_id = ?
+       AND audio_url IN (${audioUrlCandidates.map(() => "?").join(", ")})
+     ORDER BY CASE WHEN audio_url = ? THEN 0 ELSE 1 END,
+       updated_at DESC,
+       id DESC
+     LIMIT 1`,
+  )
+    .bind(userId, ...audioUrlCandidates, audioUrlCandidates[0])
+    .first<D1EpisodeProgress>();
+}
+
+async function createEpisodeProgressResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parseEpisodeProgressPayload(request, "create");
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const audioUrlCandidates = payload.audioUrlCandidates || [payload.audioUrl!];
+  const existing = await env.DB.prepare(
+    `SELECT id, last_played_at
+     FROM episode_progress
+     WHERE audio_url IN (${audioUrlCandidates.map(() => "?").join(", ")})
+       AND (${scope.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(...audioUrlCandidates, ...scope.params)
+    .first<Pick<D1EpisodeProgress, "id" | "last_played_at">>();
+  const id = existing?.id || crypto.randomUUID();
+  const finished = payload.finished === true ? 1 : 0;
+  const lastPlayedAt = payload.lastPlayedAt || new Date().toISOString();
+
+  if (existing) {
+    const isCurrent = isIncomingEpisodeProgressCurrent(lastPlayedAt, existing);
+    const result = isCurrent
+      ? await env.DB.prepare(
+        `UPDATE episode_progress
+         SET user_id = ?,
+             clerk_user_id = ?,
+             legacy_base44_user_id = ?,
+             audio_url = ?,
+             feed_url = COALESCE(?, feed_url),
+             podcast_title = COALESCE(?, podcast_title),
+             episode_title = COALESCE(?, episode_title),
+             position_seconds = ?,
+             duration_seconds = ?,
+             finished = ?,
+             completed = ?,
+             last_played_at = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND (${scope.predicates.join(" OR ")})`,
+      )
+        .bind(
+          auth.user!.id,
+          auth.claims!.userId,
+          scope.legacyUserId,
+          payload.audioUrl,
+          payload.feedUrl,
+          payload.podcastTitle,
+          payload.episodeTitle,
+          payload.positionSeconds,
+          payload.durationSeconds ?? 0,
+          finished,
+          finished,
+          lastPlayedAt,
+          id,
+          ...scope.params,
+        )
+        .run()
+      : await env.DB.prepare(
+        `UPDATE episode_progress
+         SET user_id = ?,
+             clerk_user_id = ?,
+             legacy_base44_user_id = ?,
+             audio_url = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND (${scope.predicates.join(" OR ")})`,
+      )
+        .bind(
+          auth.user!.id,
+          auth.claims!.userId,
+          scope.legacyUserId,
+          payload.audioUrl,
+          id,
+          ...scope.params,
+        )
+        .run();
+    const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+    if (changes === 0) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO episode_progress (
+         id, user_id, clerk_user_id, legacy_base44_user_id, audio_url, feed_url,
+         podcast_title, episode_title, position_seconds, duration_seconds,
+         finished, completed, last_played_at, created_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, audio_url) DO UPDATE SET
+         clerk_user_id = excluded.clerk_user_id,
+         legacy_base44_user_id = excluded.legacy_base44_user_id,
+         feed_url = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN COALESCE(excluded.feed_url, episode_progress.feed_url)
+           ELSE episode_progress.feed_url
+         END,
+         podcast_title = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN COALESCE(excluded.podcast_title, episode_progress.podcast_title)
+           ELSE episode_progress.podcast_title
+         END,
+         episode_title = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN COALESCE(excluded.episode_title, episode_progress.episode_title)
+           ELSE episode_progress.episode_title
+         END,
+         position_seconds = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN excluded.position_seconds
+           ELSE episode_progress.position_seconds
+         END,
+         duration_seconds = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN excluded.duration_seconds
+           ELSE episode_progress.duration_seconds
+         END,
+         finished = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN excluded.finished
+           ELSE episode_progress.finished
+         END,
+         completed = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN excluded.completed
+           ELSE episode_progress.completed
+         END,
+         last_played_at = CASE
+           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
+           THEN excluded.last_played_at
+           ELSE episode_progress.last_played_at
+         END,
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(
+        id,
+        auth.user!.id,
+        auth.claims!.userId,
+        scope.legacyUserId,
+        payload.audioUrl,
+        payload.feedUrl,
+        payload.podcastTitle,
+        payload.episodeTitle,
+        payload.positionSeconds,
+        payload.durationSeconds ?? 0,
+        finished,
+        finished,
+        lastPlayedAt,
+      )
+      .run();
+  }
+
+  const item = await fetchEpisodeProgressByUserAndAudioUrl(env, auth.user!.id, audioUrlCandidates);
+
+  if (!item) {
+    throw new PodcastPlayError(500, "internal-error", "Episode progress unavailable");
+  }
+
+  const publicItem = toPublicEpisodeProgress(item);
+
+  return jsonResponse({ ok: true, item: publicItem, data: publicItem }, 200, corsHeaders);
+}
+
+async function updateEpisodeProgressResponse(request: Request, env: Env, id: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const existing = await fetchEpisodeProgressByOwnedId(env, id, scope);
+
+  if (!existing) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const payload = await parseEpisodeProgressPayload(request, "update");
+
+  if (payload.audioUrl && !(payload.audioUrlCandidates || [payload.audioUrl]).includes(existing.audio_url)) {
+    const existingCandidates = getEpisodeAudioUrlCandidates(existing.audio_url, validateAbsoluteHttpUrl(existing.audio_url, "audio_url", true) || existing.audio_url);
+    const overlaps = (payload.audioUrlCandidates || [payload.audioUrl]).some((candidate) => existingCandidates.includes(candidate));
+
+    if (!overlaps) {
+      throw new PodcastPlayError(400, "invalid-request", "audio_url cannot be changed to another episode");
+    }
+  }
+
+  const nextFinished = payload.finished === undefined
+    ? isEpisodeProgressFinished(existing)
+    : payload.finished;
+
+  await env.DB.prepare(
+    `UPDATE episode_progress
+     SET user_id = ?,
+         clerk_user_id = ?,
+         legacy_base44_user_id = ?,
+         audio_url = COALESCE(?, audio_url),
+         feed_url = COALESCE(?, feed_url),
+         podcast_title = COALESCE(?, podcast_title),
+         episode_title = COALESCE(?, episode_title),
+         position_seconds = COALESCE(?, position_seconds),
+         duration_seconds = COALESCE(?, duration_seconds),
+         finished = ?,
+         completed = ?,
+         last_played_at = COALESCE(?, last_played_at, CURRENT_TIMESTAMP),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND (${scope.predicates.join(" OR ")})`,
+  )
+    .bind(
+      auth.user!.id,
+      auth.claims!.userId,
+      scope.legacyUserId,
+      payload.audioUrl,
+      payload.feedUrl,
+      payload.podcastTitle,
+      payload.episodeTitle,
+      payload.positionSeconds,
+      payload.durationSeconds,
+      nextFinished ? 1 : 0,
+      nextFinished ? 1 : 0,
+      payload.lastPlayedAt,
+      id,
+      ...scope.params,
+    )
+    .run();
+
+  const item = await fetchEpisodeProgressByOwnedId(env, id, scope);
+
+  if (!item) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const publicItem = toPublicEpisodeProgress(item);
+
+  return jsonResponse({ ok: true, item: publicItem, data: publicItem }, 200, corsHeaders);
+}
+
+async function deleteEpisodeProgressResponse(request: Request, env: Env, id: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
+  const result = await env.DB.prepare(
+    `DELETE FROM episode_progress
+     WHERE id = ?
+       AND (${scope.predicates.join(" OR ")})`,
+  )
+    .bind(id, ...scope.params)
+    .run();
+  const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+  if (changes === 0) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ ok: true, deleted: true }, 200, corsHeaders);
 }
 
 async function playlistLikesResponse(request: Request, env: Env): Promise<Response> {
@@ -3642,10 +4255,28 @@ export default {
         return withCors(await createPodcastLikeResponse(request, env), request, env);
       }
 
+      if (request.method === "GET" && isEpisodeProgressRoute(pathname)) {
+        return withCors(await episodeProgressResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isEpisodeProgressRoute(pathname)) {
+        return withCors(await createEpisodeProgressResponse(request, env), request, env);
+      }
+
       const podcastLikeId = getPodcastLikeId(pathname);
 
       if (request.method === "DELETE" && podcastLikeId) {
         return withCors(await deletePodcastLikeResponse(request, env, podcastLikeId), request, env);
+      }
+
+      const episodeProgressId = getEpisodeProgressId(pathname);
+
+      if (request.method === "PATCH" && episodeProgressId) {
+        return withCors(await updateEpisodeProgressResponse(request, env, episodeProgressId), request, env);
+      }
+
+      if (request.method === "DELETE" && episodeProgressId) {
+        return withCors(await deleteEpisodeProgressResponse(request, env, episodeProgressId), request, env);
       }
 
       const playlistId = getPlaylistId(pathname);

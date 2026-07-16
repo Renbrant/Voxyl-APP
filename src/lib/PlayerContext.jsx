@@ -1,11 +1,15 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { voxylApi } from '@/api/voxylApiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { invalidateCache } from '@/lib/appCache';
 import {
   getCachedProgress,
   setCachedProgress,
   getAllFinishedFromCache,
+  activateProgressCacheScope,
+  getProgressScopeDecision,
+  getProgressPlaybackTransition,
   loadProgressFromDB,
   saveProgressToDB,
   FINISH_THRESHOLD,
@@ -29,6 +33,7 @@ const PLAY_RETRY_DELAYS_MS = [0, 750, 2000];
 
 export function PlayerProvider({ children }) {
   const queryClient = useQueryClient();
+  const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
   const [currentEpisode, setCurrentEpisode] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -61,7 +66,9 @@ export function PlayerProvider({ children }) {
   const podcastPlaySessionRef = useRef(null);
   const currentPlaybackSourceRef = useRef(null);
   const userRef = useRef(null);
+  const dbProgressUserRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const progressScopeRef = useRef(null);
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
   const nativeCurrentTimeRef = useRef(0);
@@ -71,7 +78,6 @@ export function PlayerProvider({ children }) {
   queueRef.current = queue;
   autoplayRef.current = autoplay;
   finishedUrlsRef.current = finishedUrls;
-  userRef.current = user;
 
   // =========================================================================
   // ── SHARED HELPERS ────────────────────────────────────────────────────────
@@ -86,7 +92,7 @@ export function PlayerProvider({ children }) {
     const dur = useNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
     setCachedProgress(audioUrl, pos, dur, true);
     const u = userRef.current;
-    if (u) saveProgressToDB(voxylApi, u.id, audioUrl).catch(() => {});
+    if (u) void saveProgressToDB(voxylApi, u.id, audioUrl);
   }, []);
 
   const clearPodcastPlayRetry = useCallback((session = podcastPlaySessionRef.current) => {
@@ -127,7 +133,8 @@ export function PlayerProvider({ children }) {
     },
   });
 
-  const saveCurrentProgress = useCallback((forceDB = false) => {
+  const saveCurrentProgress = useCallback((forceDB = false, options = {}) => {
+    const { recordPlay = true, allowDB = true } = options;
     const ep = currentEpisodeRef.current;
     if (!ep?.audioUrl) return;
     const useNative = isNative && nativeAudioPlayer.isReady();
@@ -137,9 +144,9 @@ export function PlayerProvider({ children }) {
     const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
     setCachedProgress(ep.audioUrl, pos, dur, finished);
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
-    recordPodcastPlay();
-    const u = userRef.current;
-    if (forceDB && u) saveProgressToDB(voxylApi, u.id, ep.audioUrl).catch(() => {});
+    if (recordPlay) recordPodcastPlay();
+    const u = dbProgressUserRef.current;
+    if (forceDB && allowDB && u) void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
   }, [recordPodcastPlay]);
 
   const stopSaveTimers = useCallback(() => {
@@ -158,6 +165,36 @@ export function PlayerProvider({ children }) {
     loadingWatchdogRef.current = null;
     setIsLoading(false);
   }, []);
+
+  const clearPlaybackForIdentityChange = useCallback(() => {
+    const currentSession = podcastPlaySessionRef.current;
+    if (isNative && nativeAudioPlayer.isReady()) {
+      nativeAudioPlayer.clearNativeQueue().catch(() => {});
+      nativeAudioPlayer.stop().catch(() => {});
+    } else {
+      audioRef.current?.pause();
+      if (audioRef.current) audioRef.current.src = '';
+    }
+
+    stopSaveTimers();
+    pausePodcastSession(currentSession);
+    clearPodcastPlayRetry(currentSession);
+    podcastPlaySessionRef.current = null;
+    currentEpisodeRef.current = null;
+    currentIndexRef.current = -1;
+    queueRef.current = [];
+    nativeCurrentTimeRef.current = 0;
+    nativeDurationRef.current = 0;
+    transitioningRef.current = false;
+    currentPlaybackSourceRef.current = null;
+    clearLoadingState();
+    setCurrentEpisode(null);
+    setQueue([]);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setEpisodeSource(null);
+  }, [clearLoadingState, clearPodcastPlayRetry, stopSaveTimers]);
 
   const armLoadingWatchdog = useCallback((reason) => {
     clearTimeout(loadingWatchdogRef.current);
@@ -660,17 +697,97 @@ export function PlayerProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    voxylApi.auth.me().then(async u => {
-      setUser(u);
-      userRef.current = u;
-      if (u) { try { await loadProgressFromDB(voxylApi, u.id); } catch {} }
-      setFinishedUrls(getAllFinishedFromCache());
-      finishedUrlsRef.current = getAllFinishedFromCache();
-    }).catch(() => {
-      const cached = getAllFinishedFromCache();
-      setFinishedUrls(cached);
-      finishedUrlsRef.current = cached;
+    const decision = getProgressScopeDecision({ apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked });
+    const transition = getProgressPlaybackTransition(progressScopeRef.current, decision);
+
+    if (decision.status === 'loading') {
+      if (progressScopeRef.current && currentEpisodeRef.current) {
+        saveCurrentProgress(false, { recordPlay: false, allowDB: false });
+        clearPlaybackForIdentityChange();
+      } else {
+        stopSaveTimers();
+      }
+      setUser(null);
+      userRef.current = null;
+      dbProgressUserRef.current = null;
+      return;
+    }
+
+    const previousScopeKey = progressScopeRef.current;
+    const nextScopeKey = transition.nextScope;
+    if (progressScopeRef.current === nextScopeKey) {
+      if (decision.status === 'confirmed') {
+        const nextUser = decision.userId ? apiUser : null;
+        setUser(nextUser);
+        userRef.current = nextUser;
+        dbProgressUserRef.current = nextUser;
+      } else {
+        setUser(null);
+        userRef.current = null;
+        dbProgressUserRef.current = null;
+      }
+      return;
+    }
+
+    if (previousScopeKey) {
+      saveCurrentProgress(false, { recordPlay: false, allowDB: false });
+      stopSaveTimers();
+    }
+
+    if (transition.shouldClearPlayback && currentEpisodeRef.current) {
+      clearPlaybackForIdentityChange();
+    }
+
+    progressScopeRef.current = nextScopeKey;
+    const nextUser = decision.status === 'confirmed' && decision.userId ? apiUser : null;
+    setUser(nextUser);
+    userRef.current = nextUser;
+    dbProgressUserRef.current = decision.status === 'confirmed' ? nextUser : null;
+    activateProgressCacheScope(decision.userId, {
+      migrateLegacy: decision.migrateLegacy,
+      mergeCurrentCache: transition.mergeCurrentCache,
     });
+    let cached = getAllFinishedFromCache();
+    setFinishedUrls(cached);
+    finishedUrlsRef.current = cached;
+
+    if (decision.status !== 'confirmed' || !nextUser?.id) {
+      return;
+    }
+
+    let cancelled = false;
+    loadProgressFromDB(voxylApi, nextUser.id)
+      .catch((error) => {
+        if (['localhost', '127.0.0.1'].includes(window.location?.hostname)) {
+          console.warn('[VOXYL] Episode progress load failed; local progress was kept.', {
+            name: error?.name,
+            message: error?.message,
+            status: error?.status,
+          });
+        }
+      })
+      .finally(() => {
+        if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+        cached = getAllFinishedFromCache();
+        setFinishedUrls(cached);
+        finishedUrlsRef.current = cached;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    apiUser,
+    clerkUser,
+    isAuthenticated,
+    isLoadingAuth,
+    authChecked,
+    clearPlaybackForIdentityChange,
+    saveCurrentProgress,
+    stopSaveTimers,
+  ]);
+
+  useEffect(() => {
 
     if (!isNative && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
