@@ -8,6 +8,7 @@ import {
   getActiveProgressScope,
   getCachedProgress,
   getAllFinishedFromCache,
+  getEpisodeResumeState,
   getProgressPlaybackTransition,
   getProgressScopeDecision,
   loadProgressFromDB,
@@ -17,6 +18,12 @@ import {
   setCachedProgress,
   TTL_MS,
 } from '../src/lib/episodeProgressCache.js';
+import {
+  beginWebEpisodeSourceSwitch,
+  createWebPlaybackTransitionCoordinator,
+  isObsoleteWebPlaybackError,
+  requestGuardedWebPlayback,
+} from '../src/lib/webPlaybackTransition.js';
 
 const issuer = 'https://clerk.voxyl.test';
 const baseEnv = {
@@ -404,6 +411,16 @@ function progressEntry(overrides = {}) {
     completed: overrides.completed ?? 0,
     last_played_at: overrides.last_played_at ?? freshIso(),
   };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function isFinishedRow(row) {
@@ -885,5 +902,720 @@ describe('EpisodeProgress frontend cache helpers', () => {
     }, 'user-a');
     assert.deepEqual(calls[0], { filters: {}, sort: '-last_played_at', limit: 500 });
     assert.equal(getCachedProgress('https://cdn.example.com/load.mp3').position_seconds, 44);
+  });
+
+  it('shows selected episode progress immediately through the web transition coordinator', () => {
+    activateProgressCacheScope('user-a');
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = { src: '', currentSrc: '', load() { this.currentSrc = this.src; } };
+    const episodeA = { title: 'Episode A', audioUrl: 'https://cdn.example.com/a.mp3' };
+    const episodeB = { title: 'Episode B', audioUrl: 'https://cdn.example.com/b.mp3' };
+    setCachedProgress(episodeA.audioUrl, 110, 300, false);
+    setCachedProgress(episodeB.audioUrl, 50, 180, false);
+
+    let visibleCurrentTime = getEpisodeResumeState(episodeA).resumeAt;
+    let visibleDuration = getEpisodeResumeState(episodeA).durationSeconds;
+    assert.equal(visibleCurrentTime, 110);
+    assert.equal(visibleDuration, 300);
+
+    const selectedB = getEpisodeResumeState(episodeB);
+    beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: episodeB.audioUrl,
+      resumeAt: selectedB.resumeAt,
+      durationSeconds: selectedB.durationSeconds,
+    });
+    visibleCurrentTime = selectedB.resumeAt;
+    visibleDuration = selectedB.durationSeconds;
+    assert.equal(visibleCurrentTime, 50);
+    assert.equal(visibleDuration, 180);
+
+    const selectedA = getEpisodeResumeState(episodeA);
+    beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: episodeA.audioUrl,
+      resumeAt: selectedA.resumeAt,
+      durationSeconds: selectedA.durationSeconds,
+    });
+    visibleCurrentTime = selectedA.resumeAt;
+    visibleDuration = selectedA.durationSeconds;
+    assert.equal(visibleCurrentTime, 110);
+    assert.equal(visibleDuration, 300);
+  });
+
+  it('uses zero visible duration when the selected episode has no valid cached duration', () => {
+    activateProgressCacheScope('user-a');
+    const episode = { title: 'No duration', audioUrl: 'https://cdn.example.com/no-duration.mp3' };
+    setCachedProgress(episode.audioUrl, 50, 0, false);
+
+    const selected = getEpisodeResumeState(episode);
+
+    assert.equal(selected.resumeAt, 50);
+    assert.equal(selected.durationSeconds, 0);
+  });
+
+  it('prevents stale readiness from seeking, clearing loading, or changing the active episode state', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const episodeA = { audioUrl: 'https://cdn.example.com/a.mp3' };
+    const episodeB = { audioUrl: 'https://cdn.example.com/b.mp3' };
+    const readiness = deferred();
+    const audio = {
+      src: episodeB.audioUrl,
+      currentSrc: episodeB.audioUrl,
+      currentTime: 0,
+      load() { this.currentSrc = this.src; },
+    };
+    let visibleCurrentTime = 50;
+    let isPlaying = false;
+    let loading = true;
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: episodeB.audioUrl,
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    const staleOperation = (async () => {
+      await readiness.promise;
+      coordinator.assertCurrent(transitionB);
+      audio.currentTime = transitionB.resumeAt;
+      visibleCurrentTime = transitionB.resumeAt;
+      isPlaying = true;
+      loading = false;
+    })().catch((error) => {
+      if (!isObsoleteWebPlaybackError(error)) throw error;
+    });
+
+    visibleCurrentTime = 110;
+    beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: episodeA.audioUrl,
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    readiness.resolve();
+    await staleOperation;
+
+    assert.equal(audio.currentTime, 0);
+    assert.equal(visibleCurrentTime, 110);
+    assert.equal(isPlaying, false);
+    assert.equal(loading, true);
+  });
+
+  it('prevents stale requestWebPlayback retries from playing the new source', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const retryGate = deferred();
+    const audio = {
+      src: 'https://cdn.example.com/b.mp3',
+      currentSrc: 'https://cdn.example.com/b.mp3',
+      networkState: 2,
+      playCalls: [],
+      async play() {
+        this.playCalls.push(this.src);
+        if (this.playCalls.length === 1) {
+          throw Object.assign(new Error('interrupted'), { name: 'AbortError' });
+        }
+      },
+    };
+    const transitionB = coordinator.begin({ audioUrl: audio.src, resumeAt: 50, durationSeconds: 180 });
+    const playback = requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-play',
+      retryDelays: [0, 25],
+      waitForMediaReady: () => retryGate.promise,
+      isCurrent: () => coordinator.isCurrent(transitionB),
+      logger: { log() {}, error() {} },
+    }).catch((error) => {
+      assert.equal(isObsoleteWebPlaybackError(error), true);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a.mp3',
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    retryGate.resolve();
+    await playback;
+
+    assert.deepEqual(audio.playCalls, ['https://cdn.example.com/b.mp3']);
+  });
+
+  it('ignores source-switch reset events while preserving the selected episode UI state', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: 'https://cdn.example.com/a.mp3',
+      currentSrc: 'https://cdn.example.com/a.mp3',
+      currentTime: 0,
+      duration: 0,
+      load() {},
+    };
+    let visibleCurrentTime = 110;
+    let visibleDuration = 300;
+    let savedAudioUrl = null;
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: audio.src,
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+
+    if (!coordinator.shouldIgnoreEvent('pause', audio)) savedAudioUrl = audio.src;
+    if (!coordinator.shouldIgnoreEvent('timeupdate', audio)) visibleCurrentTime = audio.currentTime;
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
+
+    assert.equal(savedAudioUrl, null);
+    assert.equal(visibleCurrentTime, 110);
+    assert.equal(visibleDuration, 300);
+    assert.equal(coordinator.isCurrent(transitionA), true);
+  });
+
+  it('uses the shared web transition path for auto-next without saving A progress under B', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: 'https://cdn.example.com/a.mp3',
+      currentSrc: 'https://cdn.example.com/a.mp3',
+      currentTime: 110,
+      duration: 300,
+      load() { this.currentSrc = this.src; },
+      pauseEvents: 0,
+      pause() { this.pauseEvents += 1; },
+    };
+    const saved = [];
+    let currentEpisode = { audioUrl: 'https://cdn.example.com/a.mp3' };
+    let timersStarted = false;
+    let podcastStarted = false;
+
+    saved.push({ audioUrl: currentEpisode.audioUrl, position: audio.currentTime, duration: audio.duration });
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+      onBeforeSource: () => {
+        audio.pause();
+        currentEpisode = { audioUrl: 'https://cdn.example.com/b.mp3' };
+      },
+    });
+
+    assert.deepEqual(saved, [{ audioUrl: 'https://cdn.example.com/a.mp3', position: 110, duration: 300 }]);
+    assert.equal(audio.pauseEvents, 1);
+    assert.equal(coordinator.isCurrent(transitionB), true);
+    assert.equal(coordinator.shouldIgnoreEvent('pause', audio), true);
+
+    coordinator.markEstablished(transitionB);
+    audio.currentTime = 8;
+    audio.duration = 180;
+    if (!coordinator.shouldIgnoreEvent('timeupdate', audio)) currentEpisode.currentTime = audio.currentTime;
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) currentEpisode.duration = audio.duration;
+    if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      timersStarted = true;
+      podcastStarted = true;
+    }
+    if (!coordinator.shouldIgnoreEvent('ended', audio)) currentEpisode.ended = true;
+
+    assert.equal(currentEpisode.audioUrl, 'https://cdn.example.com/b.mp3');
+    assert.equal(currentEpisode.currentTime, 8);
+    assert.equal(currentEpisode.duration, 180);
+    assert.equal(timersStarted, true);
+    assert.equal(podcastStarted, true);
+    assert.equal(currentEpisode.ended, true);
+  });
+
+  it('does not leave a manual A transition active after auto-next switches to B', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = { src: '', currentSrc: '', duration: 0, load() { this.currentSrc = this.src; } };
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a.mp3',
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    coordinator.markEstablished(transitionA);
+
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+    coordinator.markEstablished(transitionB);
+
+    assert.equal(coordinator.isCurrent(transitionA), false);
+    assert.equal(coordinator.isCurrent(transitionB), true);
+    assert.equal(coordinator.shouldIgnoreEvent('timeupdate', audio), false);
+    assert.equal(coordinator.shouldIgnoreEvent('durationchange', audio), false);
+    assert.equal(coordinator.shouldIgnoreEvent('playing', audio), false);
+  });
+
+  it('protects resumeAt zero from delayed reset events and does not save A under B', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: 'https://cdn.example.com/a.mp3',
+      currentSrc: 'https://cdn.example.com/a.mp3',
+      currentTime: 75,
+      duration: 240,
+      load() { this.currentSrc = this.src; },
+    };
+    let visibleCurrentTime = 0;
+    let visibleDuration = 180;
+    let savedAudioUrl = null;
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 180,
+    });
+
+    audio.currentTime = 75;
+    audio.duration = 0;
+    if (!coordinator.shouldIgnoreEvent('pause', audio)) savedAudioUrl = 'https://cdn.example.com/b.mp3';
+    if (!coordinator.shouldIgnoreEvent('timeupdate', audio)) visibleCurrentTime = audio.currentTime;
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
+
+    assert.equal(coordinator.isCurrent(transitionB), true);
+    assert.equal(savedAudioUrl, null);
+    assert.equal(visibleCurrentTime, 0);
+    assert.equal(visibleDuration, 180);
+  });
+
+  it('ignores stale playing events until the current resource is established', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = { src: '', currentSrc: '', load() { this.currentSrc = this.src; } };
+    let loading = true;
+    let timersStarted = false;
+    let podcastStarted = false;
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+
+    if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      loading = false;
+      timersStarted = true;
+      podcastStarted = true;
+    }
+    assert.equal(loading, true);
+    assert.equal(timersStarted, false);
+    assert.equal(podcastStarted, false);
+
+    coordinator.markEstablished(transitionB);
+    if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      loading = false;
+      timersStarted = true;
+      podcastStarted = true;
+    }
+    assert.equal(loading, false);
+    assert.equal(timersStarted, true);
+    assert.equal(podcastStarted, true);
+  });
+
+  it('allows current established events to update playback state and save progress', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: 'https://cdn.example.com/a.mp3',
+      currentSrc: 'https://cdn.example.com/a.mp3',
+      currentTime: 112,
+      duration: 300,
+    };
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: audio.src,
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    coordinator.markEstablished(transitionA);
+    let isPlaying = false;
+    let loading = true;
+    let timersStarted = false;
+    let podcastMarkedPlaying = false;
+    let savedAudioUrl = null;
+
+    if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      loading = false;
+      isPlaying = true;
+      timersStarted = true;
+      podcastMarkedPlaying = true;
+    }
+    if (!coordinator.shouldIgnoreEvent('pause', audio)) {
+      savedAudioUrl = audio.src;
+    }
+
+    assert.equal(isPlaying, true);
+    assert.equal(loading, false);
+    assert.equal(timersStarted, true);
+    assert.equal(podcastMarkedPlaying, true);
+    assert.equal(savedAudioUrl, audio.src);
+  });
+
+  it('shows zero for missing cached duration and later accepts valid current durationchange', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: 'https://cdn.example.com/no-duration.mp3',
+      currentSrc: 'https://cdn.example.com/no-duration.mp3',
+      duration: 0,
+    };
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: audio.src,
+      resumeAt: 50,
+      durationSeconds: 0,
+    });
+    let visibleDuration = 0;
+
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
+    assert.equal(visibleDuration, 0);
+
+    audio.duration = 240;
+    coordinator.markEstablished(transition);
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
+    assert.equal(visibleDuration, 240);
+  });
+
+  it('cancels the current web transition on cleanup and starts later playback fresh', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = { src: '', currentSrc: '', load() { this.currentSrc = this.src; } };
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a.mp3',
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    assert.equal(coordinator.isCurrent(transitionA), true);
+
+    coordinator.cancel();
+    assert.equal(coordinator.getCurrent(), null);
+    const transitionGuest = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/guest.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+
+    assert.equal(coordinator.isCurrent(transitionA), false);
+    assert.equal(coordinator.isCurrent(transitionGuest), true);
+    assert.equal(transitionGuest.generation > transitionA.generation, true);
+  });
+
+  it('cancels and cleans up only the current manual web transition after a non-obsolete failure', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const cleanup = { timersStopped: 0, sessionPaused: 0, retryCleared: 0, loadingCleared: 0, wakeReleased: 0 };
+    let isPlaying = true;
+    const audio = {
+      src: '',
+      currentSrc: '',
+      networkState: 1,
+      playCalls: 0,
+      load() { this.currentSrc = this.src; },
+      async play() {
+        this.playCalls += 1;
+        throw Object.assign(new Error('unsupported'), { name: 'NotSupportedError' });
+      },
+    };
+    const cleanupFailedTransition = (transition) => {
+      if (!coordinator.isCurrent(transition)) return false;
+      coordinator.cancel(transition);
+      cleanup.timersStopped += 1;
+      cleanup.sessionPaused += 1;
+      cleanup.retryCleared += 1;
+      cleanup.loadingCleared += 1;
+      cleanup.wakeReleased += 1;
+      isPlaying = false;
+      return true;
+    };
+
+    const failedTransition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    await requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-play',
+      retryDelays: [0, 5],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(failedTransition),
+      logger: { log() {}, error() {} },
+    }).catch((error) => {
+      assert.equal(error.name, 'NotSupportedError');
+      assert.equal(cleanupFailedTransition(failedTransition), true);
+    });
+
+    assert.equal(coordinator.getCurrent(), null);
+    assert.equal(isPlaying, false);
+    assert.deepEqual(cleanup, {
+      timersStopped: 1,
+      sessionPaused: 1,
+      retryCleared: 1,
+      loadingCleared: 1,
+      wakeReleased: 1,
+    });
+
+    audio.play = async function playAgain() {
+      this.playCalls += 1;
+    };
+    const retryTransition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    await requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-retry',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(retryTransition),
+      logger: { log() {}, error() {} },
+    });
+    coordinator.markEstablished(retryTransition);
+
+    assert.equal(coordinator.getPhase(retryTransition), 'established');
+    assert.equal(audio.playCalls, 2);
+  });
+
+  it('cancels a current auto-next failure without affecting newer transitions', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: '',
+      currentSrc: '',
+      networkState: 1,
+      load() { this.currentSrc = this.src; },
+      async play() {
+        throw Object.assign(new Error('unsupported'), { name: 'NotSupportedError' });
+      },
+    };
+    let cleanupCount = 0;
+    const cleanupFailedTransition = (transition) => {
+      if (!coordinator.isCurrent(transition)) return false;
+      cleanupCount += 1;
+      coordinator.cancel(transition);
+      return true;
+    };
+
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+    await requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'advance:ended',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(transitionB),
+      logger: { log() {}, error() {} },
+    }).catch((error) => {
+      assert.equal(error.name, 'NotSupportedError');
+      assert.equal(cleanupFailedTransition(transitionB), true);
+    });
+
+    assert.equal(coordinator.getCurrent(), null);
+    assert.equal(cleanupCount, 1);
+
+    audio.play = async () => {};
+    const retryB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+    await requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'advance:retry',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(retryB),
+      logger: { log() {}, error() {} },
+    });
+    coordinator.markEstablished(retryB);
+
+    assert.equal(coordinator.getPhase(retryB), 'established');
+  });
+
+  it('keeps a newer transition intact when an obsolete failure resolves later', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const firstPlay = deferred();
+    const audio = {
+      src: '',
+      currentSrc: '',
+      networkState: 1,
+      load() { this.currentSrc = this.src; },
+      play: () => firstPlay.promise,
+    };
+    let cleanupCount = 0;
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    const staleAttempt = requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-play',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(transitionB),
+      logger: { log() {}, error() {} },
+    }).catch((error) => {
+      assert.equal(isObsoleteWebPlaybackError(error), true);
+      if (coordinator.isCurrent(transitionB)) {
+        cleanupCount += 1;
+        coordinator.cancel(transitionB);
+      }
+    });
+
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a.mp3',
+      resumeAt: 110,
+      durationSeconds: 300,
+    });
+    firstPlay.reject(Object.assign(new Error('unsupported'), { name: 'NotSupportedError' }));
+    await staleAttempt;
+
+    assert.equal(cleanupCount, 0);
+    assert.equal(coordinator.isCurrent(transitionA), true);
+    assert.equal(coordinator.getPhase(transitionA), 'switching');
+  });
+
+  it('replaces a switching same-episode retry instead of calling direct play on the old generation', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const originalPlay = deferred();
+    const audio = {
+      src: '',
+      currentSrc: '',
+      playCalls: [],
+      load() { this.currentSrc = this.src; },
+      play() {
+        this.playCalls.push({ generation: coordinator.getCurrent()?.generation, src: this.src });
+        if (this.playCalls.length === 1) return originalPlay.promise;
+        return Promise.resolve();
+      },
+    };
+    const originalTransition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    const originalAttempt = requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-play',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(originalTransition),
+      logger: { log() {}, error() {} },
+    }).catch((error) => {
+      assert.equal(isObsoleteWebPlaybackError(error), true);
+    });
+
+    assert.equal(coordinator.getPhase(originalTransition), 'switching');
+    const retryTransition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    await requestGuardedWebPlayback({
+      audio,
+      transitionLabel: 'manual-retry',
+      retryDelays: [0],
+      waitForMediaReady: () => Promise.resolve(),
+      isCurrent: () => coordinator.isCurrent(retryTransition),
+      logger: { log() {}, error() {} },
+    });
+    coordinator.markEstablished(retryTransition);
+    originalPlay.resolve();
+    await originalAttempt;
+
+    assert.equal(coordinator.isCurrent(originalTransition), false);
+    assert.equal(coordinator.getPhase(retryTransition), 'established');
+    assert.deepEqual(audio.playCalls.map(call => call.generation), [
+      originalTransition.generation,
+      retryTransition.generation,
+    ]);
+  });
+
+  it('allows direct same-episode resume after the web transition is established', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: '',
+      currentSrc: '',
+      directPlayCalls: 0,
+      load() { this.currentSrc = this.src; },
+      async play() {
+        this.directPlayCalls += 1;
+      },
+    };
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 50,
+      durationSeconds: 180,
+    });
+    coordinator.markEstablished(transitionB);
+
+    if (coordinator.getPhase(transitionB) === 'established') {
+      await audio.play();
+    }
+
+    assert.equal(audio.directPlayCalls, 1);
+    assert.equal(coordinator.isCurrent(transitionB), true);
+    assert.equal(coordinator.getPhase(transitionB), 'established');
+  });
+
+  it('keeps native same-episode resume and toggle outside the web coordinator', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = { src: '', currentSrc: '', load() { this.currentSrc = this.src; } };
+    const nativePlayer = {
+      resumeCalls: 0,
+      pauseCalls: 0,
+      resume() { this.resumeCalls += 1; },
+      pause() { this.pauseCalls += 1; },
+    };
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/web.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+
+    nativePlayer.resume();
+    nativePlayer.pause();
+
+    assert.equal(nativePlayer.resumeCalls, 1);
+    assert.equal(nativePlayer.pauseCalls, 1);
+    assert.equal(coordinator.isCurrent(transition), true);
+    assert.equal(coordinator.getPhase(transition), 'switching');
   });
 });
