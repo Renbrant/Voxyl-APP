@@ -2,9 +2,10 @@
 const detectLang = () => {
   if (typeof localStorage === 'undefined' || typeof navigator === 'undefined') return 'pt';
   const saved = localStorage.getItem('voxyl_language');
-  if (saved === 'en' || saved === 'pt') return saved;
+  if (saved === 'en' || saved === 'pt' || saved === 'es') return saved;
   
   const browserLang = navigator.language || navigator.languages?.[0] || 'pt';
+  if (browserLang.startsWith('es')) return 'es';
   return browserLang.startsWith('pt') ? 'pt' : 'en';
 };
 
@@ -13,7 +14,7 @@ export const isEn = lang === 'en';
 
 // Allow changing language preference
 export const setLanguage = (newLang) => {
-  if (newLang === 'en' || newLang === 'pt') {
+  if (newLang === 'en' || newLang === 'pt' || newLang === 'es') {
     localStorage.setItem('voxyl_language', newLang);
     window.location.reload();
   }
@@ -21,7 +22,7 @@ export const setLanguage = (newLang) => {
 
 const translations = {
   // Common
-  loading: { pt: 'Carregando...', en: 'Loading...' },
+  loading: { pt: 'Carregando...', en: 'Loading...', es: 'Cargando...' },
   noResults: { pt: 'Nenhum resultado encontrado', en: 'No results found' },
   retry: { pt: 'Tentar novamente', en: 'Retry' },
   search: { pt: 'Buscar', en: 'Search' },
@@ -44,6 +45,10 @@ const translations = {
   feedRepros: { pt: 'reproduções', en: 'plays' },
   feedNoPlaylists: { pt: 'Nenhuma playlist pública ainda.', en: 'No public playlists yet.' },
   feedCreateFirst: { pt: 'Crie a primeira!', en: 'Be the first to create one!' },
+  feedNoListeningHistory: { pt: 'Nenhum histórico de escuta ainda', en: 'No listening history yet', es: 'Aún no hay historial de escucha' },
+  feedNoListeningHistoryHint: { pt: 'Toque um episódio de uma playlist e ele aparecerá aqui.', en: 'Play an episode from a playlist and it will appear here.', es: 'Reproduce un episodio de una playlist y aparecerá aquí.' },
+  feedListeningHistoryError: { pt: 'Não foi possível carregar seu histórico de escuta', en: 'Could not load your listening history', es: 'No se pudo cargar tu historial de escucha' },
+  feedListeningHistoryErrorHint: { pt: 'Tente novamente em instantes.', en: 'Please try again in a moment.', es: 'Inténtalo de nuevo en un momento.' },
   feedSeeMore: { pt: '+ Ver mais', en: '+ See more' },
   feedSeeLess: { pt: '← Ver menos', en: '← See less' },
 

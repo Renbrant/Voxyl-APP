@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { voxylApi } from '@/api/voxylApiClient';
 import { invalidateCache } from '@/lib/appCache';
 import {
@@ -27,6 +28,7 @@ const LOADING_TIMEOUT_MS = 8000;
 const PLAY_RETRY_DELAYS_MS = [0, 750, 2000];
 
 export function PlayerProvider({ children }) {
+  const queryClient = useQueryClient();
   const [currentEpisode, setCurrentEpisode] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -120,6 +122,7 @@ export function PlayerProvider({ children }) {
       const u = userRef.current;
       if (u?.id && (result?.data?.recorded || result?.data?.duplicate || result?.recorded)) {
         invalidateCache(`user-podcast-plays-${u.id}`);
+        queryClient.invalidateQueries({ queryKey: ['user-podcast-plays', u.id] });
       }
     },
   });

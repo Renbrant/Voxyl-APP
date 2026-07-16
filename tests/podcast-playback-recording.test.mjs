@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { afterEach, describe, it, mock } from 'node:test';
 import worker from '../workers/api/src/index.ts';
+import { getRecentlyPlayedPlaylists } from '../src/lib/personalFeedMatching.js';
 
 const issuer = 'https://clerk.voxyl.test';
 const baseEnv = {
@@ -114,6 +115,12 @@ function createPlaybackDb() {
     calls: [],
   };
 
+  const orderPlaysNewestFirst = (plays) => [...plays].sort((left, right) => {
+    const leftDate = new Date(left.played_at || left.created_at || 0);
+    const rightDate = new Date(right.played_at || right.created_at || 0);
+    return rightDate - leftDate || String(right.id).localeCompare(String(left.id));
+  });
+
   return {
     state,
     prepare(sql) {
@@ -132,6 +139,42 @@ function createPlaybackDb() {
                 return state.playlists.find((row) => row.id === params[0]) || null;
               }
               throw new Error(`Unhandled first SQL: ${sql}`);
+            },
+            async all() {
+              state.calls.push({ kind: 'all', sql, params });
+              if (/FROM podcast_plays/s.test(sql)) {
+                const [user_id, clerk_user_id, legacy_base44_user_id, limit] = params;
+                const results = orderPlaysNewestFirst(state.plays.filter((row) =>
+                  row.user_id === user_id ||
+                  row.clerk_user_id === clerk_user_id ||
+                  (legacy_base44_user_id && row.legacy_base44_user_id === legacy_base44_user_id)
+                ))
+                  .slice(0, limit)
+                  .map(({
+                    id,
+                    playlist_id,
+                    feed_url,
+                    podcast_title,
+                    podcast_image,
+                    audio_url,
+                    episode_title,
+                    played_at,
+                    created_at,
+                  }) => ({
+                    id,
+                    playlist_id,
+                    feed_url,
+                    podcast_title,
+                    podcast_image,
+                    audio_url,
+                    episode_title,
+                    played_at,
+                    created_at,
+                  }));
+
+                return { results };
+              }
+              throw new Error(`Unhandled all SQL: ${sql}`);
             },
             async run() {
               state.calls.push({ kind: 'run', sql, params });
@@ -186,6 +229,8 @@ function createPlaybackDb() {
                   podcast_image,
                   audio_url,
                   episode_title,
+                  played_at: '2026-07-01T00:00:00.000Z',
+                  created_at: '2026-07-01T00:00:00.000Z',
                 });
                 if (playlist_id) {
                   const matchedPlaylist = state.playlists.find((row) => row.id === playlist_id);
@@ -223,12 +268,186 @@ describe('podcast playback recording Worker route', () => {
 
   it('keeps unsupported methods on playback aliases as 404s', async () => {
     const db = createPlaybackDb();
-    const response = await worker.fetch(request('/api/plays', { method: 'GET', rawBody: undefined }), { ...baseEnv, DB: db });
+    const response = await worker.fetch(request('/api/plays', { method: 'PATCH' }), { ...baseEnv, DB: db });
     const data = await body(response);
 
     assert.equal(response.status, 404);
     assert.equal(data.ok, false);
     assert.equal(db.state.plays.length, 0);
+  });
+
+  it('returns only the authenticated user playback history from GET /api/plays', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    db.state.plays.push(
+      {
+        id: 'own-newer',
+        user_id: 'd1-real-user',
+        clerk_user_id: 'clerk-user-1',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/show.xml',
+        podcast_title: 'Example Show',
+        podcast_image: 'https://img.example.com/show.jpg',
+        audio_url: 'https://audio.example.com/newer.mp3',
+        episode_title: 'Newer',
+        played_at: '2026-07-12T10:00:00.000Z',
+        created_at: '2026-07-12T09:59:00.000Z',
+      },
+      {
+        id: 'other-user',
+        user_id: 'other-user',
+        clerk_user_id: 'clerk-other',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/other.xml',
+        podcast_title: 'Other Show',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/other.mp3',
+        episode_title: 'Other',
+        played_at: '2026-07-13T10:00:00.000Z',
+        created_at: '2026-07-13T09:59:00.000Z',
+      },
+    );
+
+    const response = await worker.fetch(request('/api/plays', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.deepEqual(data.items.map((row) => row.id), ['own-newer']);
+    assert.deepEqual(data.data, data.items);
+    assert.equal('user_id' in data.items[0], false);
+    assert.equal('clerk_user_id' in data.items[0], false);
+  });
+
+  it('supports compatibility GET /api/entities/podcast-play', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    db.state.plays.push({
+      id: 'entity-route-play',
+      user_id: 'd1-real-user',
+      clerk_user_id: 'clerk-user-1',
+      legacy_base44_user_id: null,
+      playlist_id: 'public-playlist',
+      feed_url: 'https://feeds.example.com/show.xml',
+      podcast_title: 'Example Show',
+      podcast_image: null,
+      audio_url: 'https://audio.example.com/entity.mp3',
+      episode_title: 'Entity',
+      played_at: '2026-07-12T10:00:00.000Z',
+      created_at: '2026-07-12T09:59:00.000Z',
+    });
+
+    const response = await worker.fetch(request('/api/entities/podcast-play?user_id=other-user', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.items.map((row) => row.id), ['entity-route-play']);
+  });
+
+  it('returns 401 for missing authentication on playback history', async () => {
+    const db = createPlaybackDb();
+    const response = await worker.fetch(request('/api/plays', { method: 'GET' }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 401);
+    assert.equal(data.ok, false);
+    assert.equal(data.authenticated, false);
+  });
+
+  it('returns 401 for an invalid playback history bearer token', async () => {
+    const db = createPlaybackDb();
+    const response = await worker.fetch(request('/api/plays', { method: 'GET', token: 'invalid.token.value' }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 401);
+    assert.equal(data.ok, false);
+  });
+
+  it('returns an empty array for authenticated users with no playback history', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    const response = await worker.fetch(request('/api/plays', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.items, []);
+    assert.deepEqual(data.data, []);
+  });
+
+  it('ignores client-supplied user_id filters on playback history', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    db.state.plays.push(
+      {
+        id: 'own-play',
+        user_id: 'd1-real-user',
+        clerk_user_id: 'clerk-user-1',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/show.xml',
+        podcast_title: 'Example Show',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/own.mp3',
+        episode_title: 'Own',
+        played_at: '2026-07-12T10:00:00.000Z',
+        created_at: '2026-07-12T09:59:00.000Z',
+      },
+      {
+        id: 'requested-other',
+        user_id: 'other-user',
+        clerk_user_id: 'clerk-other',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: 'https://feeds.example.com/other.xml',
+        podcast_title: 'Other',
+        podcast_image: null,
+        audio_url: 'https://audio.example.com/other.mp3',
+        episode_title: 'Other',
+        played_at: '2026-07-13T10:00:00.000Z',
+        created_at: '2026-07-13T09:59:00.000Z',
+      },
+    );
+
+    const response = await worker.fetch(request('/api/plays?user_id=other-user', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.deepEqual(data.items.map((row) => row.id), ['own-play']);
+  });
+
+  it('orders playback history newest first and bounds limit to 100', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createPlaybackDb();
+    for (let index = 0; index < 105; index += 1) {
+      db.state.plays.push({
+        id: `play-${String(index).padStart(3, '0')}`,
+        user_id: 'd1-real-user',
+        clerk_user_id: 'clerk-user-1',
+        legacy_base44_user_id: null,
+        playlist_id: 'public-playlist',
+        feed_url: `https://feeds.example.com/${index}.xml`,
+        podcast_title: `Show ${index}`,
+        podcast_image: null,
+        audio_url: `https://audio.example.com/${index}.mp3`,
+        episode_title: `Episode ${index}`,
+        played_at: index === 104 ? null : new Date(Date.UTC(2026, 6, 1 + index, 10)).toISOString(),
+        created_at: new Date(Date.UTC(2026, 6, 1 + index, 9)).toISOString(),
+      });
+    }
+
+    const response = await worker.fetch(request('/api/plays?limit=500', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(data.items.length, 100);
+    assert.equal(data.items[0].id, 'play-104');
+    assert.equal(data.items[1].id, 'play-103');
+    assert.equal(db.state.calls.find((call) => call.kind === 'all').params.at(-1), 100);
   });
 
   it('stores valid guest playback with nullable user identity', async () => {
@@ -452,6 +671,40 @@ describe('podcast playback recording Worker route', () => {
 });
 
 describe('podcast playback frontend integration', () => {
+  it('matches recent playlists by playlist_id before falling back to feed_url', () => {
+    const playlists = [
+      {
+        id: 'feed-owner',
+        rss_feeds: [{ url: 'https://feeds.example.com/shared.xml' }],
+      },
+      {
+        id: 'recorded-playlist',
+        rss_feeds: [{ url: 'https://feeds.example.com/shared.xml' }],
+      },
+      {
+        id: 'legacy-feed-match',
+        rss_feeds: [{ feed_url: 'https://feeds.example.com/legacy.xml' }],
+      },
+    ];
+    const plays = [
+      {
+        playlist_id: 'recorded-playlist',
+        feed_url: 'https://feeds.example.com/shared.xml',
+        played_at: '2026-07-12T10:00:00.000Z',
+      },
+      {
+        playlist_id: null,
+        feed_url: 'https://feeds.example.com/legacy.xml',
+        played_at: '2026-07-11T10:00:00.000Z',
+      },
+    ];
+
+    assert.deepEqual(
+      getRecentlyPlayedPlaylists(plays, playlists).map((playlist) => playlist.id),
+      ['recorded-playlist', 'legacy-feed-match'],
+    );
+  });
+
   it('includes playlist source in the analytics payload and no longer increments playlist plays directly', () => {
     const playerSource = fs.readFileSync(new URL('../src/lib/PlayerContext.jsx', import.meta.url), 'utf8');
     const playlistSource = fs.readFileSync(new URL('../src/pages/PlaylistDetail.jsx', import.meta.url), 'utf8');
@@ -476,6 +729,7 @@ describe('podcast playback frontend integration', () => {
     assert.match(playerSource, /createPodcastPlayRecorder/);
     assert.match(helperSource, /PODCAST_PLAY_RECORD_AFTER_SECONDS = 10/);
     assert.match(helperSource, /\.catch\(\(error\) =>/);
+    assert.match(playerSource, /queryClient\.invalidateQueries\(\{ queryKey: \['user-podcast-plays', u\.id\] \}\)/);
     assert.match(playerSource, /startPodcastPlaySession\(episode\)/);
     assert.match(playerSource, /startPodcastPlaySession\(nextEpisode\)/);
   });
