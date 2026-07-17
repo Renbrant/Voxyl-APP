@@ -220,7 +220,7 @@ function createEpisodeProgressDb() {
               if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
                 return state.users.find((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) || null;
               }
-              if (/SELECT id(?:,\s+last_played_at)?\s+FROM episode_progress/s.test(sql)) {
+              if (/SELECT id(?:,\s+last_played_at)?(?:,\s+updated_at)?\s+FROM episode_progress/s.test(sql)) {
                 const audioCount = (sql.match(/audio_url IN \(([^)]*)\)/)?.[1].match(/\?/g) || []).length;
                 const audioUrls = params.slice(0, audioCount);
                 const idParams = params.slice(audioCount);
@@ -590,6 +590,41 @@ describe('EpisodeProgress Worker routes', () => {
     assert.equal(body.data.last_played_at, newerTime);
   });
 
+  it('rejects stale base revisions even when a delayed device clock is newer', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    const audio_url = 'https://cdn.example.com/base-revision.mp3';
+    const initialTime = freshIso(1000);
+    const staleBase = '2026-07-15T00:00:00.000Z';
+    const fastClockTime = freshIso(60_000);
+
+    await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: { audio_url, position_seconds: 90, duration_seconds: 100, finished: true, last_played_at: initialTime },
+    }), { ...baseEnv, DB: db });
+
+    const stale = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 12,
+        duration_seconds: 100,
+        finished: false,
+        last_played_at: fastClockTime,
+        base_server_updated_at: staleBase,
+      },
+    }), { ...baseEnv, DB: db });
+    const body = await json(stale);
+
+    assert.equal(body.data.position_seconds, 90);
+    assert.equal(body.data.finished, true);
+    assert.equal(body.data.last_played_at, initialTime);
+    assert.equal(body.data.server_updated_at, '2026-07-16T00:00:00.000Z');
+  });
+
   it('retains newest progress for concurrent out-of-order saves', async () => {
     const { token, jwk } = createJwt();
     installJwksMock(jwk);
@@ -647,6 +682,15 @@ describe('EpisodeProgress frontend cache helpers', () => {
     resetProgressRuntimeState();
     activateProgressCacheScope(null, { migrateLegacy: false });
   });
+
+  function installDeviceStorage(store) {
+    globalThis.localStorage = {
+      getItem: (key) => store.has(key) ? store.get(key) : null,
+      setItem: (key, value) => { store.set(key, String(value)); },
+      removeItem: (key) => { store.delete(key); },
+      clear: () => { store.clear(); },
+    };
+  }
 
   it('keeps unresolved auth provisional and does not consume legacy migration', () => {
     localStorage.setItem('voxyl_ep_progress', JSON.stringify({
@@ -902,6 +946,139 @@ describe('EpisodeProgress frontend cache helpers', () => {
     }, 'user-a');
     assert.deepEqual(calls[0], { filters: {}, sort: '-last_played_at', limit: 500 });
     assert.equal(getCachedProgress('https://cdn.example.com/load.mp3').position_seconds, 44);
+  });
+
+  it('syncs authenticated progress across independent device caches', async () => {
+    const mobileStore = new Map();
+    const desktopStore = new Map();
+    const serverRows = new Map();
+    let serverRevision = 0;
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async filter() {
+            return [...serverRows.values()];
+          },
+          async create(payload) {
+            const saved = {
+              id: `server-${payload.audio_url}`,
+              audio_url: payload.audio_url,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: new Date(Date.UTC(2026, 6, 17, 12, 0, serverRevision += 1)).toISOString(),
+            };
+            serverRows.set(payload.audio_url, saved);
+            return saved;
+          },
+        },
+      },
+    };
+    const episode = { audioUrl: 'https://cdn.example.com/cross-device.mp3' };
+
+    installDeviceStorage(mobileStore);
+    resetProgressRuntimeState();
+    activateProgressCacheScope('user-a');
+    setCachedProgress(episode.audioUrl, 64, 300, false);
+    await saveProgressToDB(api, 'user-a', episode.audioUrl);
+
+    installDeviceStorage(desktopStore);
+    resetProgressRuntimeState();
+    activateProgressCacheScope('user-a');
+    await loadProgressFromDB(api, 'user-a');
+    assert.equal(getEpisodeResumeState(episode).resumeAt, 64);
+
+    setCachedProgress(episode.audioUrl, 140, 300, false);
+    await saveProgressToDB(api, 'user-a', episode.audioUrl);
+
+    installDeviceStorage(mobileStore);
+    resetProgressRuntimeState();
+    activateProgressCacheScope('user-a');
+    await loadProgressFromDB(api, 'user-a');
+    assert.equal(getEpisodeResumeState(episode).resumeAt, 140);
+  });
+
+  it('adopts canonical stale-save responses and refreshes the next base revision', async () => {
+    activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/stale-response.mp3';
+    const payloads = [];
+    setCachedProgress(audioUrl, 12, 300, false);
+    mergeProgressRecords([{
+      id: 'server-row',
+      audio_url: audioUrl,
+      position_seconds: 12,
+      duration_seconds: 300,
+      finished: 0,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:01.000Z',
+    }]);
+
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async create(payload) {
+            payloads.push(payload);
+            if (payloads.length === 1) {
+              return {
+                id: 'server-row',
+                audio_url: audioUrl,
+                position_seconds: 90,
+                duration_seconds: 300,
+                finished: false,
+                last_played_at: '2026-07-17T12:00:10.000Z',
+                server_updated_at: '2026-07-17T12:00:20.000Z',
+              };
+            }
+            return {
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: '2026-07-17T12:00:30.000Z',
+            };
+          },
+        },
+      },
+    };
+
+    setCachedProgress(audioUrl, 40, 300, false);
+    await saveProgressToDB(api, 'user-a', audioUrl);
+    assert.equal(payloads[0].base_server_updated_at, '2026-07-17T12:00:01.000Z');
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 90);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:20.000Z');
+
+    setCachedProgress(audioUrl, 120, 300, false);
+    await saveProgressToDB(api, 'user-a', audioUrl);
+    assert.equal(payloads[1].base_server_updated_at, '2026-07-17T12:00:20.000Z');
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 120);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:30.000Z');
+  });
+
+  it('lets authenticated server progress beat a future-dated local cache after hydration', () => {
+    activateProgressCacheScope('user-a');
+    localStorage.setItem(buildProgressCacheKey('user-a'), JSON.stringify({
+      'https://cdn.example.com/skew.mp3': progressEntry({
+        position_seconds: 12,
+        last_played_at: freshIso(60_000),
+      }),
+    }));
+    resetProgressRuntimeState();
+    activateProgressCacheScope('user-a');
+
+    mergeProgressRecords([{
+      id: 'remote-skew',
+      audio_url: 'https://cdn.example.com/skew.mp3',
+      position_seconds: 88,
+      duration_seconds: 300,
+      finished: 0,
+      last_played_at: freshIso(1000),
+      server_updated_at: freshIso(2000),
+    }]);
+
+    assert.equal(getCachedProgress('https://cdn.example.com/skew.mp3').position_seconds, 88);
   });
 
   it('shows selected episode progress immediately through the web transition coordinator', () => {

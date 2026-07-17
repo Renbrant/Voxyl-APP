@@ -37,6 +37,7 @@ const LOCAL_SAVE_INTERVAL_MS = 5000;
 const DB_SAVE_INTERVAL_MS = 30000;
 const LOADING_TIMEOUT_MS = 8000;
 const PLAY_RETRY_DELAYS_MS = [0, 750, 2000];
+const PROGRESS_HYDRATION_RETRY_DELAYS_MS = [3000, 10000, 30000];
 
 export function PlayerProvider({ children }) {
   const queryClient = useQueryClient();
@@ -77,6 +78,7 @@ export function PlayerProvider({ children }) {
   const dbProgressUserRef = useRef(null);
   const wakeLockRef = useRef(null);
   const progressScopeRef = useRef(null);
+  const progressHydrationRef = useRef({ scope: null, promise: null, status: 'guest' });
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
   const nativeCurrentTimeRef = useRef(0);
@@ -91,6 +93,39 @@ export function PlayerProvider({ children }) {
   // ── SHARED HELPERS ────────────────────────────────────────────────────────
   // =========================================================================
 
+  const canSaveAuthenticatedProgress = useCallback((userId) => {
+    const hydration = progressHydrationRef.current;
+    return Boolean(
+      userId &&
+      hydration.scope === progressScopeRef.current &&
+      hydration.status === 'ready'
+    );
+  }, []);
+
+  const waitForAuthenticatedProgressHydration = useCallback(async () => {
+    const hydration = progressHydrationRef.current;
+
+    if (!dbProgressUserRef.current || hydration.scope !== progressScopeRef.current) {
+      return true;
+    }
+
+    if (hydration.status === 'ready') {
+      return true;
+    }
+
+    if (hydration.status === 'failed') {
+      return false;
+    }
+
+    if (hydration.promise) {
+      await hydration.promise.catch(() => {});
+      return progressHydrationRef.current.scope === progressScopeRef.current &&
+        progressHydrationRef.current.status === 'ready';
+    }
+
+    return false;
+  }, []);
+
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
     finishedUrlsRef.current = new Set([...finishedUrlsRef.current, audioUrl]);
@@ -99,9 +134,11 @@ export function PlayerProvider({ children }) {
     const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
     const dur = useNative ? nativeDurationRef.current : (audioRef.current?.duration || 0);
     setCachedProgress(audioUrl, pos, dur, true);
-    const u = userRef.current;
-    if (u) void saveProgressToDB(voxylApi, u.id, audioUrl);
-  }, []);
+    const u = dbProgressUserRef.current;
+    if (u && canSaveAuthenticatedProgress(u.id)) {
+      void saveProgressToDB(voxylApi, u.id, audioUrl);
+    }
+  }, [canSaveAuthenticatedProgress]);
 
   const clearPodcastPlayRetry = useCallback((session = podcastPlaySessionRef.current) => {
     clearPodcastPlayRetryTimer(session);
@@ -154,8 +191,10 @@ export function PlayerProvider({ children }) {
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
     if (recordPlay) recordPodcastPlay();
     const u = dbProgressUserRef.current;
-    if (forceDB && allowDB && u) void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
-  }, [recordPodcastPlay]);
+    if (forceDB && allowDB && u && canSaveAuthenticatedProgress(u.id)) {
+      void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
+    }
+  }, [canSaveAuthenticatedProgress, recordPodcastPlay]);
 
   const stopSaveTimers = useCallback(() => {
     clearInterval(localSaveTimerRef.current);
@@ -746,6 +785,7 @@ export function PlayerProvider({ children }) {
     const transition = getProgressPlaybackTransition(progressScopeRef.current, decision);
 
     if (decision.status === 'loading') {
+      progressHydrationRef.current = { scope: progressScopeRef.current, promise: null, status: 'loading' };
       if (progressScopeRef.current && currentEpisodeRef.current) {
         saveCurrentProgress(false, { recordPlay: false, allowDB: false });
         clearPlaybackForIdentityChange();
@@ -766,10 +806,14 @@ export function PlayerProvider({ children }) {
         setUser(nextUser);
         userRef.current = nextUser;
         dbProgressUserRef.current = nextUser;
+        if (!nextUser?.id) {
+          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'guest' };
+        }
       } else {
         setUser(null);
         userRef.current = null;
         dbProgressUserRef.current = null;
+        progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'guest' };
       }
       return;
     }
@@ -788,6 +832,9 @@ export function PlayerProvider({ children }) {
     setUser(nextUser);
     userRef.current = nextUser;
     dbProgressUserRef.current = decision.status === 'confirmed' ? nextUser : null;
+    progressHydrationRef.current = nextUser?.id
+      ? { scope: nextScopeKey, promise: null, status: 'hydrating' }
+      : { scope: nextScopeKey, promise: null, status: 'guest' };
     activateProgressCacheScope(decision.userId, {
       migrateLegacy: decision.migrateLegacy,
       mergeCurrentCache: transition.mergeCurrentCache,
@@ -801,25 +848,47 @@ export function PlayerProvider({ children }) {
     }
 
     let cancelled = false;
-    loadProgressFromDB(voxylApi, nextUser.id)
-      .catch((error) => {
-        if (['localhost', '127.0.0.1'].includes(window.location?.hostname)) {
-          console.warn('[VOXYL] Episode progress load failed; local progress was kept.', {
+    let retryTimer = null;
+
+    const runHydration = (attempt = 0) => {
+      const hydrationPromise = loadProgressFromDB(voxylApi, nextUser.id)
+        .then(() => {
+          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'ready' };
+        })
+        .catch((error) => {
+          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+          const retryDelay = PROGRESS_HYDRATION_RETRY_DELAYS_MS[attempt];
+          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'failed' };
+          console.warn('[VOXYL] Episode progress load failed; authenticated DB progress saves are paused.', {
             name: error?.name,
             message: error?.message,
             status: error?.status,
+            willRetry: retryDelay !== undefined,
           });
-        }
-      })
-      .finally(() => {
-        if (cancelled || progressScopeRef.current !== nextScopeKey) return;
-        cached = getAllFinishedFromCache();
-        setFinishedUrls(cached);
-        finishedUrlsRef.current = cached;
-      });
+
+          if (retryDelay === undefined) return;
+          retryTimer = setTimeout(() => {
+            if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+            runHydration(attempt + 1);
+          }, retryDelay);
+        })
+        .finally(() => {
+          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+          cached = getAllFinishedFromCache();
+          setFinishedUrls(cached);
+          finishedUrlsRef.current = cached;
+        });
+
+      progressHydrationRef.current = { scope: nextScopeKey, promise: hydrationPromise, status: 'hydrating' };
+      return hydrationPromise;
+    };
+
+    runHydration();
 
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
     };
   }, [
     apiUser,
@@ -886,6 +955,7 @@ export function PlayerProvider({ children }) {
     stopSaveTimers();
     pausePodcastPlaySessionTimer();
 
+    await waitForAuthenticatedProgressHydration();
     const { resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
 
     armLoadingWatchdog('manual-play');
@@ -1002,6 +1072,7 @@ export function PlayerProvider({ children }) {
     startPodcastPlaySession,
     stopSaveTimers,
     updateMediaSession,
+    waitForAuthenticatedProgressHydration,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 

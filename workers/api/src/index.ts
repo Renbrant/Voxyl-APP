@@ -2662,6 +2662,7 @@ type PublicEpisodeProgress = {
   duration_seconds: number;
   finished: boolean;
   last_played_at: string | null;
+  server_updated_at: string | null;
   created_at: string | null;
   created_date: string | null;
   updated_at: string | null;
@@ -2692,6 +2693,7 @@ type EpisodeProgressPayload = {
   durationSeconds?: number;
   finished?: boolean;
   lastPlayedAt?: string;
+  baseServerUpdatedAt?: string;
 };
 
 type SavedIdentityScope = {
@@ -2797,6 +2799,21 @@ function isIncomingEpisodeProgressCurrent(incoming: string, existing: Pick<D1Epi
   return episodeProgressTimestampValue(incoming) >= episodeProgressTimestampValue(existing?.last_played_at);
 }
 
+function isEpisodeProgressBaseCurrent(baseServerUpdatedAt: string | undefined, existing: Pick<D1EpisodeProgress, "updated_at"> | null): boolean | null {
+  if (!baseServerUpdatedAt) {
+    return null;
+  }
+
+  const incomingBase = episodeProgressTimestampValue(baseServerUpdatedAt);
+  const existingRevision = episodeProgressTimestampValue(existing?.updated_at);
+
+  if (!incomingBase || !existingRevision) {
+    return false;
+  }
+
+  return incomingBase >= existingRevision;
+}
+
 function isEpisodeProgressFinished(row: Pick<D1EpisodeProgress, "finished" | "completed">): boolean {
   return row.finished === true ||
     row.finished === 1 ||
@@ -2808,6 +2825,7 @@ function isEpisodeProgressFinished(row: Pick<D1EpisodeProgress, "finished" | "co
 function toPublicEpisodeProgress(row: D1EpisodeProgress): PublicEpisodeProgress {
   const createdAt = normalizeTimestamp(row.base44_created_date) || normalizeTimestamp(row.created_at);
   const updatedAt = normalizeTimestamp(row.base44_updated_date) || normalizeTimestamp(row.updated_at);
+  const serverUpdatedAt = normalizeTimestamp(row.updated_at);
 
   return {
     id: row.id,
@@ -2819,6 +2837,7 @@ function toPublicEpisodeProgress(row: D1EpisodeProgress): PublicEpisodeProgress 
     duration_seconds: coerceNonNegativeInteger(row.duration_seconds),
     finished: isEpisodeProgressFinished(row),
     last_played_at: normalizeTimestamp(row.last_played_at),
+    server_updated_at: serverUpdatedAt,
     created_at: createdAt,
     created_date: createdAt,
     updated_at: updatedAt,
@@ -3036,6 +3055,7 @@ async function parseEpisodeProgressPayload(request: Request, mode: "create" | "u
     durationSeconds: validateEpisodeInteger(payload.duration_seconds, "duration_seconds", false),
     finished: validateEpisodeFinished(payload.finished, false),
     lastPlayedAt: validateEpisodeTimestamp(payload.last_played_at),
+    baseServerUpdatedAt: validateEpisodeTimestamp(payload.base_server_updated_at),
   };
 }
 
@@ -3129,20 +3149,21 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
   const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
   const audioUrlCandidates = payload.audioUrlCandidates || [payload.audioUrl!];
   const existing = await env.DB.prepare(
-    `SELECT id, last_played_at
+    `SELECT id, last_played_at, updated_at
      FROM episode_progress
      WHERE audio_url IN (${audioUrlCandidates.map(() => "?").join(", ")})
        AND (${scope.predicates.join(" OR ")})
      LIMIT 1`,
   )
     .bind(...audioUrlCandidates, ...scope.params)
-    .first<Pick<D1EpisodeProgress, "id" | "last_played_at">>();
+    .first<Pick<D1EpisodeProgress, "id" | "last_played_at" | "updated_at">>();
   const id = existing?.id || crypto.randomUUID();
   const finished = payload.finished === true ? 1 : 0;
   const lastPlayedAt = payload.lastPlayedAt || new Date().toISOString();
 
   if (existing) {
-    const isCurrent = isIncomingEpisodeProgressCurrent(lastPlayedAt, existing);
+    const baseIsCurrent = isEpisodeProgressBaseCurrent(payload.baseServerUpdatedAt, existing);
+    const isCurrent = baseIsCurrent ?? isIncomingEpisodeProgressCurrent(lastPlayedAt, existing);
     const result = isCurrent
       ? await env.DB.prepare(
         `UPDATE episode_progress
@@ -3158,7 +3179,7 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
              finished = ?,
              completed = ?,
              last_played_at = ?,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ?
            AND (${scope.predicates.join(" OR ")})`,
       )
@@ -3185,7 +3206,7 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
              clerk_user_id = ?,
              legacy_base44_user_id = ?,
              audio_url = ?,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ?
            AND (${scope.predicates.join(" OR ")})`,
       )
@@ -3210,7 +3231,7 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
          podcast_title, episode_title, position_seconds, duration_seconds,
          finished, completed, last_played_at, created_at, updated_at
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ON CONFLICT(user_id, audio_url) DO UPDATE SET
          clerk_user_id = excluded.clerk_user_id,
          legacy_base44_user_id = excluded.legacy_base44_user_id,
@@ -3254,7 +3275,9 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
            THEN excluded.last_played_at
            ELSE episode_progress.last_played_at
          END,
-         updated_at = CURRENT_TIMESTAMP`,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE ? IS NULL
+          OR COALESCE(julianday(NULLIF(TRIM(?), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.updated_at), '')), 0)`,
     )
       .bind(
         id,
@@ -3270,6 +3293,8 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
         finished,
         finished,
         lastPlayedAt,
+        payload.baseServerUpdatedAt ?? null,
+        payload.baseServerUpdatedAt ?? null,
       )
       .run();
   }
