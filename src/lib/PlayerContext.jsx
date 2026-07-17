@@ -935,11 +935,7 @@ export function PlayerProvider({ children }) {
       return;
     }
 
-    const controller = startProgressHydrationController(nextScopeKey, nextProgressUser);
-
-    return () => {
-      controller?.cleanup?.();
-    };
+    startProgressHydrationController(nextScopeKey, nextProgressUser);
   }, [
     apiUserId,
     clerkUserId,
@@ -951,6 +947,12 @@ export function PlayerProvider({ children }) {
     startProgressHydrationController,
     stopSaveTimers,
   ]);
+
+  useEffect(() => {
+    return () => {
+      progressHydrationControllerRef.current?.cleanup?.();
+    };
+  }, []);
 
   useEffect(() => {
     const decision = getProgressScopeDecision({ apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked });

@@ -113,6 +113,78 @@ function createFakeEventTarget(initialState = {}) {
   };
 }
 
+function createProgressControllerHarness(scope = 'user-a') {
+  const windowTarget = createFakeEventTarget();
+  const documentTarget = createFakeEventTarget({ visibilityState: 'visible' });
+  const scopeRef = { current: scope };
+  const controllerRef = { current: null };
+  const hydrationRef = { current: { scope, promise: null, status: 'guest' } };
+  const recoveryRef = { current: null };
+  const dbUserRef = { current: { id: scope } };
+  const loads = [];
+  const timers = [];
+  let loadCount = 0;
+  let settledCount = 0;
+  let hydratedCount = 0;
+  let clearCount = 0;
+  const setTimeoutFn = (callback, delay) => {
+    const timer = { callback, delay, cleared: false };
+    timers.push(timer);
+    return timer;
+  };
+  const clearTimeoutFn = (timer) => {
+    if (timer) {
+      timer.cleared = true;
+      clearCount += 1;
+    }
+  };
+  const start = (nextScope = scopeRef.current) => {
+    const deferred = createDeferred();
+    loads.push(deferred);
+    return createProgressHydrationController({
+      scopeKey: nextScope,
+      progressUser: { id: nextScope },
+      controllerRef,
+      hydrationRef,
+      recoveryRef,
+      scopeRef,
+      dbUserRef,
+      retryDelays: [5],
+      loadProgress: () => {
+        loadCount += 1;
+        return deferred.promise;
+      },
+      setTimeoutFn,
+      clearTimeoutFn,
+      windowTarget,
+      documentTarget,
+      onHydrated: () => {
+        hydratedCount += 1;
+      },
+      onSettled: () => {
+        settledCount += 1;
+      },
+    });
+  };
+
+  return {
+    windowTarget,
+    documentTarget,
+    scopeRef,
+    controllerRef,
+    hydrationRef,
+    recoveryRef,
+    dbUserRef,
+    loads,
+    timers,
+    start,
+    get loadCount() { return loadCount; },
+    get settledCount() { return settledCount; },
+    get hydratedCount() { return hydratedCount; },
+    get clearCount() { return clearCount; },
+  };
+}
+
 async function json(response) {
   return response.json();
 }
@@ -1129,6 +1201,133 @@ describe('EpisodeProgress frontend cache helpers', () => {
       hydration: { scope: 'guest', promise: null, status: 'guest' },
       controller: null,
     }), { action: 'guest' });
+  });
+
+  it('preserves the current controller across same-scope effect rerenders', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controllerA = harness.start();
+    await Promise.resolve();
+
+    assert.equal(harness.loadCount, 1);
+    assert.equal(harness.windowTarget.listenerCount('online'), 1);
+    assert.equal(harness.documentTarget.listenerCount('visibilitychange'), 1);
+
+    const lifecycle = getProgressHydrationLifecycleDecision({
+      currentScope: harness.scopeRef.current,
+      nextScope: 'user-a',
+      userId: 'user-a',
+      hydration: harness.hydrationRef.current,
+      controller: harness.controllerRef.current,
+    });
+    assert.deepEqual(lifecycle, { action: 'preserve', reason: 'active-controller' });
+
+    if (lifecycle.action === 'start') harness.start('user-a');
+    assert.equal(harness.controllerRef.current, controllerA);
+    assert.equal(controllerA.cancelled, false);
+    assert.equal(harness.loadCount, 1);
+    assert.equal(harness.windowTarget.listenerCount('online'), 1);
+    assert.equal(harness.documentTarget.listenerCount('visibilitychange'), 1);
+
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydrationRef.current.status, 'ready');
+    assert.equal(isAuthenticatedProgressSaveReady(
+      'user-a',
+      harness.hydrationRef.current,
+      'user-a',
+      harness.controllerRef.current
+    ), true);
+  });
+
+  it('starts a replacement on the same scope only when the controller is genuinely invalid', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controllerA = harness.start();
+    await Promise.resolve();
+    const promiseA = harness.hydrationRef.current.promise;
+
+    controllerA.cleanup();
+    assert.equal(controllerA.cancelled, true);
+    assert.equal(harness.controllerRef.current, null);
+    assert.equal(harness.recoveryRef.current, null);
+
+    const lifecycle = getProgressHydrationLifecycleDecision({
+      currentScope: harness.scopeRef.current,
+      nextScope: 'user-a',
+      userId: 'user-a',
+      hydration: harness.hydrationRef.current,
+      controller: harness.controllerRef.current,
+    });
+    assert.deepEqual(lifecycle, { action: 'start', reason: 'same-scope-without-controller' });
+
+    const controllerB = harness.start('user-a');
+    await Promise.resolve();
+    assert.notEqual(controllerB, controllerA);
+    assert.equal(harness.controllerRef.current, controllerB);
+    assert.equal(harness.recoveryRef.current, controllerB.requestRecovery);
+    assert.equal(harness.loadCount, 2);
+
+    controllerA.cleanup();
+    assert.equal(harness.controllerRef.current, controllerB);
+    assert.equal(harness.recoveryRef.current, controllerB.requestRecovery);
+    assert.equal(harness.hydrationRef.current.status, 'hydrating');
+
+    harness.loads[0].resolve([]);
+    await promiseA;
+    assert.equal(harness.hydrationRef.current.status, 'hydrating');
+
+    harness.loads[1].resolve([]);
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydrationRef.current.status, 'ready');
+    assert.equal(harness.controllerRef.current, controllerB);
+  });
+
+  it('cleans the current controller only from the provider unmount cleanup', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    const promise = harness.hydrationRef.current.promise;
+    controller.retryTimer = { cleared: false };
+
+    const cleanupOnUnmount = () => {
+      harness.controllerRef.current?.cleanup?.();
+    };
+    cleanupOnUnmount();
+
+    assert.equal(controller.cancelled, true);
+    assert.equal(controller.retryTimer.cleared, true);
+    assert.equal(harness.controllerRef.current, null);
+    assert.equal(harness.recoveryRef.current, null);
+    assert.equal(harness.windowTarget.listenerCount('online'), 0);
+    assert.equal(harness.documentTarget.listenerCount('visibilitychange'), 0);
+    assert.equal(harness.clearCount, 1);
+
+    harness.loads[0].resolve([]);
+    await promise;
+    assert.equal(harness.hydrationRef.current.status, 'failed');
+    assert.equal(harness.settledCount, 0);
+    assert.equal(harness.hydratedCount, 0);
+  });
+
+  it('explicitly cleans scope A and starts scope B once on scope change', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controllerA = harness.start('user-a');
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 1);
+
+    harness.scopeRef.current = 'user-b';
+    harness.dbUserRef.current = { id: 'user-b' };
+    controllerA.cleanup();
+    harness.hydrationRef.current = { scope: 'user-b', promise: null, status: 'hydrating' };
+    const controllerB = harness.start('user-b');
+    await Promise.resolve();
+
+    assert.equal(controllerA.cancelled, true);
+    assert.notEqual(controllerB, controllerA);
+    assert.equal(harness.controllerRef.current, controllerB);
+    assert.equal(harness.recoveryRef.current, controllerB.requestRecovery);
+    assert.equal(harness.loadCount, 2);
+    assert.equal(harness.windowTarget.listenerCount('online'), 1);
+    assert.equal(harness.documentTarget.listenerCount('visibilitychange'), 1);
   });
 
   it('keeps stale hydration controllers from mutating the active controller', async () => {
