@@ -12,7 +12,10 @@ import {
   getProgressPlaybackTransition,
   getProgressScopeDecision,
   createProgressRegressionGuard,
+  getProgressHydrationLifecycleDecision,
+  createProgressHydrationController,
   getProgressHydrationRecoveryDecision,
+  isAuthenticatedProgressSaveReady,
   shouldBlockProgressSaveForGuard,
   loadProgressFromDB,
   mergeProgressRecords,
@@ -75,6 +78,39 @@ function request(path, { method = 'GET', payload, token } = {}) {
   const init = { method, headers };
   if (method !== 'GET' && method !== 'HEAD') init.body = JSON.stringify(payload ?? {});
   return new Request(`https://api.voxyl.test${path}`, init);
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createFakeEventTarget(initialState = {}) {
+  const listeners = new Map();
+  return {
+    ...initialState,
+    addEventListener(type, listener) {
+      const current = listeners.get(type) || new Set();
+      current.add(listener);
+      listeners.set(type, current);
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    listenerCount(type) {
+      return listeners.get(type)?.size || 0;
+    },
+    dispatch(type) {
+      for (const listener of [...(listeners.get(type) || [])]) {
+        listener();
+      }
+    },
+  };
 }
 
 async function json(response) {
@@ -1025,6 +1061,251 @@ describe('EpisodeProgress frontend cache helpers', () => {
     });
   });
 
+  it('restarts same-scope hydration when a cancelled controller left the scope hydrating', () => {
+    const scope = 'user-a';
+    const userId = 'user-a';
+    const hydrating = { scope, promise: Promise.resolve(), status: 'hydrating' };
+    const cancelledController = { scope, userId, cancelled: true };
+
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: null,
+      nextScope: scope,
+      userId,
+      hydration: { scope: null, promise: null, status: 'guest' },
+      controller: null,
+    }), { action: 'start', reason: 'scope-changed' });
+
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: scope,
+      nextScope: scope,
+      userId,
+      hydration: hydrating,
+      controller: cancelledController,
+    }), { action: 'start', reason: 'same-scope-without-controller' });
+
+    assert.equal(isAuthenticatedProgressSaveReady(userId, hydrating, scope, cancelledController), false);
+
+    const ready = { scope, promise: null, status: 'ready' };
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: scope,
+      nextScope: scope,
+      userId,
+      hydration: ready,
+      controller: null,
+    }), { action: 'start', reason: 'same-scope-without-controller' });
+    assert.equal(isAuthenticatedProgressSaveReady(userId, ready, scope, null), false);
+    assert.equal(isAuthenticatedProgressSaveReady(userId, ready, scope, { scope, userId, cancelled: false }), true);
+  });
+
+  it('preserves one active hydration request across same-scope rerenders and ignores old scopes', () => {
+    const activeController = { scope: 'user-a', userId: 'user-a', cancelled: false };
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: 'user-a',
+      nextScope: 'user-a',
+      userId: 'user-a',
+      hydration: { scope: 'user-a', promise: Promise.resolve(), status: 'hydrating' },
+      controller: activeController,
+    }), { action: 'preserve', reason: 'active-controller' });
+
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: 'user-a',
+      nextScope: 'user-b',
+      userId: 'user-b',
+      hydration: { scope: 'user-a', promise: Promise.resolve(), status: 'hydrating' },
+      controller: activeController,
+    }), { action: 'start', reason: 'scope-changed' });
+
+    assert.equal(isAuthenticatedProgressSaveReady(
+      'user-b',
+      { scope: 'user-a', promise: null, status: 'ready' },
+      'user-b',
+      activeController
+    ), false);
+
+    assert.deepEqual(getProgressHydrationLifecycleDecision({
+      currentScope: 'guest',
+      nextScope: 'guest',
+      userId: null,
+      hydration: { scope: 'guest', promise: null, status: 'guest' },
+      controller: null,
+    }), { action: 'guest' });
+  });
+
+  it('keeps stale hydration controllers from mutating the active controller', async () => {
+    const windowTarget = createFakeEventTarget();
+    const documentTarget = createFakeEventTarget({ visibilityState: 'visible' });
+    const scopeRef = { current: 'user-a' };
+    const controllerRef = { current: null };
+    const hydrationRef = { current: { scope: 'user-a', promise: null, status: 'guest' } };
+    const recoveryRef = { current: null };
+    const dbUserRef = { current: { id: 'user-a' } };
+    const firstLoad = createDeferred();
+    const secondLoad = createDeferred();
+    const loads = [firstLoad, secondLoad];
+    let loadCount = 0;
+    let settledCount = 0;
+
+    const start = () => createProgressHydrationController({
+      scopeKey: 'user-a',
+      progressUser: { id: 'user-a' },
+      controllerRef,
+      hydrationRef,
+      recoveryRef,
+      scopeRef,
+      dbUserRef,
+      retryDelays: [5],
+      loadProgress: () => {
+        loadCount += 1;
+        return loads.shift().promise;
+      },
+      windowTarget,
+      documentTarget,
+      onSettled: () => {
+        settledCount += 1;
+      },
+    });
+
+    const controllerA = start();
+    const duplicate = start();
+    assert.equal(duplicate, controllerA);
+    await Promise.resolve();
+    assert.equal(loadCount, 1);
+    assert.equal(windowTarget.listenerCount('online'), 1);
+    assert.equal(documentTarget.listenerCount('visibilitychange'), 1);
+
+    const promiseA = hydrationRef.current.promise;
+    controllerA.cleanup();
+    assert.equal(hydrationRef.current.status, 'failed');
+    assert.equal(recoveryRef.current, null);
+    assert.equal(windowTarget.listenerCount('online'), 0);
+    assert.equal(documentTarget.listenerCount('visibilitychange'), 0);
+
+    const controllerB = start();
+    await Promise.resolve();
+    assert.notEqual(controllerB, controllerA);
+    assert.equal(loadCount, 2);
+    assert.equal(hydrationRef.current.status, 'hydrating');
+    assert.equal(windowTarget.listenerCount('online'), 1);
+    assert.equal(documentTarget.listenerCount('visibilitychange'), 1);
+
+    controllerA.cleanup();
+    assert.equal(hydrationRef.current.status, 'hydrating');
+    assert.equal(windowTarget.listenerCount('online'), 1);
+    assert.equal(documentTarget.listenerCount('visibilitychange'), 1);
+
+    firstLoad.resolve([]);
+    await promiseA;
+    assert.equal(hydrationRef.current.status, 'hydrating');
+    assert.equal(settledCount, 0);
+
+    secondLoad.resolve([]);
+    await hydrationRef.current.promise;
+    assert.equal(hydrationRef.current.status, 'ready');
+    assert.equal(settledCount, 1);
+    assert.equal(isAuthenticatedProgressSaveReady(
+      'user-a',
+      hydrationRef.current,
+      'user-a',
+      controllerB
+    ), true);
+  });
+
+  it('ignores stale retry and recovery callbacks after identity changes', async () => {
+    const windowTarget = createFakeEventTarget();
+    const documentTarget = createFakeEventTarget({ visibilityState: 'visible' });
+    const timers = [];
+    const scopeRef = { current: 'user-a' };
+    const controllerRef = { current: null };
+    const hydrationRef = { current: { scope: 'user-a', promise: null, status: 'guest' } };
+    const recoveryRef = { current: null };
+    const dbUserRef = { current: { id: 'user-a' } };
+    const firstLoad = createDeferred();
+    const secondLoad = createDeferred();
+    const loads = [firstLoad, secondLoad];
+    let loadCount = 0;
+    let clearCount = 0;
+    const setTimeoutFn = (callback, delay) => {
+      const timer = { callback, delay, cleared: false };
+      timers.push(timer);
+      return timer;
+    };
+    const clearTimeoutFn = (timer) => {
+      if (timer) {
+        timer.cleared = true;
+        clearCount += 1;
+      }
+    };
+
+    const controllerA = createProgressHydrationController({
+      scopeKey: 'user-a',
+      progressUser: { id: 'user-a' },
+      controllerRef,
+      hydrationRef,
+      recoveryRef,
+      scopeRef,
+      dbUserRef,
+      retryDelays: [5],
+      loadProgress: () => {
+        loadCount += 1;
+        return loads.shift().promise;
+      },
+      setTimeoutFn,
+      clearTimeoutFn,
+      windowTarget,
+      documentTarget,
+    });
+    await Promise.resolve();
+    firstLoad.reject(Object.assign(new Error('network'), { status: 503 }));
+    await hydrationRef.current.promise;
+    assert.equal(hydrationRef.current.status, 'failed');
+    assert.equal(timers.length, 1);
+
+    scopeRef.current = 'user-b';
+    dbUserRef.current = { id: 'user-b' };
+    controllerA.cleanup();
+    assert.equal(clearCount, 1);
+
+    const controllerB = createProgressHydrationController({
+      scopeKey: 'user-b',
+      progressUser: { id: 'user-b' },
+      controllerRef,
+      hydrationRef,
+      recoveryRef,
+      scopeRef,
+      dbUserRef,
+      retryDelays: [5],
+      loadProgress: () => {
+        loadCount += 1;
+        return loads.shift().promise;
+      },
+      setTimeoutFn,
+      clearTimeoutFn,
+      windowTarget,
+      documentTarget,
+    });
+    await Promise.resolve();
+    assert.notEqual(controllerB, controllerA);
+    assert.equal(loadCount, 2);
+
+    timers[0].callback();
+    controllerA.requestRecovery('progress-save');
+    windowTarget.dispatch('online');
+    documentTarget.dispatch('visibilitychange');
+    assert.equal(loadCount, 2);
+    assert.equal(hydrationRef.current.scope, 'user-b');
+    assert.equal(hydrationRef.current.status, 'hydrating');
+
+    secondLoad.resolve([]);
+    await hydrationRef.current.promise;
+    assert.equal(hydrationRef.current.status, 'ready');
+    assert.equal(isAuthenticatedProgressSaveReady(
+      'user-a',
+      hydrationRef.current,
+      'user-b',
+      controllerB
+    ), false);
+  });
+
   it('keeps Clerk provisional progress outside guest and reconciles it when D1 user resolves', () => {
     const provisional = getProgressScopeDecision({
       apiUser: null,
@@ -1223,6 +1504,54 @@ describe('EpisodeProgress frontend cache helpers', () => {
     }, 'user-a');
     assert.deepEqual(calls[0], { filters: {}, sort: '-last_played_at', limit: 500 });
     assert.equal(getCachedProgress('https://cdn.example.com/load.mp3').position_seconds, 44);
+  });
+
+  it('allows an authenticated pause save after hydration reaches ready', async () => {
+    activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/pause-save.mp3';
+    const payloads = [];
+    const hydration = { scope: 'user-a', promise: null, status: 'hydrating' };
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async filter() {
+            return [];
+          },
+          async create(payload) {
+            payloads.push(payload);
+            return {
+              id: 'pause-save-row',
+              audio_url: payload.audio_url,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: '2026-07-17T12:00:00.001Z',
+            };
+          },
+        },
+      },
+    };
+
+    await loadProgressFromDB(api, 'user-a');
+    hydration.status = 'ready';
+
+    setCachedProgress(audioUrl, 12, 300, false);
+    assert.equal(isAuthenticatedProgressSaveReady(
+      'user-a',
+      hydration,
+      'user-a',
+      { scope: 'user-a', userId: 'user-a', cancelled: false }
+    ), true);
+    await saveProgressToDB(api, 'user-a', audioUrl, {
+      scopeStatus: hydration.status,
+      hydrationReady: true,
+      audioUrl,
+    });
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].audio_url, audioUrl);
+    assert.equal(payloads[0].position_seconds, 12);
   });
 
   it('syncs authenticated progress across independent device caches', async () => {
