@@ -2662,6 +2662,7 @@ type PublicEpisodeProgress = {
   duration_seconds: number;
   finished: boolean;
   last_played_at: string | null;
+  server_updated_at: string | null;
   created_at: string | null;
   created_date: string | null;
   updated_at: string | null;
@@ -2692,6 +2693,7 @@ type EpisodeProgressPayload = {
   durationSeconds?: number;
   finished?: boolean;
   lastPlayedAt?: string;
+  baseServerUpdatedAt?: string;
 };
 
 type SavedIdentityScope = {
@@ -2797,6 +2799,29 @@ function isIncomingEpisodeProgressCurrent(incoming: string, existing: Pick<D1Epi
   return episodeProgressTimestampValue(incoming) >= episodeProgressTimestampValue(existing?.last_played_at);
 }
 
+function isEpisodeProgressBaseCurrent(baseServerUpdatedAt: string | undefined, existing: Pick<D1EpisodeProgress, "updated_at"> | null): boolean | null {
+  if (!baseServerUpdatedAt) {
+    return null;
+  }
+
+  const incomingBase = normalizeTimestamp(baseServerUpdatedAt);
+  const existingRevision = normalizeTimestamp(existing?.updated_at);
+
+  if (!incomingBase || !existingRevision) {
+    return false;
+  }
+
+  return incomingBase === existingRevision;
+}
+
+function episodeProgressNextRevisionSql(column = "updated_at"): string {
+  return `strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday('now'), COALESCE(julianday(NULLIF(TRIM(${column}), '')), 0) + (1.0 / 86400000.0)))`;
+}
+
+function episodeProgressRevisionPredicateSql(column = "updated_at"): string {
+  return `strftime('%Y-%m-%dT%H:%M:%fZ', ${column}) = ?`;
+}
+
 function isEpisodeProgressFinished(row: Pick<D1EpisodeProgress, "finished" | "completed">): boolean {
   return row.finished === true ||
     row.finished === 1 ||
@@ -2808,6 +2833,7 @@ function isEpisodeProgressFinished(row: Pick<D1EpisodeProgress, "finished" | "co
 function toPublicEpisodeProgress(row: D1EpisodeProgress): PublicEpisodeProgress {
   const createdAt = normalizeTimestamp(row.base44_created_date) || normalizeTimestamp(row.created_at);
   const updatedAt = normalizeTimestamp(row.base44_updated_date) || normalizeTimestamp(row.updated_at);
+  const serverUpdatedAt = normalizeTimestamp(row.updated_at);
 
   return {
     id: row.id,
@@ -2819,6 +2845,7 @@ function toPublicEpisodeProgress(row: D1EpisodeProgress): PublicEpisodeProgress 
     duration_seconds: coerceNonNegativeInteger(row.duration_seconds),
     finished: isEpisodeProgressFinished(row),
     last_played_at: normalizeTimestamp(row.last_played_at),
+    server_updated_at: serverUpdatedAt,
     created_at: createdAt,
     created_date: createdAt,
     updated_at: updatedAt,
@@ -3036,6 +3063,7 @@ async function parseEpisodeProgressPayload(request: Request, mode: "create" | "u
     durationSeconds: validateEpisodeInteger(payload.duration_seconds, "duration_seconds", false),
     finished: validateEpisodeFinished(payload.finished, false),
     lastPlayedAt: validateEpisodeTimestamp(payload.last_played_at),
+    baseServerUpdatedAt: validateEpisodeTimestamp(payload.base_server_updated_at),
   };
 }
 
@@ -3129,20 +3157,22 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
   const scope = getSavedIdentityScope(auth.user!, auth.claims!.userId);
   const audioUrlCandidates = payload.audioUrlCandidates || [payload.audioUrl!];
   const existing = await env.DB.prepare(
-    `SELECT id, last_played_at
+    `SELECT id, last_played_at, updated_at
      FROM episode_progress
      WHERE audio_url IN (${audioUrlCandidates.map(() => "?").join(", ")})
        AND (${scope.predicates.join(" OR ")})
      LIMIT 1`,
   )
     .bind(...audioUrlCandidates, ...scope.params)
-    .first<Pick<D1EpisodeProgress, "id" | "last_played_at">>();
+    .first<Pick<D1EpisodeProgress, "id" | "last_played_at" | "updated_at">>();
   const id = existing?.id || crypto.randomUUID();
   const finished = payload.finished === true ? 1 : 0;
   const lastPlayedAt = payload.lastPlayedAt || new Date().toISOString();
 
   if (existing) {
-    const isCurrent = isIncomingEpisodeProgressCurrent(lastPlayedAt, existing);
+    const baseIsCurrent = isEpisodeProgressBaseCurrent(payload.baseServerUpdatedAt, existing);
+    const hasBaseRevision = baseIsCurrent !== null;
+    const isCurrent = hasBaseRevision ? true : isIncomingEpisodeProgressCurrent(lastPlayedAt, existing);
     const result = isCurrent
       ? await env.DB.prepare(
         `UPDATE episode_progress
@@ -3158,9 +3188,10 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
              finished = ?,
              completed = ?,
              last_played_at = ?,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = ${episodeProgressNextRevisionSql()}
          WHERE id = ?
-           AND (${scope.predicates.join(" OR ")})`,
+           AND (${scope.predicates.join(" OR ")})
+           ${hasBaseRevision ? `AND ${episodeProgressRevisionPredicateSql()}` : ""}`,
       )
         .bind(
           auth.user!.id,
@@ -3177,15 +3208,18 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
           lastPlayedAt,
           id,
           ...scope.params,
+          ...(hasBaseRevision ? [payload.baseServerUpdatedAt] : []),
         )
         .run()
+      : hasBaseRevision
+        ? { meta: { changes: 0 } }
       : await env.DB.prepare(
         `UPDATE episode_progress
          SET user_id = ?,
              clerk_user_id = ?,
              legacy_base44_user_id = ?,
              audio_url = ?,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = ${episodeProgressNextRevisionSql()}
          WHERE id = ?
            AND (${scope.predicates.join(" OR ")})`,
       )
@@ -3201,60 +3235,42 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
     const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
 
     if (changes === 0) {
+      if (hasBaseRevision) {
+        const item = await fetchEpisodeProgressByOwnedId(env, id, scope) ||
+          await fetchEpisodeProgressByUserAndAudioUrl(env, auth.user!.id, audioUrlCandidates);
+
+        if (!item) {
+          return jsonResponse(notFoundResponse, 404, corsHeaders);
+        }
+
+        const publicItem = toPublicEpisodeProgress(item);
+        return jsonResponse({ ok: true, item: publicItem, data: publicItem }, 200, corsHeaders);
+      }
+
       return jsonResponse(notFoundResponse, 404, corsHeaders);
     }
   } else {
-    await env.DB.prepare(
+    const result = await env.DB.prepare(
       `INSERT INTO episode_progress (
          id, user_id, clerk_user_id, legacy_base44_user_id, audio_url, feed_url,
          podcast_title, episode_title, position_seconds, duration_seconds,
          finished, completed, last_played_at, created_at, updated_at
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ON CONFLICT(user_id, audio_url) DO UPDATE SET
          clerk_user_id = excluded.clerk_user_id,
          legacy_base44_user_id = excluded.legacy_base44_user_id,
-         feed_url = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN COALESCE(excluded.feed_url, episode_progress.feed_url)
-           ELSE episode_progress.feed_url
-         END,
-         podcast_title = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN COALESCE(excluded.podcast_title, episode_progress.podcast_title)
-           ELSE episode_progress.podcast_title
-         END,
-         episode_title = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN COALESCE(excluded.episode_title, episode_progress.episode_title)
-           ELSE episode_progress.episode_title
-         END,
-         position_seconds = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN excluded.position_seconds
-           ELSE episode_progress.position_seconds
-         END,
-         duration_seconds = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN excluded.duration_seconds
-           ELSE episode_progress.duration_seconds
-         END,
-         finished = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN excluded.finished
-           ELSE episode_progress.finished
-         END,
-         completed = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN excluded.completed
-           ELSE episode_progress.completed
-         END,
-         last_played_at = CASE
-           WHEN COALESCE(julianday(NULLIF(TRIM(excluded.last_played_at), '')), 0) >= COALESCE(julianday(NULLIF(TRIM(episode_progress.last_played_at), '')), 0)
-           THEN excluded.last_played_at
-           ELSE episode_progress.last_played_at
-         END,
-         updated_at = CURRENT_TIMESTAMP`,
+         feed_url = COALESCE(excluded.feed_url, episode_progress.feed_url),
+         podcast_title = COALESCE(excluded.podcast_title, episode_progress.podcast_title),
+         episode_title = COALESCE(excluded.episode_title, episode_progress.episode_title),
+         position_seconds = excluded.position_seconds,
+         duration_seconds = excluded.duration_seconds,
+         finished = excluded.finished,
+         completed = excluded.completed,
+         last_played_at = excluded.last_played_at,
+         updated_at = ${episodeProgressNextRevisionSql("episode_progress.updated_at")}
+       WHERE ? IS NULL
+          OR ${episodeProgressRevisionPredicateSql("episode_progress.updated_at")}`,
     )
       .bind(
         id,
@@ -3270,8 +3286,22 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
         finished,
         finished,
         lastPlayedAt,
+        payload.baseServerUpdatedAt ?? null,
+        payload.baseServerUpdatedAt ?? null,
       )
       .run();
+    const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+    if (changes === 0 && payload.baseServerUpdatedAt) {
+      const item = await fetchEpisodeProgressByUserAndAudioUrl(env, auth.user!.id, audioUrlCandidates);
+
+      if (!item) {
+        return jsonResponse(notFoundResponse, 404, corsHeaders);
+      }
+
+      const publicItem = toPublicEpisodeProgress(item);
+      return jsonResponse({ ok: true, item: publicItem, data: publicItem }, 200, corsHeaders);
+    }
   }
 
   const item = await fetchEpisodeProgressByUserAndAudioUrl(env, auth.user!.id, audioUrlCandidates);

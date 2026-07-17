@@ -81,15 +81,50 @@ function normalizeProgressEntry(entry) {
   const position = Number(entry.position_seconds);
   const duration = Number(entry.duration_seconds);
   const timestamp = typeof entry.last_played_at === 'string' ? entry.last_played_at : null;
+  const serverTimestamp = typeof entry.server_updated_at === 'string'
+    ? entry.server_updated_at
+    : (typeof entry.updated_at === 'string' ? entry.updated_at : null);
 
   if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return null;
 
   return {
+    id: typeof entry.id === 'string' ? entry.id : undefined,
     position_seconds: Number.isFinite(position) && position >= 0 ? Math.trunc(position) : 0,
     duration_seconds: Number.isFinite(duration) && duration >= 0 ? Math.trunc(duration) : 0,
     finished: normalizeEpisodeFinished(entry),
     last_played_at: timestamp,
+    server_updated_at: serverTimestamp && Number.isFinite(Date.parse(serverTimestamp)) ? serverTimestamp : undefined,
   };
+}
+
+function getProgressOrdering(entry) {
+  const normalized = normalizeProgressEntry(entry);
+
+  if (!normalized) {
+    return { value: 0, authoritative: false };
+  }
+
+  const serverTime = Date.parse(normalized.server_updated_at || '');
+
+  if (Number.isFinite(serverTime)) {
+    return { value: serverTime, authoritative: true };
+  }
+
+  return {
+    value: Date.parse(normalized.last_played_at || '') || 0,
+    authoritative: false,
+  };
+}
+
+function shouldReplaceProgress(current, incoming) {
+  const currentOrder = getProgressOrdering(current);
+  const incomingOrder = getProgressOrdering(incoming);
+
+  if (incomingOrder.authoritative !== currentOrder.authoritative) {
+    return incomingOrder.authoritative;
+  }
+
+  return incomingOrder.value >= currentOrder.value;
 }
 
 function pruneCache(data) {
@@ -113,10 +148,8 @@ function mergeProgressCache(left, right) {
     const normalized = normalizeProgressEntry(entry);
     if (!normalized) continue;
     const current = merged[audioUrl];
-    const currentTime = Date.parse(current?.last_played_at || '');
-    const nextTime = Date.parse(normalized.last_played_at);
 
-    if (!Number.isFinite(currentTime) || nextTime >= currentTime) {
+    if (!current || shouldReplaceProgress(current, normalized)) {
       merged[audioUrl] = normalized;
     }
   }
@@ -268,16 +301,64 @@ export function getEpisodeResumeState(episode, skipResume = false) {
   };
 }
 
+export function createProgressRegressionGuard(audioUrl, currentPosition, canonicalProgress) {
+  const canonicalPosition = Number(canonicalProgress?.position_seconds);
+  const safeCurrentPosition = Number.isFinite(currentPosition) && currentPosition >= 0 ? currentPosition : 0;
+
+  if (!audioUrl || !Number.isFinite(canonicalPosition) || canonicalPosition <= safeCurrentPosition) {
+    return null;
+  }
+
+  return {
+    audioUrl,
+    position_seconds: Math.trunc(canonicalPosition),
+    server_updated_at: canonicalProgress?.server_updated_at,
+  };
+}
+
+export function shouldBlockProgressSaveForGuard(guard, audioUrl, position) {
+  if (!guard || guard.audioUrl !== audioUrl) return false;
+  const safePosition = Number.isFinite(position) && position >= 0 ? position : 0;
+  return safePosition < Number(guard.position_seconds);
+}
+
+export function getProgressHydrationRecoveryDecision(options = {}) {
+  const { hydration, scope, userId, hasScheduledRetry = false } = options;
+  if (!userId) {
+    return { shouldStart: false, reason: 'guest' };
+  }
+
+  if (!scope || hydration?.scope !== scope) {
+    return { shouldStart: false, reason: 'scope-mismatch' };
+  }
+
+  if (hydration?.status === 'hydrating' && hydration?.promise) {
+    return { shouldStart: false, reason: 'active-request' };
+  }
+
+  if (hasScheduledRetry) {
+    return { shouldStart: false, reason: 'scheduled-retry' };
+  }
+
+  if (hydration?.status !== 'failed') {
+    return { shouldStart: false, reason: 'not-failed' };
+  }
+
+  return { shouldStart: true, reason: 'failed' };
+}
+
 export function setCachedProgress(audioUrl, position, duration, finished) {
   const cache = readCache();
   const current = cache[audioUrl];
   const safePosition = Number.isFinite(position) && position >= 0 ? Math.floor(position) : 0;
   const safeDuration = Number.isFinite(duration) && duration >= 0 ? Math.floor(duration) : current?.duration_seconds || 0;
   cache[audioUrl] = {
+    id: current?.id,
     position_seconds: safePosition,
     duration_seconds: safeDuration,
     finished: Boolean(finished) || (safeDuration > 0 && safePosition / safeDuration >= FINISH_THRESHOLD),
     last_played_at: new Date().toISOString(),
+    server_updated_at: current?.server_updated_at,
   };
   writeCache(cache);
   return cache[audioUrl];
@@ -306,10 +387,8 @@ export function mergeProgressRecords(records, expectedVersion = scopeVersion) {
 
     dbRecordMap[record.audio_url] = record;
     const cached = cache[record.audio_url];
-    const cachedTime = Date.parse(cached?.last_played_at || '');
-    const remoteTime = Date.parse(normalized.last_played_at);
 
-    if (!Number.isFinite(cachedTime) || remoteTime > cachedTime) {
+    if (!cached || shouldReplaceProgress(cached, normalized)) {
       cache[record.audio_url] = normalized;
     }
   }
@@ -355,11 +434,13 @@ async function saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, v
     duration_seconds: cached.duration_seconds,
     finished: cached.finished,
     last_played_at: cached.last_played_at,
+    base_server_updated_at: cached.server_updated_at,
   };
 
   const saved = await voxylApi.entities.EpisodeProgress.create(payload);
   if (expectedScope !== activeScope || version !== scopeVersion) return;
   dbRecordMap[audioUrl] = saved;
+  mergeProgressRecords([saved], version);
 }
 
 export function saveProgressToDB(voxylApi, userId, audioUrl) {
