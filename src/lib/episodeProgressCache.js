@@ -116,15 +116,76 @@ function getProgressOrdering(entry) {
   };
 }
 
-function shouldReplaceProgress(current, incoming) {
-  const currentOrder = getProgressOrdering(current);
-  const incomingOrder = getProgressOrdering(incoming);
+export function compareProgressRevision(left, right) {
+  const leftOrder = getProgressOrdering(left);
+  const rightOrder = getProgressOrdering(right);
 
-  if (incomingOrder.authoritative !== currentOrder.authoritative) {
-    return incomingOrder.authoritative;
+  if (leftOrder.authoritative !== rightOrder.authoritative) {
+    return leftOrder.authoritative ? 1 : -1;
   }
 
-  return incomingOrder.value >= currentOrder.value;
+  if (leftOrder.value === rightOrder.value) return 0;
+  return leftOrder.value > rightOrder.value ? 1 : -1;
+}
+
+export function shouldRefreshRequireResumeTransition({
+  before = null,
+  after = null,
+  currentPosition = 0,
+  isPlaying = false,
+  minDeltaSeconds = 1,
+  isWebPlayback = true,
+} = {}) {
+  if (!isWebPlayback || !after) return false;
+
+  const afterPosition = Number(after.position_seconds);
+  const current = Number(currentPosition);
+  const beforePosition = Number(before?.position_seconds);
+  if (!Number.isFinite(afterPosition)) return false;
+  if (!Number.isFinite(current)) return true;
+
+  if (afterPosition - current >= minDeltaSeconds) return true;
+  return Boolean(
+    normalizeEpisodeFinished(after) &&
+    !normalizeEpisodeFinished(before) &&
+    (!Number.isFinite(beforePosition) || afterPosition >= beforePosition)
+  );
+}
+
+export function createWebResumeRequestGate() {
+  let generation = 0;
+
+  return {
+    begin() {
+      generation += 1;
+      return generation;
+    },
+    isCurrent(requestGeneration) {
+      return requestGeneration === generation;
+    },
+    invalidate() {
+      generation += 1;
+      return generation;
+    },
+  };
+}
+
+/**
+ * @param {{ gate?: { isCurrent: (generation: number) => boolean }, requestGeneration?: number, expectedAudioUrl?: string, currentAudioUrl?: string, isPlaying?: boolean }} options
+ */
+export function isCurrentWebResumeRequest({
+  gate,
+  requestGeneration,
+  expectedAudioUrl,
+  currentAudioUrl,
+  isPlaying = false,
+} = {}) {
+  return Boolean(
+    gate?.isCurrent(requestGeneration) &&
+    expectedAudioUrl &&
+    expectedAudioUrl === currentAudioUrl &&
+    !isPlaying
+  );
 }
 
 function pruneCache(data) {
@@ -149,9 +210,25 @@ function mergeProgressCache(left, right) {
     if (!normalized) continue;
     const current = merged[audioUrl];
 
-    if (!current || shouldReplaceProgress(current, normalized)) {
+    if (!current) {
       merged[audioUrl] = normalized;
+      continue;
     }
+
+    const currentPosition = Number(current.position_seconds);
+    const incomingPosition = Number(normalized.position_seconds);
+    const furthestPosition = Math.max(currentPosition, incomingPosition);
+    const revisionSource = compareProgressRevision(normalized, current) > 0
+      ? normalized
+      : current;
+    const positionSource = incomingPosition > currentPosition ? normalized : current;
+
+    merged[audioUrl] = {
+      ...positionSource,
+      ...revisionSource,
+      position_seconds: furthestPosition,
+      finished: normalizeEpisodeFinished(current) || normalizeEpisodeFinished(normalized),
+    };
   }
 
   return pruneCache(merged);
@@ -400,11 +477,15 @@ export function createProgressHydrationController(options = {}) {
     windowTarget = typeof window !== 'undefined' ? window : null,
     documentTarget = typeof document !== 'undefined' ? document : null,
     getVisibilityState = () => documentTarget?.visibilityState,
+    refreshThrottleMs = 100,
     getRecoveryDecision = getProgressHydrationRecoveryDecision,
     onHydrated = () => {},
+    onBeforeRefresh = () => null,
+    onRefreshed = () => {},
     onSettled = () => {},
     onLoadFailed = () => {},
     onRecoveryStarted = () => {},
+    onRefreshStarted = () => {},
   } = options;
 
   if (!scopeKey || !progressUser?.id || !controllerRef || !hydrationRef || !scopeRef || !loadProgress) {
@@ -428,8 +509,11 @@ export function createProgressHydrationController(options = {}) {
     userId: progressUser.id,
     cancelled: false,
     retryTimer: null,
+    refreshTimer: null,
+    refreshPromise: null,
     cleanup: null,
     requestRecovery: null,
+    requestRefresh: null,
     runHydration: null,
   };
   controllerRef.current = controller;
@@ -495,22 +579,83 @@ export function createProgressHydrationController(options = {}) {
     runHydration(0);
   };
 
+  const runRefresh = (reason) => {
+    if (
+      !ownsCurrentScope() ||
+      dbUserRef?.current?.id !== progressUser.id
+    ) return null;
+
+    const hydration = hydrationRef.current;
+    if (hydration.scope !== scopeKey || hydration.status !== 'ready') return null;
+    if (controller.refreshPromise) return controller.refreshPromise;
+
+    const refreshContext = onBeforeRefresh(reason, controller);
+    onRefreshStarted(reason, controller);
+    controller.refreshPromise = Promise.resolve()
+      .then(() => loadProgress())
+      .then((records) => {
+        if (!ownsCurrentScope() || dbUserRef?.current?.id !== progressUser.id) return;
+        onRefreshed(records, refreshContext, reason, controller);
+      })
+      .catch((error) => {
+        if (!ownsCurrentScope()) return;
+        onLoadFailed(error, false);
+      })
+      .finally(() => {
+        if (!ownsCurrentScope()) return;
+        controller.refreshPromise = null;
+        onSettled(controller);
+      });
+
+    return controller.refreshPromise;
+  };
+
+  const requestRefresh = (reason, options = {}) => {
+    if (
+      !ownsCurrentScope() ||
+      dbUserRef?.current?.id !== progressUser.id
+    ) return null;
+
+    if (controller.refreshPromise) return controller.refreshPromise;
+    if (options.immediate) {
+      clearTimeoutFn(controller.refreshTimer);
+      controller.refreshTimer = null;
+      return runRefresh(reason);
+    }
+    if (controller.refreshTimer) return null;
+
+    controller.refreshTimer = setTimeoutFn(() => {
+      if (!ownsCurrentScope()) return;
+      controller.refreshTimer = null;
+      runRefresh(reason);
+    }, refreshThrottleMs);
+    return null;
+  };
+
   const handleOnline = () => requestRecovery('online');
   const handleVisibilityChange = () => {
-    if (getVisibilityState() === 'visible') requestRecovery('visible');
+    if (getVisibilityState() === 'visible') {
+      requestRecovery('visible');
+      requestRefresh('visible');
+    }
   };
+  const handleFocus = () => requestRefresh('focus');
 
   controller.runHydration = runHydration;
   controller.requestRecovery = requestRecovery;
+  controller.requestRefresh = requestRefresh;
   if (recoveryRef) recoveryRef.current = requestRecovery;
   windowTarget?.addEventListener?.('online', handleOnline);
+  windowTarget?.addEventListener?.('focus', handleFocus);
   documentTarget?.addEventListener?.('visibilitychange', handleVisibilityChange);
 
   controller.cleanup = () => {
     const isCurrentOwner = controllerRef.current === controller;
     controller.cancelled = true;
     clearTimeoutFn(controller.retryTimer);
+    clearTimeoutFn(controller.refreshTimer);
     windowTarget?.removeEventListener?.('online', handleOnline);
+    windowTarget?.removeEventListener?.('focus', handleFocus);
     documentTarget?.removeEventListener?.('visibilitychange', handleVisibilityChange);
     if (isCurrentOwner) {
       controllerRef.current = null;
@@ -565,6 +710,7 @@ export function mergeProgressRecords(records, expectedVersion = scopeVersion) {
   dbRecordMap = {};
   const cache = readCache();
   const now = Date.now();
+  const validRecords = [];
 
   for (const record of records) {
     if (!record?.audio_url) continue;
@@ -572,16 +718,13 @@ export function mergeProgressRecords(records, expectedVersion = scopeVersion) {
     if (!normalized || !isFreshProgress(normalized, now)) continue;
 
     dbRecordMap[record.audio_url] = record;
-    const cached = cache[record.audio_url];
-
-    if (!cached || shouldReplaceProgress(cached, normalized)) {
-      cache[record.audio_url] = normalized;
-    }
+    validRecords.push(record);
   }
 
   if (expectedVersion !== scopeVersion) return {};
 
-  writeCache(cache);
+  const incomingCache = Object.fromEntries(validRecords.map((record) => [record.audio_url, record]));
+  writeCache(mergeProgressCache(cache, incomingCache));
   return dbRecordMap;
 }
 
