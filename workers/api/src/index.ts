@@ -359,6 +359,54 @@ function isEntityFollowRoute(pathname: string): boolean {
   return pathname === "/entities/follow" || pathname === "/api/entities/follow";
 }
 
+function isBlocksRoute(pathname: string): boolean {
+  return pathname === "/api/blocks";
+}
+
+function isHiddenBlockUsersRoute(pathname: string): boolean {
+  return pathname === "/api/blocks/hidden-users";
+}
+
+function getBlockStatusTargetId(pathname: string): string | null {
+  const prefix = "/api/blocks/status/";
+
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+
+  const encodedId = pathname.slice(prefix.length);
+
+  if (!encodedId || encodedId.includes("/")) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(encodedId);
+  } catch {
+    return null;
+  }
+}
+
+function getBlockId(pathname: string): string | null {
+  const prefix = "/api/blocks/";
+
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+
+  const encodedId = pathname.slice(prefix.length);
+
+  if (!encodedId || encodedId.includes("/") || encodedId === "hidden-users" || encodedId === "status") {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(encodedId);
+  } catch {
+    return null;
+  }
+}
+
 function isTopPodcastsRoute(pathname: string): boolean {
   return pathname === "/functions/getTopPodcastsByPlayback" || pathname === "/api/functions/getTopPodcastsByPlayback";
 }
@@ -2464,6 +2512,89 @@ function toPublicFollow(follow: D1Follow): PublicFollow {
   };
 }
 
+type D1Block = {
+  id: string;
+  blocked_id: string;
+  created_at: string;
+  blocked_name: string | null;
+  blocked_username: string | null;
+  blocked_profile_picture: string | null;
+  imported_blocked_name: string | null;
+  base44_created_date: string | null;
+};
+
+type PublicBlock = {
+  id: string;
+  blocked_user: {
+    id: string;
+    name: string | null;
+    username: string | null;
+    profile_picture: string | null;
+  };
+  created_at: string;
+  created_date: string;
+};
+
+type BlockIdentityScope = {
+  predicates: string[];
+  params: string[];
+};
+
+const blockListSelect = `SELECT b.id, b.blocked_id, b.created_at, b.base44_created_date,
+  b.blocked_name AS imported_blocked_name,
+  u.name AS blocked_name, u.username AS blocked_username, u.profile_picture AS blocked_profile_picture
+ FROM blocks b
+ LEFT JOIN users u ON u.id = b.blocked_id`;
+
+function getBlockIdentityScope(user: D1User, prefix: "blocker" | "blocked"): BlockIdentityScope {
+  const predicates = [`${prefix}_id = ?`];
+  const params = [user.id];
+
+  if (user.clerk_user_id) {
+    predicates.push(`${prefix}_clerk_user_id = ?`);
+    params.push(user.clerk_user_id);
+  }
+
+  const legacyUserId = user.legacy_base44_user_id?.trim();
+
+  if (legacyUserId) {
+    predicates.push(`${prefix}_legacy_base44_user_id = ?`);
+    params.push(legacyUserId);
+  }
+
+  return { predicates, params };
+}
+
+function getBlockIdentityValues(user: Pick<D1User, "id" | "clerk_user_id" | "legacy_base44_user_id">): string[] {
+  return [
+    user.id,
+    user.clerk_user_id,
+    user.legacy_base44_user_id?.trim() || null,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function getFollowUserPredicate(prefix: "follower" | "following", values: string[]): string {
+  const columns = [`${prefix}_id`, `${prefix}_clerk_user_id`, `${prefix}_legacy_base44_user_id`];
+  return `(${columns.map((column) => `${column} IN (${values.map(() => "?").join(", ")})`).join(" OR ")})`;
+}
+
+function toPublicBlock(block: D1Block): PublicBlock {
+  const name = block.blocked_name || block.imported_blocked_name || null;
+  const createdAt = block.base44_created_date || block.created_at;
+
+  return {
+    id: block.id,
+    blocked_user: {
+      id: block.blocked_id,
+      name,
+      username: block.blocked_username,
+      profile_picture: block.blocked_profile_picture,
+    },
+    created_at: createdAt,
+    created_date: createdAt,
+  };
+}
+
 type PublicPlaylistLike = {
   id: string;
   playlist_id: string;
@@ -3585,6 +3716,285 @@ async function deletePodcastLikeResponse(request: Request, env: Env, id: string)
   return jsonResponse({ ok: true, deleted: true }, 200, corsHeaders);
 }
 
+async function blockListResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const limit = parseSavedContentLimit(request);
+  const blockerScope = getBlockIdentityScope(auth.user!, "blocker");
+  const { results } = await env.DB.prepare(
+    `${blockListSelect}
+     WHERE ${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")}
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(b.base44_created_date), ''), b.created_at)) DESC,
+       b.created_at DESC, b.id DESC
+     LIMIT ?`,
+  )
+    .bind(...blockerScope.params, limit)
+    .all<D1Block>();
+  const blocks = (results || []).map(toPublicBlock);
+
+  return jsonResponse(
+    {
+      ok: true,
+      data: blocks,
+      items: blocks,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function parseBlockPayload(request: Request): Promise<{ blockedId: string }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const blockedId = validateBoundedString((body as Record<string, unknown>).blocked_id, "blocked_id", 128, true);
+
+  return { blockedId: blockedId! };
+}
+
+async function createBlockResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parseBlockPayload(request);
+  const targetUser = await env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, created_at, updated_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(payload.blockedId)
+    .first<D1User>();
+
+  if (!targetUser) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const currentUser = auth.user!;
+
+  if (targetUser.id === currentUser.id) {
+    throw new PodcastPlayError(400, "invalid-request", "Cannot block yourself");
+  }
+
+  const blockerScope = getBlockIdentityScope(currentUser, "blocker");
+  const existing = await env.DB.prepare(
+    `SELECT id FROM blocks
+     WHERE (${blockerScope.predicates.join(" OR ")})
+       AND blocked_id = ?
+     LIMIT 1`,
+  )
+    .bind(...blockerScope.params, targetUser.id)
+    .first<{ id: string }>();
+  const blockId = existing?.id || crypto.randomUUID();
+  const currentIdentityValues = getBlockIdentityValues(currentUser);
+  const targetIdentityValues = getBlockIdentityValues(targetUser);
+  const currentAsFollower = getFollowUserPredicate("follower", currentIdentityValues);
+  const targetAsFollowing = getFollowUserPredicate("following", targetIdentityValues);
+  const targetAsFollower = getFollowUserPredicate("follower", targetIdentityValues);
+  const currentAsFollowing = getFollowUserPredicate("following", currentIdentityValues);
+  const deleteFollowsStatement = env.DB.prepare(
+    `DELETE FROM follows
+     WHERE (${currentAsFollower} AND ${targetAsFollowing})
+        OR (${targetAsFollower} AND ${currentAsFollowing})`,
+  )
+    .bind(
+      ...currentIdentityValues,
+      ...currentIdentityValues,
+      ...currentIdentityValues,
+      ...targetIdentityValues,
+      ...targetIdentityValues,
+      ...targetIdentityValues,
+      ...targetIdentityValues,
+      ...targetIdentityValues,
+      ...targetIdentityValues,
+      ...currentIdentityValues,
+      ...currentIdentityValues,
+      ...currentIdentityValues,
+    );
+
+  if (!existing) {
+    await env.DB.batch([
+      env.DB.prepare(
+      `INSERT INTO blocks (
+         id, blocker_id, blocker_clerk_user_id, blocker_legacy_base44_user_id,
+         blocked_id, blocked_clerk_user_id, blocked_legacy_base44_user_id
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(blocker_id, blocked_id) DO NOTHING`,
+      )
+        .bind(
+        blockId,
+        currentUser.id,
+        auth.claims!.userId,
+        currentUser.legacy_base44_user_id,
+        targetUser.id,
+        targetUser.clerk_user_id,
+        targetUser.legacy_base44_user_id,
+        ),
+      deleteFollowsStatement,
+    ]);
+  } else {
+    await env.DB.batch([deleteFollowsStatement]);
+  }
+
+  const block = await env.DB.prepare(
+    `${blockListSelect}
+     WHERE (${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+       AND b.blocked_id = ?
+     LIMIT 1`,
+  )
+    .bind(...blockerScope.params, targetUser.id)
+    .first<D1Block>();
+
+  if (!block) {
+    throw new Error("Block creation failed");
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      block: toPublicBlock(block),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function deleteBlockResponse(request: Request, env: Env, id: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const blockerScope = getBlockIdentityScope(auth.user!, "blocker");
+  const result = await env.DB.prepare(
+    `DELETE FROM blocks
+     WHERE id = ?
+       AND (${blockerScope.predicates.join(" OR ")})`,
+  )
+    .bind(id, ...blockerScope.params)
+    .run();
+  const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+  if (changes === 0) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ ok: true, deleted: true }, 200, corsHeaders);
+}
+
+async function blockStatusResponse(request: Request, env: Env, targetUserId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const targetUser = await env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, created_at, updated_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(targetUserId)
+    .first<D1User>();
+
+  if (!targetUser) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const currentUser = auth.user!;
+  const currentAsBlocker = getBlockIdentityScope(currentUser, "blocker");
+  const targetAsBlocked = getBlockIdentityScope(targetUser, "blocked");
+  const targetAsBlocker = getBlockIdentityScope(targetUser, "blocker");
+  const currentAsBlocked = getBlockIdentityScope(currentUser, "blocked");
+  const outbound = await env.DB.prepare(
+    `SELECT id FROM blocks
+     WHERE (${currentAsBlocker.predicates.join(" OR ")})
+       AND (${targetAsBlocked.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(...currentAsBlocker.params, ...targetAsBlocked.params)
+    .first<{ id: string }>();
+  const inbound = outbound ? null : await env.DB.prepare(
+    `SELECT 1 AS found FROM blocks
+     WHERE (${targetAsBlocker.predicates.join(" OR ")})
+       AND (${currentAsBlocked.predicates.join(" OR ")})
+     LIMIT 1`,
+  )
+    .bind(...targetAsBlocker.params, ...currentAsBlocked.params)
+    .first<{ found: number }>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      hidden: Boolean(outbound || inbound),
+      can_unblock: Boolean(outbound),
+      outbound_block_id: outbound?.id || null,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function hiddenBlockUsersResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const blockerScope = getBlockIdentityScope(auth.user!, "blocker");
+  const blockedScope = getBlockIdentityScope(auth.user!, "blocked");
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT
+       CASE
+         WHEN ${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")}
+         THEN b.blocked_id
+         ELSE b.blocker_id
+       END AS user_id
+     FROM blocks b
+     WHERE (${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+        OR (${blockedScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})`,
+  )
+    .bind(...blockerScope.params, ...blockerScope.params, ...blockedScope.params)
+    .all<{ user_id: string }>();
+  const hiddenUserIds = [...new Set((results || []).map((row) => row.user_id).filter((userId) => userId && userId !== auth.user!.id))];
+
+  return jsonResponse(
+    {
+      ok: true,
+      user_ids: hiddenUserIds,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function playlistsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const url = new URL(request.url);
@@ -4214,6 +4624,24 @@ export default {
         return withCors(await followsResponse(request, env), request, env);
       }
 
+      if (request.method === "GET" && isBlocksRoute(pathname)) {
+        return withCors(await blockListResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isBlocksRoute(pathname)) {
+        return withCors(await createBlockResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isHiddenBlockUsersRoute(pathname)) {
+        return withCors(await hiddenBlockUsersResponse(request, env), request, env);
+      }
+
+      const blockStatusTargetId = getBlockStatusTargetId(pathname);
+
+      if (request.method === "GET" && blockStatusTargetId) {
+        return withCors(await blockStatusResponse(request, env, blockStatusTargetId), request, env);
+      }
+
       if ((request.method === "GET" || request.method === "POST") && isTopPodcastsRoute(pathname)) {
         return withCors(await topPodcastsByPlaybackResponse(request, env), request, env);
       }
@@ -4277,6 +4705,12 @@ export default {
 
       if (request.method === "DELETE" && episodeProgressId) {
         return withCors(await deleteEpisodeProgressResponse(request, env, episodeProgressId), request, env);
+      }
+
+      const blockId = getBlockId(pathname);
+
+      if (request.method === "DELETE" && blockId) {
+        return withCors(await deleteBlockResponse(request, env, blockId), request, env);
       }
 
       const playlistId = getPlaylistId(pathname);

@@ -6,6 +6,7 @@ import FollowButton from '@/components/profile/FollowButton';
 import { ArrowLeft, UserCircle2, Ban } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageTransition from '@/components/common/PageTransition';
+import { t } from '@/lib/i18n';
 
 export default function UserProfile() {
   const { userId } = useParams();
@@ -17,25 +18,39 @@ export default function UserProfile() {
   const [followStatus, setFollowStatus] = useState(null); // null | 'pending' | 'accepted'
   const [theyFollowMe, setTheyFollowMe] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
+  const [authResolved, setAuthResolved] = useState(false);
+  const [blockStatusReady, setBlockStatusReady] = useState(false);
+  const [blockStatusError, setBlockStatusError] = useState('');
   const [isBlocked, setIsBlocked] = useState(false);
+  const [hasOutboundBlock, setHasOutboundBlock] = useState(false);
+  const [blockRecordId, setBlockRecordId] = useState(null);
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [blockLoading, setBlockLoading] = useState(false);
+  const [blockError, setBlockError] = useState('');
 
   useEffect(() => {
-    voxylApi.auth.me().then(setCurrentUser).catch(() => {});
+    voxylApi.auth.me().then(user => {
+      setCurrentUser(user);
+      setAuthResolved(true);
+    }).catch(error => {
+      if (error?.status && error.status !== 401) {
+        console.error('[UserProfile] Failed to load current user', { error });
+      }
+      setAuthResolved(true);
+    });
     // Fetch public profile data (including picture) via service role
     voxylApi.functions.invoke('getPublicUserProfile', { userId })
       .then(res => {
         const data = res.data;
         setProfileUser(prev => ({ ...prev, ...data }));
       })
-      .catch(() => {});
+      .catch(error => console.error('[UserProfile] Failed to load public profile', { userId, error }));
   }, [userId]);
 
   useEffect(() => {
     voxylApi.entities.Follow.filter({ following_id: userId, status: 'accepted' })
       .then(follows => setFollowersCount(follows.length))
-      .catch(() => {});
+      .catch(error => console.error('[UserProfile] Failed to load followers count', { userId, error }));
 
     voxylApi.entities.Follow.filter({ follower_id: userId })
       .then(follows => {
@@ -47,7 +62,7 @@ export default function UserProfile() {
           });
         }
       })
-      .catch(() => {});
+      .catch(error => console.error('[UserProfile] Failed to load follower profile hint', { userId, error }));
   }, [userId]);
 
   useEffect(() => {
@@ -67,11 +82,21 @@ export default function UserProfile() {
           }));
         }
       })
-      .catch(() => setLoading(false));
+      .catch(error => {
+        console.error('[UserProfile] Failed to load user playlists', { userId, error });
+        setLoading(false);
+      });
   }, [userId]);
 
   useEffect(() => {
     if (!currentUser) return;
+    if (currentUser.id === userId) {
+      setBlockStatusReady(true);
+      setIsBlocked(false);
+      setHasOutboundBlock(false);
+      setBlockRecordId(null);
+      return;
+    }
 
     // Check follow status for pending
     voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
@@ -80,52 +105,66 @@ export default function UserProfile() {
           setFollowStatus('pending');
         }
       })
-      .catch(() => {});
+      .catch(error => console.error('[UserProfile] Failed to load follow status', { currentUserId: currentUser.id, userId, error }));
 
     // Check if they follow me
     voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id, status: 'accepted' })
       .then(follows => setTheyFollowMe(follows.length > 0))
-      .catch(() => {});
+      .catch(error => console.error('[UserProfile] Failed to load reciprocal follow status', { currentUserId: currentUser.id, userId, error }));
 
-    // Check block status
-    voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId })
-      .then(blocks => setIsBlocked(blocks.length > 0))
-      .catch(() => {});
+    setBlockStatusReady(false);
+    setBlockStatusError('');
+    voxylApi.blocks.status(userId)
+      .then(status => {
+        setIsBlocked(Boolean(status.hidden));
+        setHasOutboundBlock(Boolean(status.can_unblock));
+        setBlockRecordId(status.outbound_block_id || null);
+        setBlockStatusReady(true);
+      })
+      .catch(error => {
+        console.error('[UserProfile] Failed to load block status', { currentUserId: currentUser.id, userId, error });
+        setBlockStatusError(t('blockLoadHiddenError'));
+        setBlockStatusReady(false);
+      });
   }, [currentUser, userId]);
 
   const handleBlock = async () => {
     if (!currentUser) return;
     setBlockLoading(true);
-    if (isBlocked) {
-      const blocks = await voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: userId });
-      if (blocks.length > 0) await voxylApi.entities.Block.delete(blocks[0].id);
-      setIsBlocked(false);
-    } else {
-      await voxylApi.entities.Block.create({
-        blocker_id: currentUser.id,
-        blocker_email: currentUser.email,
-        blocked_id: userId,
-        blocked_email: playlists[0]?.creator_email || '',
-        blocked_name: playlists[0]?.creator_name || '',
-      });
-      setIsBlocked(true);
-      // Remove any existing follow in both directions
-      const myFollows = await voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId });
-      const theirFollows = await voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id });
-      await Promise.all([
-        ...myFollows.map(f => voxylApi.entities.Follow.delete(f.id)),
-        ...theirFollows.map(f => voxylApi.entities.Follow.delete(f.id)),
-      ]);
-      setFollowStatus(null);
+    setBlockError('');
+    try {
+      if (hasOutboundBlock) {
+        if (blockRecordId) {
+          await voxylApi.blocks.delete(blockRecordId);
+        }
+        setBlockRecordId(null);
+        setIsBlocked(false);
+        setHasOutboundBlock(false);
+        setBlockStatusReady(true);
+      } else {
+        const block = await voxylApi.blocks.create(userId);
+        setBlockRecordId(block?.id || null);
+        setIsBlocked(true);
+        setHasOutboundBlock(true);
+        setBlockStatusReady(true);
+        setFollowStatus(null);
+      }
+      setShowBlockConfirm(false);
+    } catch (error) {
+      console.error('[UserProfile] Failed to update block status', { userId, isBlocked, error });
+      setBlockError(t('blockActionError'));
+    } finally {
+      setBlockLoading(false);
     }
-    setBlockLoading(false);
-    setShowBlockConfirm(false);
   };
 
   const displayName = profileUser?.username
     ? `@${profileUser.username}`
     : profileUser?.full_name || 'Usuário';
   const isOwnProfile = currentUser?.id === userId;
+  const inboundBlocked = currentUser && !isOwnProfile && isBlocked && !hasOutboundBlock;
+  const canShowProfileContent = authResolved && (!currentUser || isOwnProfile || (blockStatusReady && !isBlocked));
+  const canShowBlockButton = currentUser && !isOwnProfile && !inboundBlocked && (!isBlocked || hasOutboundBlock);
 
   return (
     <PageTransition>
@@ -137,13 +176,13 @@ export default function UserProfile() {
           </button>
           <h1 className="text-xl font-grotesk font-bold">Perfil</h1>
         </div>
-        {currentUser && !isOwnProfile && (
+        {canShowBlockButton && (
           <button
             onClick={() => setShowBlockConfirm(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-muted-foreground bg-secondary border border-border"
           >
             <Ban size={13} />
-            {isBlocked ? 'Bloqueado' : 'Bloquear'}
+            {hasOutboundBlock ? 'Bloqueado' : 'Bloquear'}
           </button>
         )}
       </div>
@@ -161,7 +200,28 @@ export default function UserProfile() {
         <h2 className="text-lg font-grotesk font-bold">{displayName}</h2>
         <p className="text-sm text-muted-foreground mb-3">{followersCount} seguidores · {playlists.length} playlists</p>
 
-        {currentUser && !isOwnProfile && !isBlocked && (
+        {currentUser && !isOwnProfile && blockStatusError && (
+          <div className="mt-2 rounded-2xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground flex items-center gap-2">
+            <span>{blockStatusError}</span>
+            <button type="button" onClick={() => {
+              setBlockStatusError('');
+              setBlockStatusReady(false);
+              voxylApi.blocks.status(userId)
+                .then(status => {
+                  setIsBlocked(Boolean(status.hidden));
+                  setHasOutboundBlock(Boolean(status.can_unblock));
+                  setBlockRecordId(status.outbound_block_id || null);
+                  setBlockStatusReady(true);
+                })
+                .catch(error => {
+                  console.error('[UserProfile] Failed to retry block status', { currentUserId: currentUser.id, userId, error });
+                  setBlockStatusError(t('blockLoadHiddenError'));
+                });
+            }} className="text-primary font-semibold">{t('blockRetry')}</button>
+          </div>
+        )}
+
+        {currentUser && !isOwnProfile && !isBlocked && blockStatusReady && (
           <FollowButton
             currentUserId={currentUser.id}
             currentUserEmail={currentUser.email}
@@ -178,12 +238,16 @@ export default function UserProfile() {
           />
         )}
 
-        {isBlocked && (
-          <p className="text-xs text-muted-foreground mt-1">Você bloqueou este usuário</p>
+        {hasOutboundBlock && (
+          <p className="text-xs text-muted-foreground mt-1">{t('blockYouBlockedUser')}</p>
+        )}
+
+        {inboundBlocked && (
+          <p className="text-xs text-muted-foreground mt-1">{t('blockProfileUnavailable')}</p>
         )}
       </div>
 
-      {!isBlocked && (
+      {canShowProfileContent && (
         <div className="px-4 pb-4">
           <h3 className="font-semibold mb-3">Playlists</h3>
           {loading ? (
@@ -216,19 +280,22 @@ export default function UserProfile() {
               className="w-full max-w-md bg-card border-t border-border rounded-t-3xl p-5"
             >
               <h3 className="font-grotesk font-bold text-base mb-2">
-                {isBlocked ? 'Desbloquear usuário?' : 'Bloquear usuário?'}
+                {hasOutboundBlock ? 'Desbloquear usuário?' : 'Bloquear usuário?'}
               </h3>
               <p className="text-sm text-muted-foreground mb-5">
-                {isBlocked
+                {hasOutboundBlock
                   ? `${displayName} poderá te seguir novamente e ver seus conteúdos.`
                   : `Você não verá mais o conteúdo de ${displayName} e ele não verá o seu. O seguimento entre vocês será removido.`}
               </p>
+              {blockError && (
+                <p className="text-xs text-destructive mb-3">{blockError}</p>
+              )}
               <button
                 onClick={handleBlock}
                 disabled={blockLoading}
                 className="w-full py-3 rounded-2xl bg-destructive text-white font-semibold text-sm mb-2 disabled:opacity-50"
               >
-                {blockLoading ? 'Aguarde...' : isBlocked ? 'Desbloquear' : 'Bloquear'}
+                {blockLoading ? 'Aguarde...' : hasOutboundBlock ? 'Desbloquear' : 'Bloquear'}
               </button>
               <button onClick={() => setShowBlockConfirm(false)} className="w-full py-3 rounded-2xl bg-secondary text-sm font-medium">
                 Cancelar

@@ -2,29 +2,43 @@ import { useState, useEffect } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { X, UserX, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { t } from '@/lib/i18n';
 
 export default function BlockedUsersModal({ user, onClose, onCountChange }) {
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [unblocking, setUnblocking] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    voxylApi.entities.Block.filter({ blocker_id: user.id })
+    setError('');
+    voxylApi.blocks.listOutbound()
       .then(blocks => {
         setBlockedUsers(blocks);
         onCountChange?.(blocks.length);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(error => {
+        console.error('[BlockedUsersModal] Failed to load blocked users', { userId: user.id, error });
+        setError(t('blockLoadListError'));
+        setLoading(false);
+      });
   }, [user.id, onCountChange]);
 
-  const handleUnblock = async (blockId, blockedId) => {
+  const handleUnblock = async (blockId) => {
     setUnblocking(blockId);
-    await voxylApi.entities.Block.delete(blockId);
-    const updated = blockedUsers.filter(b => b.id !== blockId);
-    setBlockedUsers(updated);
-    onCountChange?.(updated.length);
-    setUnblocking(null);
+    setError('');
+    try {
+      await voxylApi.blocks.delete(blockId);
+      const updated = blockedUsers.filter(b => b.id !== blockId);
+      setBlockedUsers(updated);
+      onCountChange?.(updated.length);
+    } catch (error) {
+      console.error('[BlockedUsersModal] Failed to unblock user', { blockId, error });
+      setError(t('blockUnblockError'));
+    } finally {
+      setUnblocking(null);
+    }
   };
 
   return (
@@ -49,6 +63,11 @@ export default function BlockedUsersModal({ user, onClose, onCountChange }) {
         </div>
 
         <div className="overflow-y-auto flex-1 px-5">
+          {error && (
+            <div className="mb-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
           {loading ? (
             <div className="flex justify-center py-10">
               <Loader2 size={24} className="animate-spin text-muted-foreground" />
@@ -74,12 +93,14 @@ export default function BlockedUsersModal({ user, onClose, onCountChange }) {
                         <UserX size={18} className="text-destructive" />
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm text-foreground truncate">{block.blocked_name || 'Usuário'}</p>
-                        <p className="text-xs text-muted-foreground truncate">{block.blocked_email}</p>
+                        <p className="font-semibold text-sm text-foreground truncate">{block.blocked_user?.username ? `@${block.blocked_user.username}` : block.blocked_user?.name || 'Usuário'}</p>
+                        {block.blocked_user?.username && block.blocked_user?.name && (
+                          <p className="text-xs text-muted-foreground truncate">{block.blocked_user.name}</p>
+                        )}
                       </div>
                     </div>
                     <button
-                      onClick={() => handleUnblock(block.id, block.blocked_id)}
+                      onClick={() => handleUnblock(block.id)}
                       disabled={unblocking === block.id}
                       className="px-3 py-1.5 rounded-full bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-50"
                     >

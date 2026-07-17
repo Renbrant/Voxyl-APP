@@ -114,7 +114,7 @@ export default function MyPlaylistsContent({ user, likedIds, handleLike, blocked
                   liked={likedIds.includes(pl.id)}
                   onLike={handleLike}
                   currentUser={user}
-                  onBlocked={id => setBlockedIds(prev => [...prev, id])}
+                  onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])}
                 />
               </motion.div>
             ))}

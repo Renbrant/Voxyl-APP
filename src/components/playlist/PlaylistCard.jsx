@@ -15,7 +15,7 @@ const GRADIENT_COLORS = [
   'from-green-500 to-cyan-400',
 ];
 
-export default function PlaylistCard({ playlist, onLike, liked, compact = false, currentUser, onBlocked, onEdited }) {
+export default function PlaylistCard({ playlist, onLike = null, liked = false, compact = false, currentUser = null, onBlocked = null, onEdited = null }) {
   const [editingPlaylist, setEditingPlaylist] = useState(false);
   const [coverImage, setCoverImage] = useState(null);
   const gradient = GRADIENT_COLORS[playlist.id?.charCodeAt(0) % GRADIENT_COLORS.length] || GRADIENT_COLORS[0];
