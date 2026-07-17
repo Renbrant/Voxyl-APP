@@ -26,7 +26,10 @@ import {
 } from '../src/lib/episodeProgressCache.js';
 import {
   beginWebEpisodeSourceSwitch,
+  confirmWebResumeSeek,
   createWebPlaybackTransitionCoordinator,
+  createWebResumeTransitionProtection,
+  establishWebPlaybackTransition,
   isObsoleteWebPlaybackError,
   requestGuardedWebPlayback,
 } from '../src/lib/webPlaybackTransition.js';
@@ -581,6 +584,120 @@ function deferred() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function createFakeSeekAudio({
+  initialTime = 0,
+  ignoreSeekBeforeMetadata = true,
+  reportAssignedWhileSeeking = false,
+  markSeekingOnAssign = false,
+  throwOnAssignments = [],
+} = {}) {
+  const listeners = new Map();
+  let current = initialTime;
+  let seekableRanges = [];
+  let assignmentCount = 0;
+  const audio = {
+    src: '',
+    currentSrc: '',
+    readyState: 0,
+    duration: Number.NaN,
+    networkState: 1,
+    seeking: false,
+    seekAssignments: [],
+    seekable: {
+      length: 0,
+      start(index) { return seekableRanges[index]?.[0] ?? 0; },
+      end(index) { return seekableRanges[index]?.[1] ?? audio.duration; },
+    },
+    get currentTime() {
+      return current;
+    },
+    set currentTime(value) {
+      assignmentCount += 1;
+      this.seekAssignments.push(value);
+      const errorName = throwOnAssignments[assignmentCount - 1];
+      if (errorName) {
+        const error = new Error(`${errorName} setting currentTime`);
+        error.name = errorName;
+        throw error;
+      }
+      if (markSeekingOnAssign) this.seeking = true;
+      if (reportAssignedWhileSeeking || !ignoreSeekBeforeMetadata || this.readyState >= 1) {
+        current = value;
+      }
+    },
+    load() {
+      this.currentSrc = this.src;
+    },
+    addEventListener(type, listener) {
+      const currentListeners = listeners.get(type) || new Set();
+      currentListeners.add(listener);
+      listeners.set(type, currentListeners);
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    listenerCount(type) {
+      return listeners.get(type)?.size ?? 0;
+    },
+    dispatch(type) {
+      for (const listener of [...(listeners.get(type) || [])]) {
+        listener();
+      }
+    },
+    setSeekableRanges(ranges, duration = 140) {
+      seekableRanges = ranges;
+      this.readyState = 1;
+      this.duration = duration;
+      this.seekable = {
+        get length() { return seekableRanges.length; },
+        start(index) { return seekableRanges[index][0]; },
+        end(index) { return seekableRanges[index][1]; },
+      };
+    },
+    makeSeekable(duration = 140) {
+      this.setSeekableRanges([[0, duration]], duration);
+    },
+    completeSeek(position = current) {
+      current = position;
+      this.seeking = false;
+      this.dispatch('seeked');
+    },
+    async play() {},
+  };
+  return audio;
+}
+
+const WEB_RESUME_SEEK_EVENTS = [
+  'loadedmetadata',
+  'durationchange',
+  'canplay',
+  'canplaythrough',
+  'progress',
+  'seeked',
+  'timeupdate',
+];
+
+function countWebResumeSeekListeners(audio) {
+  return WEB_RESUME_SEEK_EVENTS.reduce((count, type) => count + audio.listenerCount(type), 0);
+}
+
+async function runConfirmedWebPlayback({ coordinator, audio, transition, resumeAt, guardState }) {
+  await establishWebPlaybackTransition({
+    audio,
+    coordinator,
+    transition,
+    transitionLabel: 'test-play',
+    resumeAt,
+    retryDelays: [0],
+    waitForMediaReady: () => Promise.resolve(),
+    logger: { log() {}, warn() {} },
+  });
+  if (guardState.guard?.transitionGeneration === transition.generation) {
+    guardState.guard = null;
+  }
+  guardState.timersStarted = true;
 }
 
 function isFinishedRow(row) {
@@ -2352,6 +2469,680 @@ describe('EpisodeProgress frontend cache helpers', () => {
 
     assert.equal(selected.resumeAt, 50);
     assert.equal(selected.durationSeconds, 0);
+  });
+
+  it('confirms a delayed web resume seek before establishing playback or saving progress', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/resume.mp3';
+    const audio = createFakeSeekAudio();
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const guardState = {
+      guard: { audioUrl, position_seconds: 65, transitionGeneration: transition.generation },
+      timersStarted: false,
+    };
+    let saved = null;
+
+    const playback = runConfirmedWebPlayback({
+      coordinator,
+      audio,
+      transition,
+      resumeAt: 65,
+      guardState,
+    });
+
+    await Promise.resolve();
+    assert.equal(audio.currentTime, 0);
+    assert.deepEqual(audio.seekAssignments, [65]);
+    assert.equal(coordinator.getPhase(transition), 'switching');
+    assert.equal(guardState.timersStarted, false);
+
+    audio.currentTime = 1;
+    if (!coordinator.shouldIgnoreEvent('timeupdate', audio) &&
+        !shouldBlockProgressSaveForGuard(guardState.guard, audioUrl, audio.currentTime)) {
+      saved = audio.currentTime;
+    }
+    assert.equal(saved, null);
+
+    audio.makeSeekable(140);
+    audio.dispatch('loadedmetadata');
+    assert.equal(guardState.timersStarted, false);
+    audio.completeSeek(65);
+    await playback;
+
+    assert.equal(Math.abs(audio.currentTime - 65) <= 0.75, true);
+    assert.equal(coordinator.getPhase(transition), 'established');
+    assert.equal(guardState.timersStarted, true);
+    assert.equal(guardState.guard, null);
+
+    audio.currentTime = 105;
+    if (!coordinator.shouldIgnoreEvent('pause', audio) &&
+        !shouldBlockProgressSaveForGuard(guardState.guard, audioUrl, audio.currentTime)) {
+      saved = audio.currentTime;
+    }
+    assert.equal(saved, 105);
+  });
+
+  it('keeps lower progress blocked when a web resume seek never succeeds', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/seek-timeout.mp3';
+    const audio = createFakeSeekAudio();
+    const timers = [];
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const guard = { audioUrl, position_seconds: 65, transitionGeneration: transition.generation };
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+      setTimeoutFn(callback, delay) {
+        const timer = { callback, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeoutFn() {},
+    }).catch((error) => error);
+
+    await Promise.resolve();
+    audio.currentTime = 41;
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, audio.currentTime), true);
+    timers[0].callback();
+    const error = await seek;
+
+    assert.equal(error instanceof Error, true);
+    assert.equal(coordinator.getPhase(transition), 'switching');
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, 41), true);
+    assert.equal(countWebResumeSeekListeners(audio), 0);
+  });
+
+  it('treats a replaced transition timeout as obsolete without affecting the current transition', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio();
+    const timers = [];
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a-timeout.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const seekA = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transitionA),
+      timeoutMs: 1000,
+      setTimeoutFn(callback, delay) {
+        const timer = { callback, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeoutFn() {},
+    }).catch((error) => error);
+
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b-current.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+
+    timers[0].callback();
+    const error = await seekA;
+
+    assert.equal(isObsoleteWebPlaybackError(error), true);
+    assert.equal(coordinator.isCurrent(transitionB), true);
+    assert.equal(coordinator.getPhase(transitionB), 'switching');
+    assert.equal(countWebResumeSeekListeners(audio), 0);
+  });
+
+  it('cancels an older web resume seek when a newer transition starts', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio();
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/a.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const seekA = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transitionA),
+      timeoutMs: 1000,
+    }).catch((error) => error);
+
+    beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: 0,
+    });
+    audio.makeSeekable(140);
+    audio.dispatch('loadedmetadata');
+    audio.completeSeek(65);
+    const error = await seekA;
+
+    assert.equal(isObsoleteWebPlaybackError(error), true);
+    assert.equal(coordinator.isCurrent(transitionA), false);
+    assert.equal(countWebResumeSeekListeners(audio), 0);
+  });
+
+  it('lets resumeAt zero establish immediately without a seek wait', async () => {
+    const audio = createFakeSeekAudio();
+    const position = await confirmWebResumeSeek({
+      audio,
+      resumeAt: 0,
+      isCurrent: () => true,
+      timeoutMs: 1000,
+    });
+
+    assert.equal(position, 0);
+    assert.deepEqual(audio.seekAssignments, []);
+  });
+
+  it('still applies skip-start web seeks before playback establishment', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio();
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/skip-start.mp3',
+      resumeAt: 15,
+      durationSeconds: 0,
+    });
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 15,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    assert.equal(audio.currentTime, 0);
+    audio.makeSeekable(200);
+    audio.dispatch('loadedmetadata');
+    audio.completeSeek(15);
+    await seek;
+
+    assert.equal(audio.currentTime, 15);
+  });
+
+  it('does not confirm a synchronous currentTime readback while seeking is still pending', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio({
+      ignoreSeekBeforeMetadata: false,
+      markSeekingOnAssign: true,
+      reportAssignedWhileSeeking: true,
+    });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/pending-seek.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let resolved = false;
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    }).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    assert.equal(audio.currentTime, 65);
+    assert.equal(audio.seeking, true);
+    assert.equal(resolved, false);
+
+    audio.dispatch('timeupdate');
+    await Promise.resolve();
+    assert.equal(resolved, false);
+
+    audio.completeSeek(65);
+    await seek;
+    assert.equal(resolved, true);
+    assert.equal(audio.listenerCount('seeked'), 0);
+  });
+
+  it('does not treat readiness events as web resume seek confirmation', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio({
+      ignoreSeekBeforeMetadata: false,
+      reportAssignedWhileSeeking: true,
+    });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/readiness-only.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let resolved = false;
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    }).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    assert.equal(audio.currentTime, 65);
+    assert.equal(audio.seeking, false);
+
+    for (const type of ['loadedmetadata', 'progress', 'canplay']) {
+      audio.dispatch(type);
+      await Promise.resolve();
+      assert.equal(resolved, false);
+    }
+
+    audio.completeSeek(65);
+    await seek;
+    assert.equal(resolved, true);
+    assert.equal(countWebResumeSeekListeners(audio), 0);
+  });
+
+  it('does not create web pending-seek protection for native playback decisions', () => {
+    const protection = createWebResumeTransitionProtection({
+      isWebPlayback: false,
+      shouldProtectCanonicalResume: true,
+      audioUrl: 'https://cdn.example.com/native.mp3',
+      resumeAt: 65,
+      transitionGeneration: 12,
+    });
+
+    assert.equal(protection.progressRegressionGuard, null);
+    assert.equal(protection.pendingWebSeek, null);
+  });
+
+  it('does not repeat currentTime assignments on readiness events while a seek is pending', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio({
+      ignoreSeekBeforeMetadata: false,
+      reportAssignedWhileSeeking: true,
+      markSeekingOnAssign: true,
+    });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/no-repeat-readiness.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    assert.deepEqual(audio.seekAssignments, [65]);
+
+    for (const type of ['loadedmetadata', 'durationchange', 'progress', 'canplay', 'canplaythrough']) {
+      audio.dispatch(type);
+      await Promise.resolve();
+      assert.deepEqual(audio.seekAssignments, [65]);
+    }
+
+    audio.completeSeek(65);
+    await seek;
+  });
+
+  it('allows timeupdate to confirm only after this helper assigns the latest seek', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio({ initialTime: 65, ignoreSeekBeforeMetadata: false });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/timeupdate-confirm.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let resolved = false;
+
+    audio.dispatch('timeupdate');
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    }).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    assert.equal(resolved, false);
+    assert.deepEqual(audio.seekAssignments, [65]);
+
+    audio.dispatch('timeupdate');
+    await seek;
+    assert.equal(resolved, true);
+  });
+
+  it('retries a transient currentTime setter error after metadata becomes usable', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio({
+      throwOnAssignments: ['InvalidStateError'],
+      ignoreSeekBeforeMetadata: false,
+    });
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/transient-setter.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let resolved = false;
+    const playback = runConfirmedWebPlayback({
+      coordinator,
+      audio,
+      transition,
+      resumeAt: 65,
+      guardState: { guard: null, timersStarted: false },
+    }).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    assert.equal(resolved, false);
+    assert.deepEqual(audio.seekAssignments, [65]);
+
+    audio.makeSeekable(140);
+    audio.dispatch('loadedmetadata');
+    await Promise.resolve();
+    assert.deepEqual(audio.seekAssignments, [65, 65]);
+    assert.equal(resolved, false);
+
+    audio.completeSeek(65);
+    await playback;
+    assert.equal(resolved, true);
+    assert.equal(coordinator.getPhase(transition), 'established');
+    assert.equal(countWebResumeSeekListeners(audio), 0);
+  });
+
+  it('waits for seekable ranges to include the resume position before confirming', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = createFakeSeekAudio();
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/range-growth.mp3',
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let resolved = false;
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    }).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    audio.setSeekableRanges([[0, 30]], 140);
+    audio.dispatch('progress');
+    await Promise.resolve();
+    assert.equal(resolved, false);
+    assert.deepEqual(audio.seekAssignments, [65]);
+
+    audio.setSeekableRanges([[0, 80]], 140);
+    audio.dispatch('progress');
+    await Promise.resolve();
+    assert.equal(resolved, false);
+    audio.completeSeek(65);
+    await seek;
+
+    assert.equal(resolved, true);
+    assert.equal(audio.currentTime, 65);
+  });
+
+  it('keeps the guard when currentTime resets before seek confirmation', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/reset-before-seeked.mp3';
+    const audio = createFakeSeekAudio({
+      ignoreSeekBeforeMetadata: false,
+      markSeekingOnAssign: true,
+      reportAssignedWhileSeeking: true,
+    });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    const guardState = {
+      guard: { audioUrl, position_seconds: 65, transitionGeneration: transition.generation },
+      timersStarted: false,
+    };
+    const playback = runConfirmedWebPlayback({
+      coordinator,
+      audio,
+      transition,
+      resumeAt: 65,
+      guardState,
+    });
+
+    await Promise.resolve();
+    audio.seeking = true;
+    audio.currentTime = 0;
+    audio.dispatch('timeupdate');
+    await Promise.resolve();
+
+    assert.equal(guardState.timersStarted, false);
+    assert.equal(shouldBlockProgressSaveForGuard(guardState.guard, audioUrl, 0), true);
+
+    audio.completeSeek(65);
+    await playback;
+    assert.equal(guardState.guard, null);
+    assert.equal(guardState.timersStarted, true);
+  });
+
+  it('keeps failed same-episode resume guarded until a retry confirms the seek', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/retry-same-episode.mp3';
+    const audio = createFakeSeekAudio();
+    const timers = [];
+    const transitionA = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let guard = { audioUrl, position_seconds: 65, pendingSeek: true, transitionGeneration: transitionA.generation };
+    const failedSeek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transitionA),
+      timeoutMs: 1000,
+      setTimeoutFn(callback, delay) {
+        const timer = { callback, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeoutFn() {},
+    }).catch((error) => error);
+
+    timers[0].callback();
+    await failedSeek;
+    coordinator.cancel(transitionA);
+
+    audio.currentTime = 0;
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, audio.currentTime), true);
+
+    const transitionB = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    guard = { ...guard, transitionGeneration: transitionB.generation };
+    const guardState = { guard, timersStarted: false };
+    const retry = runConfirmedWebPlayback({
+      coordinator,
+      audio,
+      transition: transitionB,
+      resumeAt: 65,
+      guardState,
+    });
+
+    await Promise.resolve();
+    assert.equal(guardState.timersStarted, false);
+    audio.makeSeekable(140);
+    audio.dispatch('loadedmetadata');
+    audio.completeSeek(65);
+    await retry;
+
+    assert.equal(guardState.guard, null);
+    assert.equal(guardState.timersStarted, true);
+    audio.currentTime = 20;
+    assert.equal(shouldBlockProgressSaveForGuard(guardState.guard, audioUrl, audio.currentTime), false);
+  });
+
+  it('reruns a failed same-episode skip-start seek instead of using direct audio.play', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/skip-start-retry.mp3';
+    let directPlayCalls = 0;
+    const audio = createFakeSeekAudio();
+    audio.play = async () => {
+      directPlayCalls += 1;
+    };
+    const timers = [];
+    let pendingWebSeek = null;
+    let transitionRuns = 0;
+
+    const startTransition = ({ shouldTimeout = false } = {}) => {
+      transitionRuns += 1;
+      const transition = beginWebEpisodeSourceSwitch({
+        coordinator,
+        audio,
+        audioUrl,
+        resumeAt: 15,
+        durationSeconds: 0,
+      });
+      pendingWebSeek = { audioUrl, position_seconds: 15, transitionGeneration: transition.generation };
+      const seek = (shouldTimeout ? confirmWebResumeSeek({
+        audio,
+        resumeAt: 15,
+        isCurrent: () => coordinator.isCurrent(transition),
+        timeoutMs: 1000,
+        setTimeoutFn(callback, delay) {
+          const timer = { callback, delay };
+          timers.push(timer);
+          return timer;
+        },
+        clearTimeoutFn() {},
+      }) : establishWebPlaybackTransition({
+        audio,
+        coordinator,
+        transition,
+        transitionLabel: 'skip-start-retry',
+        resumeAt: 15,
+        retryDelays: [0],
+        waitForMediaReady: () => Promise.resolve(),
+        logger: { log() {}, warn() {} },
+      })).then(async () => {
+        if (shouldTimeout) {
+          await requestGuardedWebPlayback({
+            audio,
+            transitionLabel: 'skip-start-retry',
+            retryDelays: [0],
+            waitForMediaReady: () => Promise.resolve(),
+            isCurrent: () => coordinator.isCurrent(transition),
+            logger: { log() {}, warn() {} },
+          });
+          coordinator.markEstablished(transition);
+        }
+        if (pendingWebSeek?.transitionGeneration === transition.generation) {
+          pendingWebSeek = null;
+        }
+      }).catch((error) => error);
+      if (shouldTimeout) timers.at(-1).callback();
+      return seek;
+    };
+
+    const failedSeek = startTransition({ shouldTimeout: true });
+    await failedSeek;
+    audio.currentTime = 0;
+    assert.equal(pendingWebSeek?.audioUrl, audioUrl);
+
+    const sameEpisodePlay = () => {
+      if (pendingWebSeek?.audioUrl === audioUrl) {
+        return startTransition();
+      }
+      return audio.play();
+    };
+
+    const retry = sameEpisodePlay();
+    await Promise.resolve();
+    assert.equal(transitionRuns, 2);
+    assert.equal(directPlayCalls, 0);
+
+    audio.makeSeekable(120);
+    audio.dispatch('loadedmetadata');
+    audio.completeSeek(15);
+    await retry;
+
+    assert.equal(pendingWebSeek, null);
+    assert.equal(directPlayCalls, 1);
+    assert.equal(coordinator.getPhase(coordinator.getCurrent()), 'established');
+  });
+
+  it('allows a manual rewind after a web resume transition is established', async () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audioUrl = 'https://cdn.example.com/manual-rewind.mp3';
+    const audio = createFakeSeekAudio({ ignoreSeekBeforeMetadata: false });
+    audio.makeSeekable(140);
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl,
+      resumeAt: 65,
+      durationSeconds: 140,
+    });
+    let guard = { audioUrl, position_seconds: 65, transitionGeneration: transition.generation };
+
+    const seek = confirmWebResumeSeek({
+      audio,
+      resumeAt: 65,
+      isCurrent: () => coordinator.isCurrent(transition),
+      timeoutMs: 1000,
+    });
+    audio.completeSeek(65);
+    await seek;
+    coordinator.markEstablished(transition);
+    guard = null;
+
+    audio.currentTime = 20;
+    assert.equal(coordinator.shouldIgnoreEvent('pause', audio), false);
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, audio.currentTime), false);
   });
 
   it('prevents stale readiness from seeking, clearing loading, or changing the active episode state', async () => {
