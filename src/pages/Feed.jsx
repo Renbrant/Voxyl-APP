@@ -25,6 +25,10 @@ import {
 export default function Feed() {
   const [user, setUser] = useState(null);
   const [blockedIds, setBlockedIds] = useState([]);
+  const [authResolved, setAuthResolved] = useState(false);
+  const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
+  const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
+  const [hiddenUsersError, setHiddenUsersError] = useState('');
   const [followingIds, setFollowingIds] = useState(new Set());
   const [tab, setTab] = useState('trending');
   const [expandedPlaylists, setExpandedPlaylists] = useState(false);
@@ -33,24 +37,46 @@ export default function Feed() {
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
+  const loadHiddenUsers = async (u) => {
+    if (!u?.id) return;
+    const cacheKey = `hidden-users-${u.id}`;
+    setHiddenUsersLoading(true);
+    setHiddenUsersError('');
+    try {
+      const ids = [...new Set(asArray(await voxylApi.blocks.hiddenUserIds()))];
+      setBlockedIds(ids);
+      setCache(cacheKey, ids, TTL_5MIN);
+      setHiddenUsersReady(true);
+    } catch (error) {
+      console.error('[Feed] Failed to load hidden users', { error });
+      const cached = getCache(cacheKey);
+      if (Array.isArray(cached)) {
+        setBlockedIds(cached);
+        setHiddenUsersReady(true);
+      } else {
+        setHiddenUsersReady(false);
+        setHiddenUsersError(t('blockLoadHiddenError'));
+      }
+    } finally {
+      setHiddenUsersLoading(false);
+    }
+  };
+
   useEffect(() => {
     voxylApi.auth.me().then(u => {
       setUser(u);
+      setAuthResolved(true);
       setTab('my-playlists'); // default to personal tab if logged in
-      Promise.all([
-        voxylApi.entities.Block.filter({ blocker_id: u.id }),
-        voxylApi.entities.Block.filter({ blocked_id: u.id }),
-      ]).then(([myBlocks, theirBlocks]) => {
-        const ids = [
-          ...asArray(myBlocks).map(b => b.blocked_id),
-          ...asArray(theirBlocks).map(b => b.blocker_id),
-        ];
-        setBlockedIds([...new Set(ids)]);
-      }).catch(() => {});
+      loadHiddenUsers(u);
       voxylApi.entities.Follow.filter({ follower_id: u.id, status: 'accepted' })
         .then(follows => setFollowingIds(new Set(asArray(follows).map(f => f.following_id))))
-        .catch(() => {});
-    }).catch(() => {}); // guest mode — user stays null
+        .catch(error => console.error('[Feed] Failed to load following list', { userId: u.id, error }));
+    }).catch(error => {
+      if (error?.status && error.status !== 401) {
+        console.error('[Feed] Failed to load current user', { error });
+      }
+      setAuthResolved(true);
+    }); // guest mode — user stays null
   }, []);
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
@@ -63,7 +89,10 @@ export default function Feed() {
     queryClient.invalidateQueries({ queryKey: ['my-playlists'] });
     queryClient.invalidateQueries({ queryKey: ['all-playlists-feed'] });
     queryClient.invalidateQueries({ queryKey: ['user-podcast-plays'] });
-    if (user?.id) refreshPlaylistLikeQuery(queryClient, user.id);
+    if (user?.id) {
+      loadHiddenUsers(user);
+      refreshPlaylistLikeQuery(queryClient, user.id);
+    }
   }, containerRef);
 
   const { data: playlists = [], isLoading } = useQuery({
@@ -136,12 +165,13 @@ export default function Feed() {
     }
   });
 
-  const visiblePlaylists = asArray(playlists).filter(p => {
+  const canRenderSocialContent = !user || hiddenUsersReady;
+  const visiblePlaylists = canRenderSocialContent ? asArray(playlists).filter(p => {
     if (blockedIds.includes(p.creator_id)) return false;
     if (!p.visibility || p.visibility === 'public') return true;
     if (p.visibility === 'friends_only') return user && followingIds.has(p.creator_id);
     return false;
-  });
+  }) : [];
 
   const sortedPlaylists = tab === 'trending'
     ? [...visiblePlaylists].sort((a, b) => (b.plays_count || 0) - (a.plays_count || 0))
@@ -151,7 +181,7 @@ export default function Feed() {
   const recentPlaylists = useMemo(() =>
     [...visiblePlaylists]
       .filter(p => (p.plays_count || 0) > 5)
-      .sort((a, b) => new Date(b.created_date) - new Date(a.created_date))
+      .sort((a, b) => new Date(b.created_date).getTime() - new Date(a.created_date).getTime())
       .slice(0, 10),
     [visiblePlaylists]
   );
@@ -170,6 +200,7 @@ export default function Feed() {
       <VoxylHeader
         subtitle={t('feedSubtitle')}
         title={<span className="text-gradient font-grotesk">Voxyl</span>}
+        right={null}
       />
 
       {/* Tabs */}
@@ -210,9 +241,19 @@ export default function Feed() {
 
       {/* Content Grid */}
       <div className="px-4 pb-24">
+        {authResolved && user && !hiddenUsersReady && (
+          <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+            <span>{hiddenUsersLoading ? t('loading') : hiddenUsersError || t('blockLoadHiddenError')}</span>
+            {!hiddenUsersLoading && (
+              <button type="button" onClick={() => loadHiddenUsers(user)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+                {t('blockRetry')}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* My Playlists Tab */}
-        {tab === 'my-playlists' && user && (
+        {tab === 'my-playlists' && user && hiddenUsersReady && (
           <MyPlaylistsContent
             user={user}
             likedIds={likedIds}
@@ -223,7 +264,7 @@ export default function Feed() {
         )}
 
         {/* Trending / Recent Tabs */}
-        {tab !== 'my-playlists' && (
+        {tab !== 'my-playlists' && canRenderSocialContent && (
           <>
             {likesError && (
               <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
@@ -243,7 +284,7 @@ export default function Feed() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                   {recentPlaylists.map((pl, i) => (
                     <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
-                      <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                      <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
                     </motion.div>
                   ))}
                 </div>
@@ -281,7 +322,7 @@ export default function Feed() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mb-3">
                       {displayedTrendingPlaylists.map((pl, i) => (
                         <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                          <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                          <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
                         </motion.div>
                       ))}
                     </div>

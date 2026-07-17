@@ -122,6 +122,10 @@ function normalizeEntityItem(data) {
   return data?.playlist || data?.item || data?.data || data;
 }
 
+function normalizeItems(data) {
+  return data?.items || data?.data || data || [];
+}
+
 function createEntityClient(entityName) {
   return {
     list(sort, limit) {
@@ -204,6 +208,23 @@ export const voxylApi = {
     setToken() {},
   },
   entities: Object.fromEntries(entityNames.map((name) => [name, createEntityClient(name)])),
+  blocks: {
+    listOutbound() {
+      return apiFetch("/blocks").then(normalizeItems);
+    },
+    create(blockedId) {
+      return apiFetch("/blocks", { method: "POST", body: { blocked_id: blockedId } }).then((data) => data?.block || data);
+    },
+    status(targetUserId) {
+      return apiFetch(`/blocks/status/${encodeURIComponent(targetUserId)}`);
+    },
+    delete(id) {
+      return apiFetch(`/blocks/${encodeURIComponent(id)}`, { method: "DELETE" });
+    },
+    hiddenUserIds() {
+      return apiFetch("/blocks/hidden-users").then((data) => data?.user_ids || []);
+    },
+  },
   functions: {
     invoke(name, payload = {}) {
       return apiFetch(`/functions/${name}`, { method: "POST", body: payload }).then(withDataEnvelope);

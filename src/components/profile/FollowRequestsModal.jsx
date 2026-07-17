@@ -5,6 +5,7 @@ import { X, UserCheck, UserX, UserCircle2, Loader2, Ban, ChevronDown, ChevronUp,
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import Portal from '@/components/common/Portal';
+import { t } from '@/lib/i18n';
 
 function RequesterPlaylists({ userId }) {
   const [playlists, setPlaylists] = useState([]);
@@ -16,7 +17,10 @@ function RequesterPlaylists({ userId }) {
         setPlaylists(asArray(data).filter(p => !p.visibility || p.visibility === 'public'));
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(error => {
+        console.error('[FollowRequestsModal] Failed to load requester playlists', { userId, error });
+        setLoading(false);
+      });
   }, [userId]);
 
   if (loading) return <div className="h-10 flex items-center justify-center"><Loader2 size={14} className="animate-spin text-muted-foreground" /></div>;
@@ -46,7 +50,7 @@ function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) 
   useEffect(() => {
     voxylApi.functions.invoke('getPublicUserProfile', { userId: req.follower_id })
       .then(res => setProfilePicture(res.data?.profile_picture))
-      .catch(() => {});
+      .catch(error => console.error('[FollowRequestsModal] Failed to load requester profile picture', { userId: req.follower_id, error }));
   }, [req.follower_id]);
 
   return (
@@ -129,11 +133,25 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    voxylApi.entities.Follow.filter({ following_id: currentUser.id, status: 'pending' })
-      .then(data => { setRequests(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    Promise.all([
+      voxylApi.blocks.hiddenUserIds(),
+      voxylApi.entities.Follow.filter({ following_id: currentUser.id, status: 'pending' }),
+    ])
+      .then(([hiddenIds, data]) => {
+        const hidden = new Set(asArray(hiddenIds));
+        const safeRequests = asArray(data).filter(req => !hidden.has(req.follower_id));
+        setRequests(safeRequests);
+        setLoading(false);
+      })
+      .catch(error => {
+        console.error('[FollowRequestsModal] Failed to load follow requests', { currentUserId: currentUser.id, error });
+        setError(t('blockFollowRequestsError'));
+        setRequests([]);
+        setLoading(false);
+      });
   }, [currentUser.id]);
 
   const handleAccept = async (follow) => {
@@ -156,20 +174,18 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
 
   const handleBlock = async (follow) => {
     setActionLoading(follow.id);
-    // Delete the follow request
-    await voxylApi.entities.Follow.delete(follow.id);
-    // Create block record
-    await voxylApi.entities.Block.create({
-      blocker_id: currentUser.id,
-      blocker_email: currentUser.email,
-      blocked_id: follow.follower_id,
-      blocked_email: follow.follower_email || '',
-      blocked_name: follow.follower_username || follow.follower_name || '',
-    });
-    const updated = requests.filter(r => r.id !== follow.id);
-    setRequests(updated);
-    onCountChange?.(updated.length);
-    setActionLoading(null);
+    setError('');
+    try {
+      await voxylApi.blocks.create(follow.follower_id);
+      const updated = requests.filter(r => r.id !== follow.id);
+      setRequests(updated);
+      onCountChange?.(updated.length);
+    } catch (error) {
+      console.error('[FollowRequestsModal] Failed to block follow requester', { followId: follow.id, followerId: follow.follower_id, error });
+      setError(t('blockCreateError'));
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   return (
@@ -195,6 +211,11 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
         </div>
 
         <div className="overflow-y-auto flex-1 px-5 pb-24">
+          {error && (
+            <div className="mb-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
           {loading ? (
             <div className="flex justify-center py-10">
               <Loader2 size={24} className="animate-spin text-muted-foreground" />

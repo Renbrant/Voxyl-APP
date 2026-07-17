@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import { MoreVertical, Flag, Ban, X, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { t } from '@/lib/i18n';
 
 const REPORT_REASONS = [
   { value: 'inappropriate', label: 'Conteúdo inapropriado' },
@@ -12,16 +13,17 @@ const REPORT_REASONS = [
   { value: 'other', label: 'Outro' },
 ];
 
-export default function ReportBlockMenu({ targetUser, contentType = 'playlist', contentId, contentTitle, currentUser, onBlocked }) {
+export default function ReportBlockMenu({ targetUser, contentType = 'playlist', contentId, contentTitle, currentUser, onBlocked = null }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState(null);
   const [reason, setReason] = useState('');
   const [details, setDetails] = useState('');
   const [loading, setLoading] = useState(false);
+  const [blockError, setBlockError] = useState('');
 
   if (!currentUser || currentUser.id === targetUser?.id) return null;
 
-  const close = () => { setOpen(false); setMode(null); setReason(''); setDetails(''); };
+  const close = () => { setOpen(false); setMode(null); setReason(''); setDetails(''); setBlockError(''); };
 
   const handleReport = async () => {
     if (!reason) return;
@@ -54,20 +56,18 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
 
   const handleBlock = async () => {
     setLoading(true);
-    const existing = await voxylApi.entities.Block.filter({ blocker_id: currentUser.id, blocked_id: targetUser.id });
-    if (!existing.length) {
-      await voxylApi.entities.Block.create({
-        blocker_id: currentUser.id,
-        blocker_email: currentUser.email,
-        blocked_id: targetUser.id,
-        blocked_email: targetUser.email || '',
-        blocked_name: targetUser.name || '',
-      });
+    setBlockError('');
+    try {
+      await voxylApi.blocks.create(targetUser.id);
+      setMode('done');
+      // Notify parent so it can re-filter the list
+      onBlocked?.(targetUser.id);
+    } catch (error) {
+      console.error('[ReportBlockMenu] Failed to block user', { targetUserId: targetUser.id, error });
+      setBlockError(t('blockCreateError'));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-    setMode('done');
-    // Notify parent so it can re-filter the list
-    onBlocked?.(targetUser.id);
   };
 
   const stopAndClose = (e) => {
@@ -157,6 +157,9 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
                 <p className="text-sm text-muted-foreground mb-6">
                   Você não verá mais o conteúdo de <strong className="text-foreground">{targetUser?.name || 'este usuário'}</strong> e ele não verá o seu. Esta ação pode ser desfeita no seu perfil.
                 </p>
+                {blockError && (
+                  <p className="text-xs text-destructive mb-3">{blockError}</p>
+                )}
                 <button
                   onClick={handleBlock}
                   disabled={loading}

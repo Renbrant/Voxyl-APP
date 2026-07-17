@@ -17,6 +17,7 @@ import { motion } from 'framer-motion';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
+import { getCache, setCache, TTL_5MIN } from '@/lib/appCache';
 import {
   handlePodcastLikeMutationSuccess,
   loadPlaylistLikeRecords,
@@ -47,6 +48,10 @@ export default function Explore() {
   const [userSearch, setUserSearch] = useState('');
   const [userFilter, setUserFilter] = useState('connections');
   const [blockedIds, setBlockedIds] = useState([]);
+  const [authResolved, setAuthResolved] = useState(false);
+  const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
+  const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
+  const [hiddenUsersError, setHiddenUsersError] = useState('');
   const [followStatuses, setFollowStatuses] = useState({});
   const [theyFollowMeIds, setTheyFollowMeIds] = useState(new Set());
   const [podcastSortBy, setPodcastSortBy] = useState(params.get('sort') || 'relevance');
@@ -73,9 +78,36 @@ export default function Explore() {
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
+  const loadHiddenUsers = async (u) => {
+    if (!u?.id) return;
+    const cacheKey = `hidden-users-${u.id}`;
+    setHiddenUsersLoading(true);
+    setHiddenUsersError('');
+    try {
+      const hiddenIds = await voxylApi.blocks.hiddenUserIds();
+      const ids = [...new Set(Array.isArray(hiddenIds) ? hiddenIds : [])];
+      setBlockedIds(ids);
+      setCache(cacheKey, ids, TTL_5MIN);
+      setHiddenUsersReady(true);
+    } catch (error) {
+      console.error('[Explore] Failed to load hidden users', { error });
+      const cached = getCache(cacheKey);
+      if (Array.isArray(cached)) {
+        setBlockedIds(cached);
+        setHiddenUsersReady(true);
+      } else {
+        setHiddenUsersReady(false);
+        setHiddenUsersError(t('blockLoadHiddenError'));
+      }
+    } finally {
+      setHiddenUsersLoading(false);
+    }
+  };
+
   const { pullProgress, refreshing } = usePullToRefresh(() => {
     queryClient.invalidateQueries({ queryKey: ['explore-playlists'] });
     if (user?.id) {
+      loadHiddenUsers(user);
       refreshPlaylistLikeQuery(queryClient, user.id);
       refreshPodcastLikeQuery(queryClient, user.id);
     }
@@ -84,29 +116,26 @@ export default function Explore() {
   useEffect(() => {
     voxylApi.auth.me().then(u => {
       setUser(u);
-      Promise.all([
-        voxylApi.entities.Block.filter({ blocker_id: u.id }),
-        voxylApi.entities.Block.filter({ blocked_id: u.id }),
-      ]).then(([myBlocks, theirBlocks]) => {
-        const ids = [
-          ...myBlocks.map(b => b.blocked_id),
-          ...theirBlocks.map(b => b.blocker_id),
-        ];
-        setBlockedIds([...new Set(ids)]);
-      }).catch(() => {});
+      setAuthResolved(true);
+      loadHiddenUsers(u);
       voxylApi.entities.Follow.filter({ follower_id: u.id })
         .then(follows => {
           const map = {};
           follows.forEach(f => { map[f.following_id] = f.status; });
           setFollowStatuses(map);
         })
-        .catch(() => {});
+        .catch(error => console.error('[Explore] Failed to load outgoing follows', { userId: u.id, error }));
       voxylApi.entities.Follow.filter({ following_id: u.id, status: 'accepted' })
         .then(follows => {
           setTheyFollowMeIds(new Set(follows.map(f => f.follower_id)));
         })
-        .catch(() => {});
-    }).catch(() => {});
+        .catch(error => console.error('[Explore] Failed to load incoming follows', { userId: u.id, error }));
+    }).catch(error => {
+      if (error?.status && error.status !== 401) {
+        console.error('[Explore] Failed to load current user', { error });
+      }
+      setAuthResolved(true);
+    });
   }, []);
 
   const {
@@ -310,7 +339,8 @@ export default function Explore() {
     };
   }, [debouncedQuery, tab, user, podcastLanguage, podcastSortBy, podcastCategory]);
 
-  const filteredPlaylists = playlists
+  const canRenderSocialContent = !user || hiddenUsersReady;
+  const filteredPlaylists = canRenderSocialContent ? playlists
     .filter(p => {
       if (blockedIds.includes(p.creator_id)) return false;
       if (p.visibility === 'private') return false;
@@ -319,8 +349,9 @@ export default function Explore() {
         p.name?.toLowerCase().includes(voxylSearch.toLowerCase()) ||
         p.description?.toLowerCase().includes(voxylSearch.toLowerCase()) ||
         p.creator_name?.toLowerCase().includes(voxylSearch.toLowerCase());
-    });
+    }) : [];
   const canRetryPlaylists = playlistsError && Boolean(playlistsQueryError) && !playlistsFetching;
+  const showHiddenUsersGate = authResolved && user && !hiddenUsersReady && (tab === 'playlists' || tab === 'users');
 
   // Build user list based on active filter
   const filteredUsers = (() => {
@@ -328,7 +359,9 @@ export default function Explore() {
 
     if (q) {
       // Exact username match only
-      return searchedUsers.filter(u => u.username && u.username.toLowerCase() === q);
+      return canRenderSocialContent
+        ? searchedUsers.filter(u => u.username && u.username.toLowerCase() === q && !blockedIds.includes(u.id))
+        : [];
     }
 
     if (userFilter === 'connections') {
@@ -344,19 +377,22 @@ export default function Explore() {
         full_name: f._profile?.full_name || f.following_name || '',
         type: 'following',
       }));
-      return [...followers, ...following];
+      return canRenderSocialContent ? [...followers, ...following].filter(item => !blockedIds.includes(item.id)) : [];
     }
     if (userFilter === 'pending') {
-      return pendingList.map(f => ({
+      return canRenderSocialContent ? pendingList.map(f => ({
         id: f.following_id,
         username: f._profile?.username || f.following_username || null,
         full_name: f._profile?.full_name || f.following_name || '',
         type: 'pending',
-      }));
+      })).filter(item => !blockedIds.includes(item.id)) : [];
     }
 
     return [];
   })();
+  const visibleFollowers = filteredUsers.filter(item => item.type === 'follower');
+  const visibleFollowing = filteredUsers.filter(item => item.type === 'following');
+  const visiblePending = filteredUsers.filter(item => item.type === 'pending');
 
   const TABS = [
     { key: 'playlists', label: t('explorePlaylists'), icon: Compass },
@@ -402,7 +438,7 @@ export default function Explore() {
   return (
     <div ref={containerRef} className="bg-background pb-24 relative">
       <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
-      <VoxylHeader title={t('exploreTitle')} subtitle={t('exploreSubtitle')} />
+      <VoxylHeader title={t('exploreTitle')} subtitle={t('exploreSubtitle')} right={null} />
 
       {/* Tabs */}
       <div className="flex gap-2 px-4 justify-center">
@@ -477,8 +513,19 @@ export default function Explore() {
       </div>
 
       <div className="px-4">
+        {showHiddenUsersGate && (
+          <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+            <span>{hiddenUsersLoading ? t('loading') : hiddenUsersError || t('blockLoadHiddenError')}</span>
+            {!hiddenUsersLoading && (
+              <button type="button" onClick={() => loadHiddenUsers(user)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+                <RefreshCcw size={12} />
+                {t('blockRetry')}
+              </button>
+            )}
+          </div>
+        )}
         {/* Playlists tab */}
-        {tab === 'playlists' && (
+        {tab === 'playlists' && !showHiddenUsersGate && (
           playlistsLoading ? (
             <div className="space-y-3">
               {[...Array(5)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
@@ -513,7 +560,7 @@ export default function Explore() {
               )}
               {filteredPlaylists.map((pl, i) => (
                 <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                  <PlaylistCard playlist={pl} compact liked={!playlistLikesError && !playlistLikesLoading && likedPlaylistIds.includes(pl.id)} onLike={playlistLikesLoading || playlistLikesFetching || playlistLikesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...prev, id])} />
+                  <PlaylistCard playlist={pl} compact liked={!playlistLikesError && !playlistLikesLoading && likedPlaylistIds.includes(pl.id)} onLike={playlistLikesLoading || playlistLikesFetching || playlistLikesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
                 </motion.div>
               ))}
               {filteredPlaylists.length === 0 && (
@@ -527,7 +574,7 @@ export default function Explore() {
         )}
 
         {/* Users tab */}
-        {tab === 'users' && (
+        {tab === 'users' && !showHiddenUsersGate && (
           usersLoading ? (
             <div className="space-y-3">
               {[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-2xl bg-secondary animate-pulse" />)}
@@ -543,48 +590,48 @@ export default function Explore() {
                 </div>
               ) : userFilter === 'connections' ? (
                 <>
-                  {followersList.length > 0 && (
+                  {visibleFollowers.length > 0 && (
                     <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">👥 {t('exploreFollowers')} ({followersList.length})</h3>
+                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">👥 {t('exploreFollowers')} ({visibleFollowers.length})</h3>
                       <div className="space-y-2">
-                        {followersList.map((f, i) => (
+                        {visibleFollowers.map((f, i) => (
                           <UserSearchCard
-                            key={f.follower_id}
+                            key={f.id}
                             user={{
-                              id: f.follower_id,
-                              username: f.follower_username,
-                              full_name: f.follower_name,
+                              id: f.id,
+                              username: f.username,
+                              full_name: f.full_name,
                             }}
                             index={i}
                             currentUser={user}
-                            followStatus={followStatuses[f.follower_id] || null}
-                            theyFollowMe={theyFollowMeIds.has(f.follower_id)}
+                            followStatus={followStatuses[f.id] || null}
+                            theyFollowMe={theyFollowMeIds.has(f.id)}
                             onStatusChange={(status) =>
-                              setFollowStatuses(prev => ({ ...prev, [f.follower_id]: status }))
+                              setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
                             }
                           />
                         ))}
                       </div>
                     </div>
                   )}
-                  {followingList.length > 0 && (
+                  {visibleFollowing.length > 0 && (
                     <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">➡️ {t('exploreFollowing')} ({followingList.length})</h3>
+                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">➡️ {t('exploreFollowing')} ({visibleFollowing.length})</h3>
                       <div className="space-y-2">
-                        {followingList.map((f, i) => (
+                        {visibleFollowing.map((f, i) => (
                           <UserSearchCard
-                            key={f.following_id}
+                            key={f.id}
                             user={{
-                               id: f.following_id,
-                               username: f._profile?.username || f.following_username || null,
-                               full_name: f._profile?.full_name || f.following_name || '',
+                               id: f.id,
+                               username: f.username,
+                               full_name: f.full_name,
                              }}
                             index={i}
                             currentUser={user}
-                            followStatus={followStatuses[f.following_id] || null}
-                            theyFollowMe={theyFollowMeIds.has(f.following_id)}
+                            followStatus={followStatuses[f.id] || null}
+                            theyFollowMe={theyFollowMeIds.has(f.id)}
                             onStatusChange={(status) =>
-                              setFollowStatuses(prev => ({ ...prev, [f.following_id]: status }))
+                              setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
                             }
                           />
                         ))}
@@ -594,20 +641,20 @@ export default function Explore() {
                 </>
               ) : (
                 <div className="space-y-2">
-                  {pendingList.map((f, i) => (
+                  {visiblePending.map((f, i) => (
                     <UserSearchCard
-                      key={f.following_id}
+                      key={f.id}
                       user={{
-                         id: f.following_id,
-                         username: f._profile?.username || f.following_username || null,
-                         full_name: f._profile?.full_name || f.following_name || '',
+                         id: f.id,
+                         username: f.username,
+                         full_name: f.full_name,
                        }}
                       index={i}
                       currentUser={user}
-                      followStatus={followStatuses[f.following_id] || null}
-                      theyFollowMe={theyFollowMeIds.has(f.following_id)}
+                      followStatus={followStatuses[f.id] || null}
+                      theyFollowMe={theyFollowMeIds.has(f.id)}
                       onStatusChange={(status) =>
-                        setFollowStatuses(prev => ({ ...prev, [f.following_id]: status }))
+                        setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
                       }
                     />
                   ))}
