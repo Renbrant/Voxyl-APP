@@ -270,6 +270,7 @@ function createEpisodeProgressDb() {
       progressRow({ id: 'completed-only', user_id: 'd1-real-user', clerk_user_id: 'clerk-user-1', audio_url: 'https://cdn.example.com/completed.mp3', position_seconds: 100, finished: 0, completed: 1, last_played_at: freshTimestamp }),
     ],
     calls: [],
+    rejectUndefinedBinds: false,
     insertRaceRow: null,
     casUpdateBarrier: null,
     acceptedCasUpdates: 0,
@@ -351,6 +352,9 @@ function createEpisodeProgressDb() {
     prepare(sql) {
       return {
         bind(...params) {
+          if (state.rejectUndefinedBinds && params.some((value) => value === undefined)) {
+            throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported");
+          }
           return {
             async first() {
               state.calls.push({ kind: 'first', sql, params });
@@ -666,6 +670,87 @@ describe('EpisodeProgress Worker routes', () => {
     db.state.insertRaceRow = progressRow({ id: 'race-winner', user_id: 'd1-real-user', clerk_user_id: 'clerk-user-1', audio_url: 'https://cdn.example.com/race.mp3' });
     const raced = await worker.fetch(request('/api/entities/episode-progress', { method: 'POST', token, payload: { audio_url: 'https://cdn.example.com/race.mp3', position_seconds: 1 } }), { ...baseEnv, DB: db });
     assert.equal((await json(raced)).data.id, 'race-winner');
+  });
+
+  it('never binds undefined for minimal EpisodeProgress create, update, patch, or CAS writes', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    db.state.rejectUndefinedBinds = true;
+    const audio_url = 'https://traffic.omny.fm/example/audio.mp3?token=abc';
+
+    const created = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 0,
+        duration_seconds: 0,
+        finished: false,
+        last_played_at: '2026-07-17T17:28:40.964Z',
+      },
+    }), { ...baseEnv, DB: db });
+    const createdBody = await json(created);
+
+    assert.equal(created.status, 200);
+    assert.equal(createdBody.data.position_seconds, 0);
+    assert.equal(createdBody.data.duration_seconds, 0);
+    assert.equal(createdBody.data.finished, false);
+    assert.equal(createdBody.data.feed_url, null);
+    assert.equal(createdBody.data.podcast_title, null);
+    assert.equal(createdBody.data.episode_title, null);
+
+    const row = db.state.rows.find((item) => item.user_id === 'd1-real-user' && item.audio_url === audio_url);
+    row.feed_url = 'https://feeds.example.com/show.xml';
+    row.podcast_title = 'Existing Show';
+    row.episode_title = 'Existing Episode';
+    const originalRevision = row.updated_at;
+
+    const updated = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 29,
+        duration_seconds: 309,
+        finished: false,
+        last_played_at: '2026-07-17T17:29:40.964Z',
+        base_server_updated_at: originalRevision,
+      },
+    }), { ...baseEnv, DB: db });
+    const updatedBody = await json(updated);
+
+    assert.equal(updated.status, 200);
+    assert.equal(updatedBody.data.position_seconds, 29);
+    assert.equal(updatedBody.data.feed_url, 'https://feeds.example.com/show.xml');
+    assert.equal(updatedBody.data.podcast_title, 'Existing Show');
+    assert.equal(updatedBody.data.episode_title, 'Existing Episode');
+    assert.notEqual(updatedBody.data.server_updated_at, originalRevision);
+
+    const patched = await worker.fetch(request(`/api/entities/episode-progress/${row.id}`, {
+      method: 'PATCH',
+      token,
+      payload: {
+        position_seconds: 0,
+        duration_seconds: 0,
+        finished: false,
+      },
+    }), { ...baseEnv, DB: db });
+    const patchedBody = await json(patched);
+
+    assert.equal(patched.status, 200);
+    assert.equal(patchedBody.data.position_seconds, 0);
+    assert.equal(patchedBody.data.duration_seconds, 0);
+    assert.equal(patchedBody.data.finished, false);
+    assert.equal(patchedBody.data.feed_url, 'https://feeds.example.com/show.xml');
+    assert.equal(patchedBody.data.podcast_title, 'Existing Show');
+    assert.equal(patchedBody.data.episode_title, 'Existing Episode');
+
+    const episodeProgressBinds = db.state.calls
+      .filter((call) => /episode_progress/s.test(call.sql))
+      .flatMap((call) => call.params);
+    assert.ok(episodeProgressBinds.length > 0);
+    assert.equal(episodeProgressBinds.some((value) => value === undefined), false);
   });
 
   it('validates URL, number, boolean, timestamp, and patch audio movement rules', async () => {

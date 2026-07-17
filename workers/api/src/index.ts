@@ -2814,6 +2814,10 @@ function isEpisodeProgressBaseCurrent(baseServerUpdatedAt: string | undefined, e
   return incomingBase === existingRevision;
 }
 
+function episodeProgressD1Value<T>(value: T | undefined): T | null {
+  return value === undefined ? null : value;
+}
+
 function episodeProgressNextRevisionSql(column = "updated_at"): string {
   return `strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday('now'), COALESCE(julianday(NULLIF(TRIM(${column}), '')), 0) + (1.0 / 86400000.0)))`;
 }
@@ -3198,9 +3202,9 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
           auth.claims!.userId,
           scope.legacyUserId,
           payload.audioUrl,
-          payload.feedUrl,
-          payload.podcastTitle,
-          payload.episodeTitle,
+          episodeProgressD1Value(payload.feedUrl),
+          episodeProgressD1Value(payload.podcastTitle),
+          episodeProgressD1Value(payload.episodeTitle),
           payload.positionSeconds,
           payload.durationSeconds ?? 0,
           finished,
@@ -3278,9 +3282,9 @@ async function createEpisodeProgressResponse(request: Request, env: Env): Promis
         auth.claims!.userId,
         scope.legacyUserId,
         payload.audioUrl,
-        payload.feedUrl,
-        payload.podcastTitle,
-        payload.episodeTitle,
+        episodeProgressD1Value(payload.feedUrl),
+        episodeProgressD1Value(payload.podcastTitle),
+        episodeProgressD1Value(payload.episodeTitle),
         payload.positionSeconds,
         payload.durationSeconds ?? 0,
         finished,
@@ -3367,15 +3371,15 @@ async function updateEpisodeProgressResponse(request: Request, env: Env, id: str
       auth.user!.id,
       auth.claims!.userId,
       scope.legacyUserId,
-      payload.audioUrl,
-      payload.feedUrl,
-      payload.podcastTitle,
-      payload.episodeTitle,
-      payload.positionSeconds,
-      payload.durationSeconds,
+      episodeProgressD1Value(payload.audioUrl),
+      episodeProgressD1Value(payload.feedUrl),
+      episodeProgressD1Value(payload.podcastTitle),
+      episodeProgressD1Value(payload.episodeTitle),
+      episodeProgressD1Value(payload.positionSeconds),
+      episodeProgressD1Value(payload.durationSeconds),
       nextFinished ? 1 : 0,
       nextFinished ? 1 : 0,
-      payload.lastPlayedAt,
+      episodeProgressD1Value(payload.lastPlayedAt),
       id,
       ...scope.params,
     )
