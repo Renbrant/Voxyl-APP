@@ -12,6 +12,7 @@ import {
   getProgressPlaybackTransition,
   getProgressScopeDecision,
   createProgressRegressionGuard,
+  getProgressHydrationRecoveryDecision,
   shouldBlockProgressSaveForGuard,
   loadProgressFromDB,
   mergeProgressRecords,
@@ -1199,6 +1200,195 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(payloads[0].position_seconds, 255);
     assert.equal(payloads[0].base_server_updated_at, '2026-07-17T12:00:02.000Z');
     assert.equal(getCachedProgress(audioUrl).position_seconds, 255);
+  });
+
+  it('restarts exhausted hydration recovery and protects stale active playback behind the canonical floor', async () => {
+    const { scope } = activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/recovery-stale.mp3';
+    const payloads = [];
+    let filterCalls = 0;
+    let activePosition = 100;
+    let hydration = { scope, promise: null, status: 'hydrating' };
+
+    setCachedProgress(audioUrl, activePosition, 300, false);
+
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async filter() {
+            filterCalls += 1;
+            if (filterCalls <= 4) {
+              throw new Error(`hydration outage ${filterCalls}`);
+            }
+            return [{
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: 200,
+              duration_seconds: 300,
+              finished: 0,
+              last_played_at: '2026-07-17T12:00:00.000Z',
+              server_updated_at: '2026-07-17T12:00:02.000Z',
+            }];
+          },
+          async create(payload) {
+            payloads.push(payload);
+            return payload;
+          },
+        },
+      },
+    };
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await assert.rejects(loadProgressFromDB(api, 'user-a'), /hydration outage/);
+      hydration = { scope, promise: null, status: 'failed' };
+    }
+
+    activePosition = 150;
+    setCachedProgress(audioUrl, activePosition, 300, false);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 150);
+
+    assert.deepEqual(
+      getProgressHydrationRecoveryDecision({
+        hydration,
+        scope,
+        userId: 'user-a',
+        hasScheduledRetry: false,
+      }),
+      { shouldStart: true, reason: 'failed' }
+    );
+    assert.deepEqual(
+      getProgressHydrationRecoveryDecision({
+        hydration: { scope, promise: Promise.resolve(), status: 'hydrating' },
+        scope,
+        userId: 'user-a',
+      }),
+      { shouldStart: false, reason: 'active-request' }
+    );
+    assert.deepEqual(
+      getProgressHydrationRecoveryDecision({
+        hydration,
+        scope,
+        userId: 'user-a',
+        hasScheduledRetry: true,
+      }),
+      { shouldStart: false, reason: 'scheduled-retry' }
+    );
+
+    const recovery = loadProgressFromDB(api, 'user-a');
+    hydration = { scope, promise: recovery, status: 'hydrating' };
+    assert.equal(
+      getProgressHydrationRecoveryDecision({ hydration, scope, userId: 'user-a' }).shouldStart,
+      false
+    );
+    await recovery;
+    hydration = { scope, promise: null, status: 'ready' };
+
+    const guard = createProgressRegressionGuard(audioUrl, activePosition, getCachedProgress(audioUrl));
+    assert.equal(filterCalls, 5);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:02.000Z');
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, 155), true);
+
+    if (!shouldBlockProgressSaveForGuard(guard, audioUrl, 155)) {
+      setCachedProgress(audioUrl, 155, 300, false);
+      await saveProgressToDB(api, 'user-a', audioUrl);
+    }
+
+    assert.equal(payloads.length, 0);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+
+    const oldScope = scope;
+    const { scope: newScope } = activateProgressCacheScope('user-b');
+    assert.deepEqual(
+      getProgressHydrationRecoveryDecision({
+        hydration: { scope: oldScope, promise: null, status: 'failed' },
+        scope: newScope,
+        userId: 'user-a',
+      }),
+      { shouldStart: false, reason: 'scope-mismatch' }
+    );
+    assert.deepEqual(
+      getProgressHydrationRecoveryDecision({
+        hydration: { scope: newScope, promise: null, status: 'failed' },
+        scope: newScope,
+        userId: null,
+      }),
+      { shouldStart: false, reason: 'guest' }
+    );
+  });
+
+  it('recovers hydration after retry exhaustion and saves active playback already ahead of canonical progress', async () => {
+    const { scope } = activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/recovery-ahead.mp3';
+    const payloads = [];
+    let filterCalls = 0;
+    let activePosition = 240;
+
+    setCachedProgress(audioUrl, 100, 300, false);
+
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async filter() {
+            filterCalls += 1;
+            if (filterCalls <= 4) {
+              throw new Error(`hydration outage ${filterCalls}`);
+            }
+            return [{
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: 200,
+              duration_seconds: 300,
+              finished: 0,
+              last_played_at: '2026-07-17T12:00:00.000Z',
+              server_updated_at: '2026-07-17T12:00:02.000Z',
+            }];
+          },
+          async create(payload) {
+            payloads.push(payload);
+            return {
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: '2026-07-17T12:00:03.000Z',
+            };
+          },
+        },
+      },
+    };
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await assert.rejects(loadProgressFromDB(api, 'user-a'), /hydration outage/);
+    }
+
+    setCachedProgress(audioUrl, activePosition, 300, false);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 240);
+    assert.equal(
+      getProgressHydrationRecoveryDecision({
+        hydration: { scope, promise: null, status: 'failed' },
+        scope,
+        userId: 'user-a',
+      }).shouldStart,
+      true
+    );
+
+    await loadProgressFromDB(api, 'user-a');
+    const guard = createProgressRegressionGuard(audioUrl, activePosition, getCachedProgress(audioUrl));
+    assert.equal(guard, null);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+
+    activePosition = 245;
+    setCachedProgress(audioUrl, activePosition, 300, false);
+    await saveProgressToDB(api, 'user-a', audioUrl);
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].position_seconds, 245);
+    assert.equal(payloads[0].base_server_updated_at, '2026-07-17T12:00:02.000Z');
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 245);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:03.000Z');
   });
 
   it('lets authenticated server progress beat a future-dated local cache after hydration', () => {

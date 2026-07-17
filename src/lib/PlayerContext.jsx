@@ -13,6 +13,7 @@ import {
   getProgressPlaybackTransition,
   createProgressRegressionGuard,
   shouldBlockProgressSaveForGuard,
+  getProgressHydrationRecoveryDecision,
   loadProgressFromDB,
   saveProgressToDB,
   FINISH_THRESHOLD,
@@ -81,6 +82,7 @@ export function PlayerProvider({ children }) {
   const wakeLockRef = useRef(null);
   const progressScopeRef = useRef(null);
   const progressHydrationRef = useRef({ scope: null, promise: null, status: 'guest' });
+  const progressHydrationRecoveryRef = useRef(null);
   const activeProgressRegressionGuardRef = useRef(null);
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
@@ -149,6 +151,12 @@ export function PlayerProvider({ children }) {
     );
     activeProgressRegressionGuardRef.current = nextGuard;
   }, [getActivePlaybackPosition]);
+
+  const requestProgressHydrationRecovery = useCallback((reason) => {
+    if (typeof progressHydrationRecoveryRef.current === 'function') {
+      progressHydrationRecoveryRef.current(reason);
+    }
+  }, []);
 
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
@@ -222,10 +230,14 @@ export function PlayerProvider({ children }) {
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
     if (recordPlay) recordPodcastPlay();
     const u = dbProgressUserRef.current;
-    if (forceDB && allowDB && u && canSaveAuthenticatedProgress(u.id)) {
-      void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
+    if (forceDB && allowDB && u) {
+      if (canSaveAuthenticatedProgress(u.id)) {
+        void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
+      } else {
+        requestProgressHydrationRecovery('progress-save');
+      }
     }
-  }, [canSaveAuthenticatedProgress, recordPodcastPlay]);
+  }, [canSaveAuthenticatedProgress, recordPodcastPlay, requestProgressHydrationRecovery]);
 
   const stopSaveTimers = useCallback(() => {
     clearInterval(localSaveTimerRef.current);
@@ -826,8 +838,9 @@ export function PlayerProvider({ children }) {
       }
       setUser(null);
       userRef.current = null;
-      dbProgressUserRef.current = null;
-      return;
+    dbProgressUserRef.current = null;
+    progressHydrationRecoveryRef.current = null;
+    return;
     }
 
     const previousScopeKey = progressScopeRef.current;
@@ -846,6 +859,7 @@ export function PlayerProvider({ children }) {
         userRef.current = null;
         dbProgressUserRef.current = null;
         progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'guest' };
+        progressHydrationRecoveryRef.current = null;
       }
       return;
     }
@@ -876,6 +890,7 @@ export function PlayerProvider({ children }) {
     finishedUrlsRef.current = cached;
 
     if (decision.status !== 'confirmed' || !nextUser?.id) {
+      progressHydrationRecoveryRef.current = null;
       return;
     }
 
@@ -883,6 +898,15 @@ export function PlayerProvider({ children }) {
     let retryTimer = null;
 
     const runHydration = (attempt = 0) => {
+      const currentHydration = progressHydrationRef.current;
+      if (
+        currentHydration.scope === nextScopeKey &&
+        currentHydration.status === 'hydrating' &&
+        currentHydration.promise
+      ) {
+        return currentHydration.promise;
+      }
+
       const hydrationPromise = loadProgressFromDB(voxylApi, nextUser.id)
         .then(() => {
           if (cancelled || progressScopeRef.current !== nextScopeKey) return;
@@ -903,6 +927,7 @@ export function PlayerProvider({ children }) {
           if (retryDelay === undefined) return;
           retryTimer = setTimeout(() => {
             if (cancelled || progressScopeRef.current !== nextScopeKey) return;
+            retryTimer = null;
             runHydration(attempt + 1);
           }, retryDelay);
         })
@@ -917,10 +942,36 @@ export function PlayerProvider({ children }) {
       return hydrationPromise;
     };
 
+    const requestRecovery = (reason) => {
+      if (dbProgressUserRef.current?.id !== nextUser.id) return;
+      const decision = getProgressHydrationRecoveryDecision({
+        hydration: progressHydrationRef.current,
+        scope: nextScopeKey,
+        userId: nextUser.id,
+        hasScheduledRetry: retryTimer !== null,
+      });
+      if (!decision.shouldStart) return;
+      console.info('[VOXYL] Restarting EpisodeProgress hydration after recovery trigger.', { reason });
+      runHydration(0);
+    };
+
+    progressHydrationRecoveryRef.current = requestRecovery;
+    const handleOnline = () => requestRecovery('online');
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') requestRecovery('visible');
+    };
+
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     runHydration();
 
     return () => {
       cancelled = true;
+      if (progressHydrationRecoveryRef.current === requestRecovery) {
+        progressHydrationRecoveryRef.current = null;
+      }
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearTimeout(retryTimer);
     };
   }, [
@@ -931,6 +982,7 @@ export function PlayerProvider({ children }) {
     authChecked,
     clearPlaybackForIdentityChange,
     refreshActiveProgressRegressionGuard,
+    requestProgressHydrationRecovery,
     saveCurrentProgress,
     stopSaveTimers,
   ]);
@@ -990,6 +1042,9 @@ export function PlayerProvider({ children }) {
     pausePodcastPlaySessionTimer();
 
     const hydrationReady = await waitForAuthenticatedProgressHydration();
+    if (!hydrationReady) {
+      requestProgressHydrationRecovery('playback-request');
+    }
     const { resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
 
     armLoadingWatchdog('manual-play');
@@ -1109,6 +1164,7 @@ export function PlayerProvider({ children }) {
     startPodcastPlaySession,
     stopSaveTimers,
     updateMediaSession,
+    requestProgressHydrationRecovery,
     waitForAuthenticatedProgressHydration,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps

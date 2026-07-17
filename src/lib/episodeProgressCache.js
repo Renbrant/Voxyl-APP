@@ -322,6 +322,31 @@ export function shouldBlockProgressSaveForGuard(guard, audioUrl, position) {
   return safePosition < Number(guard.position_seconds);
 }
 
+export function getProgressHydrationRecoveryDecision(options = {}) {
+  const { hydration, scope, userId, hasScheduledRetry = false } = options;
+  if (!userId) {
+    return { shouldStart: false, reason: 'guest' };
+  }
+
+  if (!scope || hydration?.scope !== scope) {
+    return { shouldStart: false, reason: 'scope-mismatch' };
+  }
+
+  if (hydration?.status === 'hydrating' && hydration?.promise) {
+    return { shouldStart: false, reason: 'active-request' };
+  }
+
+  if (hasScheduledRetry) {
+    return { shouldStart: false, reason: 'scheduled-retry' };
+  }
+
+  if (hydration?.status !== 'failed') {
+    return { shouldStart: false, reason: 'not-failed' };
+  }
+
+  return { shouldStart: true, reason: 'failed' };
+}
+
 export function setCachedProgress(audioUrl, position, duration, finished) {
   const cache = readCache();
   const current = cache[audioUrl];
