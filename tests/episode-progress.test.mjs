@@ -81,6 +81,22 @@ async function json(response) {
   return response.json();
 }
 
+function createBarrier(count) {
+  let waiting = 0;
+  let release;
+  const ready = new Promise((resolve) => { release = resolve; });
+  return {
+    async wait() {
+      waiting += 1;
+      if (waiting >= count) release();
+      await ready;
+    },
+    get waiting() {
+      return waiting;
+    },
+  };
+}
+
 function createEpisodeProgressDb() {
   const freshTimestamp = freshIso();
   const state = {
@@ -147,6 +163,8 @@ function createEpisodeProgressDb() {
     ],
     calls: [],
     insertRaceRow: null,
+    casUpdateBarrier: null,
+    acceptedCasUpdates: 0,
     changeOwnerBeforeEpisodeUpdateId: null,
   };
 
@@ -190,6 +208,17 @@ function createEpisodeProgressDb() {
     return timestampMs(values.last_played_at) >= timestampMs(row.last_played_at);
   }
 
+  function normalizeRevision(value) {
+    const parsed = timestampMs(value);
+    return parsed ? new Date(parsed).toISOString() : null;
+  }
+
+  function nextRevision(row) {
+    const previous = timestampMs(row.updated_at);
+    const now = timestampMs('2026-07-16T00:00:00.000Z');
+    return new Date(Math.max(now, previous + 1)).toISOString();
+  }
+
   function mutateRow(row, values, { playbackOnlyIfCurrent = false } = {}) {
     const applyPlayback = !playbackOnlyIfCurrent || shouldApplyIncoming(row, values);
     row.user_id = values.user_id;
@@ -206,7 +235,7 @@ function createEpisodeProgressDb() {
       row.completed = values.completed;
       row.last_played_at = values.last_played_at ?? row.last_played_at ?? freshIso();
     }
-    row.updated_at = '2026-07-16T00:00:00.000Z';
+    row.updated_at = nextRevision(row);
   }
 
   return {
@@ -284,8 +313,18 @@ function createEpisodeProgressDb() {
                 }
                 const identityStart = updateHasPlayback || isPatchUpdate ? 13 : 5;
                 const hasLegacy = identityCount(sql) === 3;
+                if (updateHasPlayback && state.casUpdateBarrier) {
+                  await state.casUpdateBarrier.wait();
+                }
                 const row = state.rows.find((item) => item.id === id && matchesIdentity(item, params.slice(identityStart), hasLegacy));
                 if (!row) return { meta: { changes: 0 } };
+                if (/strftime\('%Y-%m-%dT%H:%M:%fZ',\s*updated_at\) = \?/s.test(sql)) {
+                  const expectedRevision = params.at(-1);
+                  if (normalizeRevision(row.updated_at) !== normalizeRevision(expectedRevision)) {
+                    return { meta: { changes: 0 } };
+                  }
+                  state.acceptedCasUpdates += 1;
+                }
                 if (updateHasPlayback) {
                   mutateRow(row, {
                     user_id: params[0],
@@ -358,7 +397,13 @@ function createEpisodeProgressDb() {
                   row = progressRow({ id, user_id, audio_url, created_at: '2026-07-16T00:00:00.000Z' });
                   state.rows.push(row);
                 }
-                mutateRow(row, { user_id, clerk_user_id, legacy_base44_user_id, audio_url, feed_url, podcast_title, episode_title, position_seconds, duration_seconds, finished, completed, last_played_at }, { playbackOnlyIfCurrent: rowAlreadyExisted });
+                if (params.at(-2) !== null && /strftime\('%Y-%m-%dT%H:%M:%fZ',\s*episode_progress\.updated_at\) = \?/s.test(sql)) {
+                  const expectedRevision = params.at(-1);
+                  if (rowAlreadyExisted && normalizeRevision(row.updated_at) !== normalizeRevision(expectedRevision)) {
+                    return { meta: { changes: 0 } };
+                  }
+                }
+                mutateRow(row, { user_id, clerk_user_id, legacy_base44_user_id, audio_url, feed_url, podcast_title, episode_title, position_seconds, duration_seconds, finished, completed, last_played_at });
                 return { meta: { changes: 1 } };
               }
               if (/DELETE FROM episode_progress/s.test(sql)) {
@@ -602,11 +647,12 @@ describe('EpisodeProgress Worker routes', () => {
     const staleBase = '2026-07-15T00:00:00.000Z';
     const fastClockTime = freshIso(60_000);
 
-    await worker.fetch(request('/api/entities/episode-progress', {
+    const initial = await worker.fetch(request('/api/entities/episode-progress', {
       method: 'POST',
       token,
       payload: { audio_url, position_seconds: 90, duration_seconds: 100, finished: true, last_played_at: initialTime },
     }), { ...baseEnv, DB: db });
+    const initialBody = await json(initial);
 
     const stale = await worker.fetch(request('/api/entities/episode-progress', {
       method: 'POST',
@@ -625,7 +671,230 @@ describe('EpisodeProgress Worker routes', () => {
     assert.equal(body.data.position_seconds, 90);
     assert.equal(body.data.finished, true);
     assert.equal(body.data.last_played_at, initialTime);
-    assert.equal(body.data.server_updated_at, '2026-07-16T00:00:00.000Z');
+    assert.equal(body.data.server_updated_at, initialBody.data.server_updated_at);
+  });
+
+  it('uses atomic compare-and-swap for concurrent authenticated revision writes', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    const audio_url = 'https://cdn.example.com/cas-race.mp3';
+
+    const initial = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 60,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(1000),
+      },
+    }), { ...baseEnv, DB: db });
+    const initialBody = await json(initial);
+    const base = initialBody.data.server_updated_at;
+    const barrier = createBarrier(2);
+    db.state.casUpdateBarrier = barrier;
+
+    const requestA = worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 120,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(2000),
+        base_server_updated_at: base,
+      },
+    }), { ...baseEnv, DB: db });
+    const requestB = worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 180,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(3000),
+        base_server_updated_at: base,
+      },
+    }), { ...baseEnv, DB: db });
+
+    while (barrier.waiting < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const [responseA, responseB] = await Promise.all([requestA, requestB]);
+    const [bodyA, bodyB] = await Promise.all([json(responseA), json(responseB)]);
+    const row = db.state.rows.find((item) => item.user_id === 'd1-real-user' && item.audio_url === audio_url);
+
+    assert.equal(db.state.acceptedCasUpdates, 1);
+    assert.ok([120, 180].includes(row.position_seconds));
+    assert.equal(bodyA.data.position_seconds, row.position_seconds);
+    assert.equal(bodyB.data.position_seconds, row.position_seconds);
+    assert.equal(bodyA.data.server_updated_at, row.updated_at);
+    assert.equal(bodyB.data.server_updated_at, row.updated_at);
+    assert.notEqual(row.updated_at, base);
+    const winnerRevision = row.updated_at;
+
+    db.state.casUpdateBarrier = null;
+    const loserNext = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 240,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(4000),
+        base_server_updated_at: bodyA.data.server_updated_at,
+      },
+    }), { ...baseEnv, DB: db });
+    const loserNextBody = await json(loserNext);
+
+    assert.equal(loserNextBody.data.position_seconds, 240);
+    assert.notEqual(loserNextBody.data.server_updated_at, winnerRevision);
+  });
+
+  it('rejects forged future base revisions and keeps the canonical row', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    const audio_url = 'https://cdn.example.com/future-base.mp3';
+
+    const initial = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 70,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(1000),
+      },
+    }), { ...baseEnv, DB: db });
+    const initialBody = await json(initial);
+
+    const forged = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 10,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(60_000),
+        base_server_updated_at: '2999-01-01T00:00:00.000Z',
+      },
+    }), { ...baseEnv, DB: db });
+    const forgedBody = await json(forged);
+
+    assert.equal(forgedBody.data.position_seconds, 70);
+    assert.equal(forgedBody.data.server_updated_at, initialBody.data.server_updated_at);
+  });
+
+  it('gives rapid accepted revision writes distinct server revisions', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    const audio_url = 'https://cdn.example.com/rapid-revisions.mp3';
+
+    const first = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 20,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(1000),
+      },
+    }), { ...baseEnv, DB: db });
+    const firstBody = await json(first);
+    const second = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 30,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(2000),
+        base_server_updated_at: firstBody.data.server_updated_at,
+      },
+    }), { ...baseEnv, DB: db });
+    const secondBody = await json(second);
+    const third = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 40,
+        duration_seconds: 300,
+        finished: false,
+        last_played_at: freshIso(3000),
+        base_server_updated_at: secondBody.data.server_updated_at,
+      },
+    }), { ...baseEnv, DB: db });
+    const thirdBody = await json(third);
+
+    assert.notEqual(secondBody.data.server_updated_at, firstBody.data.server_updated_at);
+    assert.notEqual(thirdBody.data.server_updated_at, secondBody.data.server_updated_at);
+    assert.equal(thirdBody.data.position_seconds, 40);
+  });
+
+  it('orders concurrent first saves by server arrival instead of client clock skew', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createEpisodeProgressDb();
+    const audio_url = 'https://cdn.example.com/first-save-order.mp3';
+
+    const futureClock = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 300,
+        duration_seconds: 600,
+        finished: false,
+        last_played_at: '2999-01-01T00:00:00.000Z',
+      },
+    }), { ...baseEnv, DB: db });
+    await json(futureClock);
+
+    const laterServerArrival = await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: {
+        audio_url,
+        position_seconds: 30,
+        duration_seconds: 600,
+        finished: false,
+        last_played_at: '2026-07-17T00:00:00.000Z',
+      },
+    }), { ...baseEnv, DB: {
+      ...db,
+      prepare(sql) {
+        if (/SELECT id, last_played_at, updated_at\s+FROM episode_progress/s.test(sql)) {
+          return {
+            bind() {
+              return {
+                async first() {
+                  return null;
+                },
+              };
+            },
+          };
+        }
+        return db.prepare(sql);
+      },
+    } });
+    const body = await json(laterServerArrival);
+
+    assert.equal(body.data.position_seconds, 30);
+    assert.equal(body.data.last_played_at, '2026-07-17T00:00:00.000Z');
+    const row = db.state.rows.find((item) => item.user_id === 'd1-real-user' && item.audio_url === audio_url);
+    assert.equal(row.position_seconds, 30);
   });
 
   it('retains newest progress for concurrent out-of-order saves', async () => {
@@ -635,6 +904,11 @@ describe('EpisodeProgress Worker routes', () => {
     const olderTime = freshIso(1000);
     const newerTime = freshIso(3000);
     const audio_url = 'https://cdn.example.com/concurrent.mp3';
+    await worker.fetch(request('/api/entities/episode-progress', {
+      method: 'POST',
+      token,
+      payload: { audio_url, position_seconds: 1, duration_seconds: 100, finished: false, last_played_at: freshIso(500) },
+    }), { ...baseEnv, DB: db });
 
     await Promise.all([
       worker.fetch(request('/api/entities/episode-progress', { method: 'POST', token, payload: { audio_url, position_seconds: 10, duration_seconds: 100, finished: false, last_played_at: olderTime } }), { ...baseEnv, DB: db }),
