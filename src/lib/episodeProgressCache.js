@@ -347,6 +347,192 @@ export function getProgressHydrationRecoveryDecision(options = {}) {
   return { shouldStart: true, reason: 'failed' };
 }
 
+export function isAuthenticatedProgressSaveReady(userId, hydration, scope, controller = null) {
+  return Boolean(
+    userId &&
+    hydration?.scope === scope &&
+    hydration?.status === 'ready' &&
+    controller &&
+    !controller.cancelled &&
+    controller.scope === scope &&
+    controller.userId === userId
+  );
+}
+
+export function getProgressHydrationLifecycleDecision(options = {}) {
+  const { currentScope, nextScope, userId, hydration, controller } = options;
+  if (!userId) {
+    return { action: 'guest' };
+  }
+
+  const sameScope = currentScope === nextScope;
+  const activeController = Boolean(
+    controller &&
+    !controller.cancelled &&
+    controller.scope === nextScope &&
+    controller.userId === userId
+  );
+
+  if (!sameScope) {
+    return { action: 'start', reason: 'scope-changed' };
+  }
+
+  if (activeController) {
+    return { action: 'preserve', reason: 'active-controller' };
+  }
+
+  return { action: 'start', reason: 'same-scope-without-controller' };
+}
+
+export function createProgressHydrationController(options = {}) {
+  const {
+    scopeKey,
+    progressUser,
+    controllerRef,
+    hydrationRef,
+    recoveryRef,
+    scopeRef,
+    dbUserRef,
+    loadProgress,
+    retryDelays = [],
+    setTimeoutFn = globalThis.setTimeout,
+    clearTimeoutFn = globalThis.clearTimeout,
+    windowTarget = typeof window !== 'undefined' ? window : null,
+    documentTarget = typeof document !== 'undefined' ? document : null,
+    getVisibilityState = () => documentTarget?.visibilityState,
+    getRecoveryDecision = getProgressHydrationRecoveryDecision,
+    onHydrated = () => {},
+    onSettled = () => {},
+    onLoadFailed = () => {},
+    onRecoveryStarted = () => {},
+  } = options;
+
+  if (!scopeKey || !progressUser?.id || !controllerRef || !hydrationRef || !scopeRef || !loadProgress) {
+    return null;
+  }
+
+  const currentController = controllerRef.current;
+  if (
+    currentController &&
+    !currentController.cancelled &&
+    currentController.scope === scopeKey &&
+    currentController.userId === progressUser.id
+  ) {
+    return currentController;
+  }
+
+  currentController?.cleanup?.();
+
+  const controller = {
+    scope: scopeKey,
+    userId: progressUser.id,
+    cancelled: false,
+    retryTimer: null,
+    cleanup: null,
+    requestRecovery: null,
+    runHydration: null,
+  };
+  controllerRef.current = controller;
+
+  const ownsCurrentScope = () =>
+    !controller.cancelled &&
+    controllerRef.current === controller &&
+    scopeRef.current === scopeKey;
+
+  const runHydration = (attempt = 0) => {
+    const currentHydration = hydrationRef.current;
+    if (
+      currentHydration.scope === scopeKey &&
+      currentHydration.status === 'hydrating' &&
+      currentHydration.promise &&
+      controllerRef.current === controller
+    ) {
+      return currentHydration.promise;
+    }
+
+    const hydrationPromise = Promise.resolve()
+      .then(() => loadProgress())
+      .then(() => {
+        if (!ownsCurrentScope()) return;
+        hydrationRef.current = { scope: scopeKey, promise: null, status: 'ready' };
+        onHydrated(controller);
+      })
+      .catch((error) => {
+        if (!ownsCurrentScope()) return;
+        const retryDelay = retryDelays[attempt];
+        hydrationRef.current = { scope: scopeKey, promise: null, status: 'failed' };
+        onLoadFailed(error, retryDelay !== undefined);
+
+        if (retryDelay === undefined) return;
+        controller.retryTimer = setTimeoutFn(() => {
+          if (!ownsCurrentScope()) return;
+          controller.retryTimer = null;
+          runHydration(attempt + 1);
+        }, retryDelay);
+      })
+      .finally(() => {
+        if (!ownsCurrentScope()) return;
+        onSettled(controller);
+      });
+
+    hydrationRef.current = { scope: scopeKey, promise: hydrationPromise, status: 'hydrating' };
+    return hydrationPromise;
+  };
+
+  const requestRecovery = (reason) => {
+    if (
+      !ownsCurrentScope() ||
+      dbUserRef?.current?.id !== progressUser.id
+    ) return;
+    const decision = getRecoveryDecision({
+      hydration: hydrationRef.current,
+      scope: scopeKey,
+      userId: progressUser.id,
+      hasScheduledRetry: controller.retryTimer !== null,
+    });
+    if (!decision.shouldStart) return;
+    onRecoveryStarted(reason);
+    runHydration(0);
+  };
+
+  const handleOnline = () => requestRecovery('online');
+  const handleVisibilityChange = () => {
+    if (getVisibilityState() === 'visible') requestRecovery('visible');
+  };
+
+  controller.runHydration = runHydration;
+  controller.requestRecovery = requestRecovery;
+  if (recoveryRef) recoveryRef.current = requestRecovery;
+  windowTarget?.addEventListener?.('online', handleOnline);
+  documentTarget?.addEventListener?.('visibilitychange', handleVisibilityChange);
+
+  controller.cleanup = () => {
+    const isCurrentOwner = controllerRef.current === controller;
+    controller.cancelled = true;
+    clearTimeoutFn(controller.retryTimer);
+    windowTarget?.removeEventListener?.('online', handleOnline);
+    documentTarget?.removeEventListener?.('visibilitychange', handleVisibilityChange);
+    if (isCurrentOwner) {
+      controllerRef.current = null;
+    }
+    if (recoveryRef?.current === requestRecovery) {
+      recoveryRef.current = null;
+    }
+    const hydration = hydrationRef.current;
+    if (
+      isCurrentOwner &&
+      hydration.scope === scopeKey &&
+      hydration.status === 'hydrating' &&
+      hydration.promise
+    ) {
+      hydrationRef.current = { scope: scopeKey, promise: null, status: 'failed' };
+    }
+  };
+
+  runHydration();
+  return controller;
+}
+
 export function setCachedProgress(audioUrl, position, duration, finished) {
   const cache = readCache();
   const current = cache[audioUrl];
@@ -399,30 +585,46 @@ export function mergeProgressRecords(records, expectedVersion = scopeVersion) {
   return dbRecordMap;
 }
 
-function reportProgressSyncError(error) {
+function safeAudioIdentity(audioUrl) {
+  if (!audioUrl || typeof audioUrl !== 'string') return undefined;
+  let hash = 0;
+  for (let index = 0; index < audioUrl.length; index += 1) {
+    hash = ((hash << 5) - hash + audioUrl.charCodeAt(index)) | 0;
+  }
+  return `audio:${Math.abs(hash).toString(36).slice(0, 8)}`;
+}
+
+function reportProgressSyncError(error, context = {}) {
   const now = Date.now();
   if (now - lastDiagnosticAt < DIAGNOSTIC_THROTTLE_MS) return;
   lastDiagnosticAt = now;
 
-  if (typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location?.hostname)) {
-    console.warn('[VOXYL] Episode progress sync failed; local progress was kept.', {
-      name: error?.name,
-      message: error?.message,
-      status: error?.status,
-    });
-  }
+  console.warn('[VOXYL] Episode progress sync failed; local progress was kept.', {
+    operation: context.operation || 'unknown',
+    status: error?.status,
+    code: error?.code,
+    name: error?.name,
+    scopeStatus: context.scopeStatus,
+    hydrationReady: context.hydrationReady,
+    audio: safeAudioIdentity(context.audioUrl),
+  });
 }
 
-export async function loadProgressFromDB(voxylApi, userId) {
+export async function loadProgressFromDB(voxylApi, userId, diagnostics = {}) {
   const expectedScope = getProgressCacheScope(userId);
   if (!userId || expectedScope !== activeScope) return {};
   const { version } = getActiveProgressScope();
-  const records = asArray(await voxylApi.entities.EpisodeProgress.filter({}, '-last_played_at', 500));
-  if (expectedScope !== activeScope) return {};
-  return mergeProgressRecords(records, version);
+  try {
+    const records = asArray(await voxylApi.entities.EpisodeProgress.filter({}, '-last_played_at', 500));
+    if (expectedScope !== activeScope) return {};
+    return mergeProgressRecords(records, version);
+  } catch (error) {
+    reportProgressSyncError(error, { ...diagnostics, operation: 'load' });
+    throw error;
+  }
 }
 
-async function saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, version) {
+async function saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, version, diagnostics = {}) {
   if (!userId || expectedScope !== activeScope || version !== scopeVersion) return;
   const cached = getCachedProgress(audioUrl);
   if (expectedScope !== activeScope || version !== scopeVersion) return;
@@ -443,7 +645,7 @@ async function saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, v
   mergeProgressRecords([saved], version);
 }
 
-export function saveProgressToDB(voxylApi, userId, audioUrl) {
+export function saveProgressToDB(voxylApi, userId, audioUrl, diagnostics = {}) {
   if (!userId || !audioUrl) return Promise.resolve();
 
   const expectedScope = getProgressCacheScope(userId);
@@ -453,9 +655,9 @@ export function saveProgressToDB(voxylApi, userId, audioUrl) {
   const previous = saveQueues.get(queueKey) || Promise.resolve();
   const next = previous
     .catch(() => {})
-    .then(() => saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, version))
+    .then(() => saveProgressSnapshot(voxylApi, userId, audioUrl, expectedScope, version, diagnostics))
     .catch((error) => {
-      reportProgressSyncError(error);
+      reportProgressSyncError(error, { ...diagnostics, operation: 'save', audioUrl });
     })
     .finally(() => {
       if (saveQueues.get(queueKey) === next) {

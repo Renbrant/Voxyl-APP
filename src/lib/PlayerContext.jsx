@@ -13,7 +13,9 @@ import {
   getProgressPlaybackTransition,
   createProgressRegressionGuard,
   shouldBlockProgressSaveForGuard,
-  getProgressHydrationRecoveryDecision,
+  getProgressHydrationLifecycleDecision,
+  isAuthenticatedProgressSaveReady,
+  createProgressHydrationController,
   loadProgressFromDB,
   saveProgressToDB,
   FINISH_THRESHOLD,
@@ -45,6 +47,8 @@ const PROGRESS_HYDRATION_RETRY_DELAYS_MS = [3000, 10000, 30000];
 export function PlayerProvider({ children }) {
   const queryClient = useQueryClient();
   const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
+  const apiUserId = apiUser?.id || null;
+  const clerkUserId = clerkUser?.id || null;
   const [currentEpisode, setCurrentEpisode] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -83,6 +87,7 @@ export function PlayerProvider({ children }) {
   const progressScopeRef = useRef(null);
   const progressHydrationRef = useRef({ scope: null, promise: null, status: 'guest' });
   const progressHydrationRecoveryRef = useRef(null);
+  const progressHydrationControllerRef = useRef(null);
   const activeProgressRegressionGuardRef = useRef(null);
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
@@ -99,11 +104,11 @@ export function PlayerProvider({ children }) {
   // =========================================================================
 
   const canSaveAuthenticatedProgress = useCallback((userId) => {
-    const hydration = progressHydrationRef.current;
-    return Boolean(
-      userId &&
-      hydration.scope === progressScopeRef.current &&
-      hydration.status === 'ready'
+    return isAuthenticatedProgressSaveReady(
+      userId,
+      progressHydrationRef.current,
+      progressScopeRef.current,
+      progressHydrationControllerRef.current
     );
   }, []);
 
@@ -158,6 +163,15 @@ export function PlayerProvider({ children }) {
     }
   }, []);
 
+  const createProgressDiagnostics = useCallback((audioUrl = null) => {
+    const hydration = progressHydrationRef.current;
+    return {
+      scopeStatus: hydration?.status,
+      hydrationReady: hydration?.scope === progressScopeRef.current && hydration?.status === 'ready',
+      audioUrl,
+    };
+  }, []);
+
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
     finishedUrlsRef.current = new Set([...finishedUrlsRef.current, audioUrl]);
@@ -168,9 +182,9 @@ export function PlayerProvider({ children }) {
     setCachedProgress(audioUrl, pos, dur, true);
     const u = dbProgressUserRef.current;
     if (u && canSaveAuthenticatedProgress(u.id)) {
-      void saveProgressToDB(voxylApi, u.id, audioUrl);
+      void saveProgressToDB(voxylApi, u.id, audioUrl, createProgressDiagnostics(audioUrl));
     }
-  }, [canSaveAuthenticatedProgress]);
+  }, [canSaveAuthenticatedProgress, createProgressDiagnostics]);
 
   const clearPodcastPlayRetry = useCallback((session = podcastPlaySessionRef.current) => {
     clearPodcastPlayRetryTimer(session);
@@ -232,12 +246,12 @@ export function PlayerProvider({ children }) {
     const u = dbProgressUserRef.current;
     if (forceDB && allowDB && u) {
       if (canSaveAuthenticatedProgress(u.id)) {
-        void saveProgressToDB(voxylApi, u.id, ep.audioUrl);
+        void saveProgressToDB(voxylApi, u.id, ep.audioUrl, createProgressDiagnostics(ep.audioUrl));
       } else {
         requestProgressHydrationRecovery('progress-save');
       }
     }
-  }, [canSaveAuthenticatedProgress, recordPodcastPlay, requestProgressHydrationRecovery]);
+  }, [canSaveAuthenticatedProgress, createProgressDiagnostics, recordPodcastPlay, requestProgressHydrationRecovery]);
 
   const stopSaveTimers = useCallback(() => {
     clearInterval(localSaveTimerRef.current);
@@ -794,6 +808,26 @@ export function PlayerProvider({ children }) {
     });
   };
 
+  const startProgressHydrationController = useCallback((scopeKey, progressUser) => {
+    return createProgressHydrationController({
+      scopeKey,
+      progressUser,
+      controllerRef: progressHydrationControllerRef,
+      hydrationRef: progressHydrationRef,
+      recoveryRef: progressHydrationRecoveryRef,
+      scopeRef: progressScopeRef,
+      dbUserRef: dbProgressUserRef,
+      retryDelays: PROGRESS_HYDRATION_RETRY_DELAYS_MS,
+      loadProgress: () => loadProgressFromDB(voxylApi, progressUser.id, createProgressDiagnostics()),
+      onHydrated: refreshActiveProgressRegressionGuard,
+      onSettled: () => {
+        const cached = getAllFinishedFromCache();
+        setFinishedUrls(cached);
+        finishedUrlsRef.current = cached;
+      },
+    });
+  }, [createProgressDiagnostics, refreshActiveProgressRegressionGuard]);
+
   // =========================================================================
   // ── MOUNT: user, SW, progress ────────────────────────────────────────────
   // =========================================================================
@@ -825,10 +859,11 @@ export function PlayerProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    const decision = getProgressScopeDecision({ apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked });
+    const decision = getProgressScopeDecision({ apiUser: apiUserId ? { id: apiUserId } : null, clerkUserId, isAuthenticated, isLoadingAuth, authChecked });
     const transition = getProgressPlaybackTransition(progressScopeRef.current, decision);
 
     if (decision.status === 'loading') {
+      progressHydrationControllerRef.current?.cleanup?.();
       progressHydrationRef.current = { scope: progressScopeRef.current, promise: null, status: 'loading' };
       if (progressScopeRef.current && currentEpisodeRef.current) {
         saveCurrentProgress(false, { recordPlay: false, allowDB: false });
@@ -838,31 +873,40 @@ export function PlayerProvider({ children }) {
       }
       setUser(null);
       userRef.current = null;
-    dbProgressUserRef.current = null;
-    progressHydrationRecoveryRef.current = null;
-    return;
+      dbProgressUserRef.current = null;
+      progressHydrationRecoveryRef.current = null;
+      return;
     }
 
     const previousScopeKey = progressScopeRef.current;
     const nextScopeKey = transition.nextScope;
+    const nextProgressUser = decision.status === 'confirmed' && decision.userId ? { id: decision.userId } : null;
+
     if (progressScopeRef.current === nextScopeKey) {
-      if (decision.status === 'confirmed') {
-        const nextUser = decision.userId ? apiUser : null;
-        setUser(nextUser);
-        userRef.current = nextUser;
-        dbProgressUserRef.current = nextUser;
-        if (!nextUser?.id) {
-          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'guest' };
-        }
-      } else {
+      dbProgressUserRef.current = nextProgressUser;
+      if (!nextProgressUser?.id) {
         setUser(null);
         userRef.current = null;
-        dbProgressUserRef.current = null;
         progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'guest' };
+        progressHydrationControllerRef.current?.cleanup?.();
         progressHydrationRecoveryRef.current = null;
+        return;
+      }
+
+      const lifecycle = getProgressHydrationLifecycleDecision({
+        currentScope: progressScopeRef.current,
+        nextScope: nextScopeKey,
+        userId: nextProgressUser.id,
+        hydration: progressHydrationRef.current,
+        controller: progressHydrationControllerRef.current,
+      });
+      if (lifecycle.action === 'start') {
+        startProgressHydrationController(nextScopeKey, nextProgressUser);
       }
       return;
     }
+
+    progressHydrationControllerRef.current?.cleanup?.();
 
     if (previousScopeKey) {
       saveCurrentProgress(false, { recordPlay: false, allowDB: false });
@@ -874,11 +918,8 @@ export function PlayerProvider({ children }) {
     }
 
     progressScopeRef.current = nextScopeKey;
-    const nextUser = decision.status === 'confirmed' && decision.userId ? apiUser : null;
-    setUser(nextUser);
-    userRef.current = nextUser;
-    dbProgressUserRef.current = decision.status === 'confirmed' ? nextUser : null;
-    progressHydrationRef.current = nextUser?.id
+    dbProgressUserRef.current = nextProgressUser;
+    progressHydrationRef.current = nextProgressUser?.id
       ? { scope: nextScopeKey, promise: null, status: 'hydrating' }
       : { scope: nextScopeKey, promise: null, status: 'guest' };
     activateProgressCacheScope(decision.userId, {
@@ -889,103 +930,36 @@ export function PlayerProvider({ children }) {
     setFinishedUrls(cached);
     finishedUrlsRef.current = cached;
 
-    if (decision.status !== 'confirmed' || !nextUser?.id) {
+    if (decision.status !== 'confirmed' || !nextProgressUser?.id) {
       progressHydrationRecoveryRef.current = null;
       return;
     }
 
-    let cancelled = false;
-    let retryTimer = null;
-
-    const runHydration = (attempt = 0) => {
-      const currentHydration = progressHydrationRef.current;
-      if (
-        currentHydration.scope === nextScopeKey &&
-        currentHydration.status === 'hydrating' &&
-        currentHydration.promise
-      ) {
-        return currentHydration.promise;
-      }
-
-      const hydrationPromise = loadProgressFromDB(voxylApi, nextUser.id)
-        .then(() => {
-          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
-          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'ready' };
-          refreshActiveProgressRegressionGuard();
-        })
-        .catch((error) => {
-          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
-          const retryDelay = PROGRESS_HYDRATION_RETRY_DELAYS_MS[attempt];
-          progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'failed' };
-          console.warn('[VOXYL] Episode progress load failed; authenticated DB progress saves are paused.', {
-            name: error?.name,
-            message: error?.message,
-            status: error?.status,
-            willRetry: retryDelay !== undefined,
-          });
-
-          if (retryDelay === undefined) return;
-          retryTimer = setTimeout(() => {
-            if (cancelled || progressScopeRef.current !== nextScopeKey) return;
-            retryTimer = null;
-            runHydration(attempt + 1);
-          }, retryDelay);
-        })
-        .finally(() => {
-          if (cancelled || progressScopeRef.current !== nextScopeKey) return;
-          cached = getAllFinishedFromCache();
-          setFinishedUrls(cached);
-          finishedUrlsRef.current = cached;
-        });
-
-      progressHydrationRef.current = { scope: nextScopeKey, promise: hydrationPromise, status: 'hydrating' };
-      return hydrationPromise;
-    };
-
-    const requestRecovery = (reason) => {
-      if (dbProgressUserRef.current?.id !== nextUser.id) return;
-      const decision = getProgressHydrationRecoveryDecision({
-        hydration: progressHydrationRef.current,
-        scope: nextScopeKey,
-        userId: nextUser.id,
-        hasScheduledRetry: retryTimer !== null,
-      });
-      if (!decision.shouldStart) return;
-      console.info('[VOXYL] Restarting EpisodeProgress hydration after recovery trigger.', { reason });
-      runHydration(0);
-    };
-
-    progressHydrationRecoveryRef.current = requestRecovery;
-    const handleOnline = () => requestRecovery('online');
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') requestRecovery('visible');
-    };
-
-    window.addEventListener('online', handleOnline);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    runHydration();
-
-    return () => {
-      cancelled = true;
-      if (progressHydrationRecoveryRef.current === requestRecovery) {
-        progressHydrationRecoveryRef.current = null;
-      }
-      window.removeEventListener('online', handleOnline);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      clearTimeout(retryTimer);
-    };
+    startProgressHydrationController(nextScopeKey, nextProgressUser);
   }, [
-    apiUser,
-    clerkUser,
+    apiUserId,
+    clerkUserId,
     isAuthenticated,
     isLoadingAuth,
     authChecked,
     clearPlaybackForIdentityChange,
-    refreshActiveProgressRegressionGuard,
-    requestProgressHydrationRecovery,
     saveCurrentProgress,
+    startProgressHydrationController,
     stopSaveTimers,
   ]);
+
+  useEffect(() => {
+    return () => {
+      progressHydrationControllerRef.current?.cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const decision = getProgressScopeDecision({ apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked });
+    const nextUser = decision.status === 'confirmed' && decision.userId ? apiUser : null;
+    setUser(nextUser);
+    userRef.current = nextUser;
+  }, [apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked]);
 
   useEffect(() => {
 
