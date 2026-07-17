@@ -11,6 +11,8 @@ import {
   getEpisodeResumeState,
   getProgressPlaybackTransition,
   getProgressScopeDecision,
+  createProgressRegressionGuard,
+  shouldBlockProgressSaveForGuard,
   loadProgressFromDB,
   mergeProgressRecords,
   resetProgressRuntimeState,
@@ -1055,6 +1057,148 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(payloads[1].base_server_updated_at, '2026-07-17T12:00:20.000Z');
     assert.equal(getCachedProgress(audioUrl).position_seconds, 120);
     assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:30.000Z');
+  });
+
+  it('blocks stale prehydration playback from overwriting canonical retry progress until catch-up', async () => {
+    activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/prehydration-stale.mp3';
+    const payloads = [];
+
+    setCachedProgress(audioUrl, 100, 300, false);
+    let activePosition = getEpisodeResumeState({ audioUrl }).resumeAt;
+    assert.equal(activePosition, 100);
+
+    await assert.rejects(
+      loadProgressFromDB({
+        entities: {
+          EpisodeProgress: {
+            async filter() {
+              throw new Error('initial GET failed');
+            },
+          },
+        },
+      }, 'user-a'),
+      /initial GET failed/
+    );
+
+    mergeProgressRecords([{
+      id: 'server-row',
+      audio_url: audioUrl,
+      position_seconds: 200,
+      duration_seconds: 300,
+      finished: 0,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:02.000Z',
+    }]);
+
+    activePosition = 105;
+    const guard = createProgressRegressionGuard(audioUrl, activePosition, getCachedProgress(audioUrl));
+
+    assert.equal(activePosition, 105);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, 105), true);
+    assert.equal(payloads.length, 0);
+
+    if (!shouldBlockProgressSaveForGuard(guard, audioUrl, 105)) {
+      setCachedProgress(audioUrl, 105, 300, false);
+    }
+
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:02.000Z');
+
+    activePosition = 205;
+    assert.equal(shouldBlockProgressSaveForGuard(guard, audioUrl, activePosition), false);
+
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async create(payload) {
+            payloads.push(payload);
+            return {
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: '2026-07-17T12:00:03.000Z',
+            };
+          },
+        },
+      },
+    };
+
+    setCachedProgress(audioUrl, activePosition, 300, false);
+    await saveProgressToDB(api, 'user-a', audioUrl);
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].position_seconds, 205);
+    assert.equal(payloads[0].base_server_updated_at, '2026-07-17T12:00:02.000Z');
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 205);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:03.000Z');
+  });
+
+  it('does not retain stale playback protection across episodes, users, or guest playback', () => {
+    const episodeA = 'https://cdn.example.com/protected-a.mp3';
+    const episodeB = 'https://cdn.example.com/protected-b.mp3';
+    const guard = createProgressRegressionGuard(episodeA, 100, {
+      position_seconds: 200,
+      server_updated_at: '2026-07-17T12:00:02.000Z',
+    });
+
+    assert.equal(shouldBlockProgressSaveForGuard(guard, episodeA, 120), true);
+    assert.equal(shouldBlockProgressSaveForGuard(guard, episodeB, 120), false);
+
+    const clearedForUserSwitch = null;
+    assert.equal(shouldBlockProgressSaveForGuard(clearedForUserSwitch, episodeA, 120), false);
+    assert.equal(shouldBlockProgressSaveForGuard(null, episodeA, 120), false);
+  });
+
+  it('allows active playback already ahead of canonical retry progress to save with the reconciled revision', async () => {
+    activateProgressCacheScope('user-a');
+    const audioUrl = 'https://cdn.example.com/prehydration-ahead.mp3';
+    const payloads = [];
+
+    setCachedProgress(audioUrl, 250, 300, false);
+    mergeProgressRecords([{
+      id: 'server-row',
+      audio_url: audioUrl,
+      position_seconds: 200,
+      duration_seconds: 300,
+      finished: 0,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:02.000Z',
+    }]);
+
+    const guard = createProgressRegressionGuard(audioUrl, 250, getCachedProgress(audioUrl));
+    assert.equal(guard, null);
+
+    const api = {
+      entities: {
+        EpisodeProgress: {
+          async create(payload) {
+            payloads.push(payload);
+            return {
+              id: 'server-row',
+              audio_url: audioUrl,
+              position_seconds: payload.position_seconds,
+              duration_seconds: payload.duration_seconds,
+              finished: payload.finished,
+              last_played_at: payload.last_played_at,
+              server_updated_at: '2026-07-17T12:00:03.000Z',
+            };
+          },
+        },
+      },
+    };
+
+    setCachedProgress(audioUrl, 255, 300, false);
+    await saveProgressToDB(api, 'user-a', audioUrl);
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].position_seconds, 255);
+    assert.equal(payloads[0].base_server_updated_at, '2026-07-17T12:00:02.000Z');
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 255);
   });
 
   it('lets authenticated server progress beat a future-dated local cache after hydration', () => {

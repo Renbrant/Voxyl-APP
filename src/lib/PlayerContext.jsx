@@ -11,6 +11,8 @@ import {
   getEpisodeResumeState,
   getProgressScopeDecision,
   getProgressPlaybackTransition,
+  createProgressRegressionGuard,
+  shouldBlockProgressSaveForGuard,
   loadProgressFromDB,
   saveProgressToDB,
   FINISH_THRESHOLD,
@@ -79,6 +81,7 @@ export function PlayerProvider({ children }) {
   const wakeLockRef = useRef(null);
   const progressScopeRef = useRef(null);
   const progressHydrationRef = useRef({ scope: null, promise: null, status: 'guest' });
+  const activeProgressRegressionGuardRef = useRef(null);
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
   const nativeCurrentTimeRef = useRef(0);
@@ -125,6 +128,27 @@ export function PlayerProvider({ children }) {
 
     return false;
   }, []);
+
+  const getActivePlaybackPosition = useCallback(() => {
+    const useNative = isNative && nativeAudioPlayer.isReady();
+    return useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
+  }, []);
+
+  const refreshActiveProgressRegressionGuard = useCallback(() => {
+    const activeEpisode = currentEpisodeRef.current;
+    const currentGuard = activeProgressRegressionGuardRef.current;
+    if (!activeEpisode?.audioUrl || currentGuard?.audioUrl !== activeEpisode.audioUrl) {
+      activeProgressRegressionGuardRef.current = null;
+      return;
+    }
+
+    const nextGuard = createProgressRegressionGuard(
+      activeEpisode.audioUrl,
+      getActivePlaybackPosition(),
+      getCachedProgress(activeEpisode.audioUrl)
+    );
+    activeProgressRegressionGuardRef.current = nextGuard;
+  }, [getActivePlaybackPosition]);
 
   const markFinished = useCallback((audioUrl) => {
     if (!audioUrl) return;
@@ -187,6 +211,13 @@ export function PlayerProvider({ children }) {
     const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
     if (pos < MIN_SAVE_POSITION) return;
     const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
+    if (shouldBlockProgressSaveForGuard(activeProgressRegressionGuardRef.current, ep.audioUrl, pos)) {
+      if (recordPlay) recordPodcastPlay();
+      return;
+    }
+    if (activeProgressRegressionGuardRef.current?.audioUrl === ep.audioUrl) {
+      activeProgressRegressionGuardRef.current = null;
+    }
     setCachedProgress(ep.audioUrl, pos, dur, finished);
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
     if (recordPlay) recordPodcastPlay();
@@ -229,6 +260,7 @@ export function PlayerProvider({ children }) {
     clearPodcastPlayRetry(currentSession);
     podcastPlaySessionRef.current = null;
     currentEpisodeRef.current = null;
+    activeProgressRegressionGuardRef.current = null;
     currentIndexRef.current = -1;
     queueRef.current = [];
     nativeCurrentTimeRef.current = 0;
@@ -855,6 +887,7 @@ export function PlayerProvider({ children }) {
         .then(() => {
           if (cancelled || progressScopeRef.current !== nextScopeKey) return;
           progressHydrationRef.current = { scope: nextScopeKey, promise: null, status: 'ready' };
+          refreshActiveProgressRegressionGuard();
         })
         .catch((error) => {
           if (cancelled || progressScopeRef.current !== nextScopeKey) return;
@@ -897,6 +930,7 @@ export function PlayerProvider({ children }) {
     isLoadingAuth,
     authChecked,
     clearPlaybackForIdentityChange,
+    refreshActiveProgressRegressionGuard,
     saveCurrentProgress,
     stopSaveTimers,
   ]);
@@ -955,7 +989,7 @@ export function PlayerProvider({ children }) {
     stopSaveTimers();
     pausePodcastPlaySessionTimer();
 
-    await waitForAuthenticatedProgressHydration();
+    const hydrationReady = await waitForAuthenticatedProgressHydration();
     const { resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
 
     armLoadingWatchdog('manual-play');
@@ -963,6 +997,9 @@ export function PlayerProvider({ children }) {
     setDuration(durationSeconds);
     setCurrentEpisode(episode);
     currentEpisodeRef.current = episode;
+    activeProgressRegressionGuardRef.current = dbProgressUserRef.current && !hydrationReady
+      ? { audioUrl: episode.audioUrl, pendingHydration: true }
+      : null;
     startPodcastPlaySession(episode);
 
     const idx = q.findIndex(e => e.audioUrl === episode.audioUrl);

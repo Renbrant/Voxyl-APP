@@ -301,6 +301,27 @@ export function getEpisodeResumeState(episode, skipResume = false) {
   };
 }
 
+export function createProgressRegressionGuard(audioUrl, currentPosition, canonicalProgress) {
+  const canonicalPosition = Number(canonicalProgress?.position_seconds);
+  const safeCurrentPosition = Number.isFinite(currentPosition) && currentPosition >= 0 ? currentPosition : 0;
+
+  if (!audioUrl || !Number.isFinite(canonicalPosition) || canonicalPosition <= safeCurrentPosition) {
+    return null;
+  }
+
+  return {
+    audioUrl,
+    position_seconds: Math.trunc(canonicalPosition),
+    server_updated_at: canonicalProgress?.server_updated_at,
+  };
+}
+
+export function shouldBlockProgressSaveForGuard(guard, audioUrl, position) {
+  if (!guard || guard.audioUrl !== audioUrl) return false;
+  const safePosition = Number.isFinite(position) && position >= 0 ? position : 0;
+  return safePosition < Number(guard.position_seconds);
+}
+
 export function setCachedProgress(audioUrl, position, duration, finished) {
   const cache = readCache();
   const current = cache[audioUrl];
