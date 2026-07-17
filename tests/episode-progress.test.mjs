@@ -16,6 +16,9 @@ import {
   createProgressHydrationController,
   getProgressHydrationRecoveryDecision,
   isAuthenticatedProgressSaveReady,
+  shouldRefreshRequireResumeTransition,
+  createWebResumeRequestGate,
+  isCurrentWebResumeRequest,
   shouldBlockProgressSaveForGuard,
   loadProgressFromDB,
   mergeProgressRecords,
@@ -129,6 +132,8 @@ function createProgressControllerHarness(scope = 'user-a') {
   let loadCount = 0;
   let settledCount = 0;
   let hydratedCount = 0;
+  let refreshedCount = 0;
+  let refreshStartedCount = 0;
   let clearCount = 0;
   const setTimeoutFn = (callback, delay) => {
     const timer = { callback, delay, cleared: false };
@@ -155,7 +160,10 @@ function createProgressControllerHarness(scope = 'user-a') {
       retryDelays: [5],
       loadProgress: () => {
         loadCount += 1;
-        return deferred.promise;
+        if (!loads[loadCount - 1]) {
+          loads.push(createDeferred());
+        }
+        return loads[loadCount - 1].promise;
       },
       setTimeoutFn,
       clearTimeoutFn,
@@ -163,6 +171,13 @@ function createProgressControllerHarness(scope = 'user-a') {
       documentTarget,
       onHydrated: () => {
         hydratedCount += 1;
+      },
+      onBeforeRefresh: () => ({ loadCountBeforeRefresh: loadCount }),
+      onRefreshStarted: () => {
+        refreshStartedCount += 1;
+      },
+      onRefreshed: () => {
+        refreshedCount += 1;
       },
       onSettled: () => {
         settledCount += 1;
@@ -184,6 +199,8 @@ function createProgressControllerHarness(scope = 'user-a') {
     get loadCount() { return loadCount; },
     get settledCount() { return settledCount; },
     get hydratedCount() { return hydratedCount; },
+    get refreshedCount() { return refreshedCount; },
+    get refreshStartedCount() { return refreshStartedCount; },
     get clearCount() { return clearCount; },
   };
 }
@@ -1441,6 +1458,132 @@ describe('EpisodeProgress frontend cache helpers', () => {
     ), true);
   });
 
+  it('refreshes ready authenticated hydration on window focus', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydrationRef.current.status, 'ready');
+
+    harness.windowTarget.dispatch('focus');
+    assert.equal(harness.loadCount, 1);
+    assert.equal(harness.timers.length, 1);
+    harness.timers[0].callback();
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 2);
+    harness.loads[1].resolve([]);
+    await controller.refreshPromise;
+
+    assert.equal(harness.refreshStartedCount, 1);
+    assert.equal(harness.refreshedCount, 1);
+    assert.equal(harness.hydratedCount, 1);
+    assert.equal(harness.hydrationRef.current.status, 'ready');
+  });
+
+  it('keeps ready refresh callbacks separate from initial hydration callbacks', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydratedCount, 1);
+
+    const refresh = controller.requestRefresh('focus', { immediate: true });
+    await Promise.resolve();
+    harness.loads[1].resolve([]);
+    await refresh;
+
+    assert.equal(harness.refreshedCount, 1);
+    assert.equal(harness.hydratedCount, 1);
+  });
+
+  it('refreshes ready authenticated hydration when visibility becomes visible', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+
+    harness.documentTarget.visibilityState = 'hidden';
+    harness.documentTarget.dispatch('visibilitychange');
+    assert.equal(harness.loadCount, 1);
+
+    harness.documentTarget.visibilityState = 'visible';
+    harness.documentTarget.dispatch('visibilitychange');
+    assert.equal(harness.timers.length, 1);
+    harness.timers[0].callback();
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 2);
+    harness.loads[1].resolve([]);
+    await controller.refreshPromise;
+
+    assert.equal(harness.refreshedCount, 1);
+  });
+
+  it('coalesces focus and visible refresh triggers into one request', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+
+    harness.windowTarget.dispatch('focus');
+    harness.documentTarget.dispatch('visibilitychange');
+    assert.equal(harness.timers.length, 1);
+    harness.timers[0].callback();
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 2);
+    harness.loads[1].resolve([]);
+    await controller.refreshPromise;
+
+    assert.equal(harness.refreshStartedCount, 1);
+    assert.equal(harness.refreshedCount, 1);
+  });
+
+  it('keeps failed hydration recovery behavior distinct from ready refresh', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].reject(new Error('initial outage'));
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydrationRef.current.status, 'failed');
+
+    controller.requestRefresh('focus', { immediate: true });
+    assert.equal(harness.loadCount, 1);
+
+    controller.requestRecovery('progress-save');
+    assert.equal(harness.loadCount, 1);
+    harness.timers[0].callback();
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 2);
+    harness.loads[1].resolve([]);
+    await harness.hydrationRef.current.promise;
+    assert.equal(harness.hydrationRef.current.status, 'ready');
+  });
+
+  it('ignores refresh results after scope or identity changes and removes listeners on cleanup', async () => {
+    const harness = createProgressControllerHarness('user-a');
+    const controller = harness.start();
+    await Promise.resolve();
+    harness.loads[0].resolve([]);
+    await harness.hydrationRef.current.promise;
+
+    const refresh = controller.requestRefresh('focus', { immediate: true });
+    await Promise.resolve();
+    assert.equal(harness.loadCount, 2);
+    harness.scopeRef.current = 'user-b';
+    harness.dbUserRef.current = { id: 'user-b' };
+    harness.loads[1].resolve([]);
+    await refresh;
+
+    assert.equal(harness.refreshedCount, 0);
+    controller.cleanup();
+    assert.equal(harness.windowTarget.listenerCount('online'), 0);
+    assert.equal(harness.windowTarget.listenerCount('focus'), 0);
+    assert.equal(harness.documentTarget.listenerCount('visibilitychange'), 0);
+  });
+
   it('starts a replacement on the same scope only when the controller is genuinely invalid', async () => {
     const harness = createProgressControllerHarness('user-a');
     const controllerA = harness.start();
@@ -1799,6 +1942,236 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getCachedProgress('https://cdn.example.com/local.mp3').last_played_at, local.last_played_at);
     assert.equal(getCachedProgress('https://cdn.example.com/remote.mp3').finished, true);
     assert.equal(getCachedProgress('https://cdn.example.com/old.mp3'), null);
+  });
+
+  it('requires a refreshed resume transition for paused stale same-episode progress', () => {
+    const audioUrl = 'https://cdn.example.com/cross-device.mp3';
+    activateProgressCacheScope('user-a');
+    mergeProgressRecords([{
+      id: 'old',
+      audio_url: audioUrl,
+      position_seconds: 41,
+      duration_seconds: 300,
+      finished: false,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:00.000Z',
+    }]);
+    const before = getCachedProgress(audioUrl);
+    mergeProgressRecords([{
+      id: 'new',
+      audio_url: audioUrl,
+      position_seconds: 105,
+      duration_seconds: 300,
+      finished: false,
+      last_played_at: '2026-07-17T12:05:00.000Z',
+      server_updated_at: '2026-07-17T12:05:00.000Z',
+    }]);
+    const after = getCachedProgress(audioUrl);
+
+    assert.equal(shouldRefreshRequireResumeTransition({
+      before,
+      after,
+      currentPosition: 41,
+      isPlaying: false,
+      isWebPlayback: true,
+    }), true);
+  });
+
+  it('does not jump active playback and creates web reconciliation state when remote is ahead', () => {
+    const before = {
+      position_seconds: 41,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:00.000Z',
+    };
+    const after = {
+      position_seconds: 105,
+      last_played_at: '2026-07-17T12:05:00.000Z',
+      server_updated_at: '2026-07-17T12:05:00.000Z',
+    };
+
+    assert.equal(shouldRefreshRequireResumeTransition({
+      before,
+      after,
+      currentPosition: 45,
+      isPlaying: true,
+      isWebPlayback: true,
+    }), true);
+    assert.equal(shouldRefreshRequireResumeTransition({
+      before,
+      after,
+      currentPosition: 41,
+      isPlaying: false,
+      isWebPlayback: false,
+    }), false);
+  });
+
+  it('uses the furthest valid position instead of server revision alone', () => {
+    const newerLowerPosition = {
+      position_seconds: 30,
+      last_played_at: '2026-07-17T12:05:00.000Z',
+      server_updated_at: '2026-07-17T12:05:00.000Z',
+    };
+    const olderHigherPosition = {
+      position_seconds: 200,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: '2026-07-17T12:00:00.000Z',
+    };
+
+    assert.equal(shouldRefreshRequireResumeTransition({
+      before: olderHigherPosition,
+      after: newerLowerPosition,
+      currentPosition: 200,
+      isPlaying: false,
+      isWebPlayback: true,
+    }), false);
+    assert.equal(shouldRefreshRequireResumeTransition({
+      before: newerLowerPosition,
+      after: olderHigherPosition,
+      currentPosition: 30,
+      isPlaying: false,
+      isWebPlayback: true,
+    }), true);
+
+    const audioUrl = 'https://cdn.example.com/monotonic.mp3';
+    activateProgressCacheScope('user-a');
+    mergeProgressRecords([{
+      audio_url: audioUrl,
+      position_seconds: 200,
+      duration_seconds: 300,
+      finished: false,
+      last_played_at: '2026-07-17T12:00:00.000Z',
+      server_updated_at: olderHigherPosition.server_updated_at,
+    }]);
+    mergeProgressRecords([{
+      audio_url: audioUrl,
+      position_seconds: 30,
+      duration_seconds: 300,
+      finished: false,
+      last_played_at: '2026-07-17T12:05:00.000Z',
+      server_updated_at: newerLowerPosition.server_updated_at,
+    }]);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, newerLowerPosition.server_updated_at);
+  });
+
+  it('merges furthest position and newest revision metadata independently', () => {
+    const audioUrl = 'https://cdn.example.com/revision-merge.mp3';
+    const t1 = '2026-07-17T12:00:01.000Z';
+    const t2 = '2026-07-17T12:00:02.000Z';
+
+    activateProgressCacheScope('user-a');
+    mergeProgressRecords([{
+      id: 'row-t2', audio_url: audioUrl, position_seconds: 100, duration_seconds: 300,
+      finished: false, last_played_at: t2, server_updated_at: t2,
+    }]);
+    mergeProgressRecords([{
+      id: 'row-t1', audio_url: audioUrl, position_seconds: 120, duration_seconds: 300,
+      finished: false, last_played_at: t1, server_updated_at: t1,
+    }]);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 120);
+    assert.equal(getCachedProgress(audioUrl).server_updated_at, t2);
+
+    const reverseAudioUrl = 'https://cdn.example.com/revision-merge-reverse.mp3';
+    mergeProgressRecords([{
+      id: 'row-t1', audio_url: reverseAudioUrl, position_seconds: 120, duration_seconds: 300,
+      finished: false, last_played_at: t1, server_updated_at: t1,
+    }]);
+    mergeProgressRecords([{
+      id: 'row-t2', audio_url: reverseAudioUrl, position_seconds: 100, duration_seconds: 300,
+      finished: false, last_played_at: t2, server_updated_at: t2,
+    }]);
+    assert.equal(getCachedProgress(reverseAudioUrl).position_seconds, 120);
+    assert.equal(getCachedProgress(reverseAudioUrl).server_updated_at, t2);
+
+    mergeProgressRecords([{
+      id: 'row-t2-next', audio_url: reverseAudioUrl, position_seconds: 120, duration_seconds: 300,
+      finished: true, last_played_at: t2, server_updated_at: t2,
+    }]);
+    assert.equal(getCachedProgress(reverseAudioUrl).finished, true);
+    assert.equal(getCachedProgress(reverseAudioUrl).server_updated_at, t2);
+    mergeProgressRecords([{
+      id: 'row-t2-later', audio_url: reverseAudioUrl, position_seconds: 120, duration_seconds: 300,
+      finished: false, last_played_at: t2, server_updated_at: t2,
+    }]);
+    assert.equal(getCachedProgress(reverseAudioUrl).finished, true);
+  });
+
+  it('only lets the latest web resume request continue', () => {
+    const gate = createWebResumeRequestGate();
+    const first = gate.begin();
+    const second = gate.begin();
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: first,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: false,
+    }), false);
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: second,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: false,
+    }), true);
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: second,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-b',
+      isPlaying: false,
+    }), false);
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: second,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: true,
+    }), false);
+    gate.invalidate();
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: second,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: false,
+    }), false);
+  });
+
+  it('permanently obsoletes a resume after play then pause or cleanup', () => {
+    const gate = createWebResumeRequestGate();
+    const request = gate.begin();
+    const requestIsCurrent = (isPlaying) => isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: request,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying,
+    });
+
+    assert.equal(requestIsCurrent(false), true);
+    gate.invalidate(); // shared web audio emitted playing
+    assert.equal(requestIsCurrent(true), false);
+    assert.equal(requestIsCurrent(false), false); // paused again cannot revive it
+
+    const cleanupRequest = gate.begin();
+    gate.invalidate(); // web audio cleanup/unmount
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: cleanupRequest,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: false,
+    }), false);
+
+    const latestRequest = gate.begin();
+    assert.equal(isCurrentWebResumeRequest({
+      gate,
+      requestGeneration: latestRequest,
+      expectedAudioUrl: 'episode-a',
+      currentAudioUrl: 'episode-a',
+      isPlaying: false,
+    }), true);
   });
 
   it('prevents stale remote responses from overwriting a new user scope', async () => {
@@ -2321,7 +2694,7 @@ describe('EpisodeProgress frontend cache helpers', () => {
     );
   });
 
-  it('recovers hydration after retry exhaustion and saves active playback already ahead of canonical progress', async () => {
+  it('recovers hydration after retry exhaustion without regressing farther active playback', async () => {
     const { scope } = activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/recovery-ahead.mp3';
     const payloads = [];
@@ -2382,7 +2755,7 @@ describe('EpisodeProgress frontend cache helpers', () => {
     await loadProgressFromDB(api, 'user-a');
     const guard = createProgressRegressionGuard(audioUrl, activePosition, getCachedProgress(audioUrl));
     assert.equal(guard, null);
-    assert.equal(getCachedProgress(audioUrl).position_seconds, 200);
+    assert.equal(getCachedProgress(audioUrl).position_seconds, 240);
 
     activePosition = 245;
     setCachedProgress(audioUrl, activePosition, 300, false);
@@ -3384,6 +3757,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     let loading = true;
     let timersStarted = false;
     let podcastStarted = false;
+    const gate = createWebResumeRequestGate();
+    const request = gate.begin();
     const transitionB = beginWebEpisodeSourceSwitch({
       coordinator,
       audio,
@@ -3393,6 +3768,7 @@ describe('EpisodeProgress frontend cache helpers', () => {
     });
 
     if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      gate.invalidate();
       loading = false;
       timersStarted = true;
       podcastStarted = true;
@@ -3400,9 +3776,11 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(loading, true);
     assert.equal(timersStarted, false);
     assert.equal(podcastStarted, false);
+    assert.equal(gate.isCurrent(request), true);
 
     coordinator.markEstablished(transitionB);
     if (!coordinator.shouldIgnoreEvent('playing', audio)) {
+      gate.invalidate();
       loading = false;
       timersStarted = true;
       podcastStarted = true;
@@ -3410,6 +3788,7 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(loading, false);
     assert.equal(timersStarted, true);
     assert.equal(podcastStarted, true);
+    assert.equal(gate.isCurrent(request), false);
   });
 
   it('allows current established events to update playback state and save progress', () => {

@@ -15,6 +15,9 @@ import {
   shouldBlockProgressSaveForGuard,
   getProgressHydrationLifecycleDecision,
   isAuthenticatedProgressSaveReady,
+  shouldRefreshRequireResumeTransition,
+  createWebResumeRequestGate,
+  isCurrentWebResumeRequest as isCurrentWebResumeRequestDecision,
   createProgressHydrationController,
   loadProgressFromDB,
   saveProgressToDB,
@@ -91,6 +94,8 @@ export function PlayerProvider({ children }) {
   const progressHydrationControllerRef = useRef(null);
   const activeProgressRegressionGuardRef = useRef(null);
   const pendingWebSeekRef = useRef(null);
+  const isPlayingRef = useRef(false);
+  const webResumeRequestGateRef = useRef(createWebResumeRequestGate());
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
   const nativeCurrentTimeRef = useRef(0);
@@ -100,6 +105,7 @@ export function PlayerProvider({ children }) {
   queueRef.current = queue;
   autoplayRef.current = autoplay;
   finishedUrlsRef.current = finishedUrls;
+  isPlayingRef.current = isPlaying;
 
   // =========================================================================
   // ── SHARED HELPERS ────────────────────────────────────────────────────────
@@ -146,9 +152,12 @@ export function PlayerProvider({ children }) {
   const refreshActiveProgressRegressionGuard = useCallback(() => {
     const activeEpisode = currentEpisodeRef.current;
     const currentGuard = activeProgressRegressionGuardRef.current;
-    if (!activeEpisode?.audioUrl || currentGuard?.audioUrl !== activeEpisode.audioUrl) {
+    if (!activeEpisode?.audioUrl) {
       activeProgressRegressionGuardRef.current = null;
       return;
+    }
+    if (currentGuard && currentGuard.audioUrl !== activeEpisode.audioUrl) {
+      activeProgressRegressionGuardRef.current = null;
     }
 
     const nextGuard = createProgressRegressionGuard(
@@ -159,10 +168,81 @@ export function PlayerProvider({ children }) {
     activeProgressRegressionGuardRef.current = nextGuard;
   }, [getActivePlaybackPosition]);
 
+  const captureActiveProgressRefreshContext = useCallback(() => {
+    if (isNative) return null;
+    const activeEpisode = currentEpisodeRef.current;
+    if (!activeEpisode?.audioUrl) return null;
+
+    return {
+      audioUrl: activeEpisode.audioUrl,
+      before: getCachedProgress(activeEpisode.audioUrl),
+      currentPosition: getActivePlaybackPosition(),
+      isPlaying: isPlayingRef.current,
+    };
+  }, [getActivePlaybackPosition]);
+
+  const reconcileActiveProgressRefresh = useCallback((_, context) => {
+    if (isNative || !context?.audioUrl) return;
+    const activeEpisode = currentEpisodeRef.current;
+    if (activeEpisode?.audioUrl !== context.audioUrl) {
+      if (pendingWebSeekRef.current?.audioUrl === context.audioUrl) {
+        pendingWebSeekRef.current = null;
+      }
+      return;
+    }
+
+    const refreshed = getCachedProgress(context.audioUrl);
+    if (shouldRefreshRequireResumeTransition({
+      before: context.before,
+      after: refreshed,
+      currentPosition: getActivePlaybackPosition(),
+      isPlaying: context.isPlaying || isPlayingRef.current,
+      isWebPlayback: true,
+    })) {
+      pendingWebSeekRef.current = {
+        audioUrl: context.audioUrl,
+        position_seconds: refreshed.position_seconds,
+        server_updated_at: refreshed.server_updated_at,
+        refresh: true,
+      };
+      refreshActiveProgressRegressionGuard();
+    }
+  }, [getActivePlaybackPosition, refreshActiveProgressRegressionGuard]);
+
   const requestProgressHydrationRecovery = useCallback((reason) => {
     if (typeof progressHydrationRecoveryRef.current === 'function') {
       progressHydrationRecoveryRef.current(reason);
     }
+  }, []);
+
+  const requestAuthenticatedProgressRefresh = useCallback(async (reason) => {
+    if (isNative) return;
+    const controller = progressHydrationControllerRef.current;
+    if (
+      controller?.scope !== progressScopeRef.current ||
+      controller?.userId !== dbProgressUserRef.current?.id ||
+      typeof controller.requestRefresh !== 'function'
+    ) return;
+
+    await controller.requestRefresh(reason, { immediate: true })?.catch?.(() => {});
+  }, []);
+
+  const beginWebResumeRequest = useCallback(() => {
+    return webResumeRequestGateRef.current.begin();
+  }, []);
+
+  const isCurrentWebResumeRequest = useCallback((requestGeneration, audioUrl) => {
+    return isCurrentWebResumeRequestDecision({
+      gate: webResumeRequestGateRef.current,
+      requestGeneration,
+      expectedAudioUrl: audioUrl,
+      currentAudioUrl: currentEpisodeRef.current?.audioUrl,
+      isPlaying: isPlayingRef.current,
+    });
+  }, []);
+
+  const invalidateWebResumeRequest = useCallback(() => {
+    webResumeRequestGateRef.current.invalidate();
   }, []);
 
   const createProgressDiagnostics = useCallback((audioUrl = null) => {
@@ -274,6 +354,7 @@ export function PlayerProvider({ children }) {
 
   const clearPlaybackForIdentityChange = useCallback(() => {
     const currentSession = podcastPlaySessionRef.current;
+    if (!isNative) invalidateWebResumeRequest();
     webPlaybackTransitionRef.current.cancel();
     if (isNative && nativeAudioPlayer.isReady()) {
       nativeAudioPlayer.clearNativeQueue().catch(() => {});
@@ -303,7 +384,7 @@ export function PlayerProvider({ children }) {
     setDuration(0);
     setIsPlaying(false);
     setEpisodeSource(null);
-  }, [clearLoadingState, clearPodcastPlayRetry, stopSaveTimers]);
+  }, [clearLoadingState, clearPodcastPlayRetry, invalidateWebResumeRequest, stopSaveTimers]);
 
   const armLoadingWatchdog = useCallback((reason) => {
     clearTimeout(loadingWatchdogRef.current);
@@ -471,6 +552,7 @@ export function PlayerProvider({ children }) {
         const audio = audioRef.current;
         if (!audio) throw new Error('Shared audio element is unavailable');
 
+        invalidateWebResumeRequest();
         const startAt = nextEpisode.skip_start_seconds || 0;
         webTransition = beginWebEpisodeSourceSwitch({
           coordinator: webPlaybackTransitionRef.current,
@@ -550,6 +632,7 @@ export function PlayerProvider({ children }) {
     cleanupFailedWebTransition,
     markPodcastPlaySessionPlaying,
     requestWakeLock,
+    invalidateWebResumeRequest,
     saveCurrentProgress,
     startPodcastPlaySession,
     startSaveTimers,
@@ -734,6 +817,7 @@ export function PlayerProvider({ children }) {
 
     audio.addEventListener('playing', () => {
       if (webPlaybackTransitionRef.current.shouldIgnoreEvent('playing', audio)) return;
+      invalidateWebResumeRequest();
       console.log('[PLAYLIST] audio playing', {
         title: currentEpisodeRef.current?.title,
         src: audio.currentSrc || audio.src,
@@ -768,6 +852,7 @@ export function PlayerProvider({ children }) {
     });
 
     return () => {
+      invalidateWebResumeRequest();
       webPlaybackTransitionRef.current.cancel();
       audio.pause();
       audio.src = '';
@@ -824,6 +909,8 @@ export function PlayerProvider({ children }) {
       dbUserRef: dbProgressUserRef,
       retryDelays: PROGRESS_HYDRATION_RETRY_DELAYS_MS,
       loadProgress: () => loadProgressFromDB(voxylApi, progressUser.id, createProgressDiagnostics()),
+      onBeforeRefresh: captureActiveProgressRefreshContext,
+      onRefreshed: reconcileActiveProgressRefresh,
       onHydrated: refreshActiveProgressRegressionGuard,
       onSettled: () => {
         const cached = getAllFinishedFromCache();
@@ -831,7 +918,12 @@ export function PlayerProvider({ children }) {
         finishedUrlsRef.current = cached;
       },
     });
-  }, [createProgressDiagnostics, refreshActiveProgressRegressionGuard]);
+  }, [
+    captureActiveProgressRefreshContext,
+    createProgressDiagnostics,
+    reconcileActiveProgressRefresh,
+    refreshActiveProgressRegressionGuard,
+  ]);
 
   // =========================================================================
   // ── MOUNT: user, SW, progress ────────────────────────────────────────────
@@ -1015,6 +1107,7 @@ export function PlayerProvider({ children }) {
   // =========================================================================
 
   const playEpisodeInternal = useCallback(async (episode, q, skipResume = false) => {
+    if (!isNative) invalidateWebResumeRequest();
     transitioningRef.current = false;
     saveCurrentProgress(true);
     stopSaveTimers();
@@ -1173,12 +1266,13 @@ export function PlayerProvider({ children }) {
     startPodcastPlaySession,
     stopSaveTimers,
     updateMediaSession,
+    invalidateWebResumeRequest,
     requestProgressHydrationRecovery,
     waitForAuthenticatedProgressHydration,
     waitForMediaReady,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const play = useCallback((episode, newQueue = [], source = null) => {
+  const play = useCallback(async (episode, newQueue = [], source = null) => {
     const updatedQueue = newQueue.length > 0 ? newQueue : queueRef.current;
     if (newQueue.length > 0) { queueRef.current = newQueue; setQueue(newQueue); }
     const nextSource = source ?? null;
@@ -1189,6 +1283,9 @@ export function PlayerProvider({ children }) {
       // Resume same episode
       if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.resume();
       else {
+        const requestGeneration = beginWebResumeRequest();
+        await requestAuthenticatedProgressRefresh('playback-resume');
+        if (!isCurrentWebResumeRequest(requestGeneration, episode.audioUrl)) return;
         const activeTransition = webPlaybackTransitionRef.current.getCurrent();
         const pendingSeekGuard = activeProgressRegressionGuardRef.current;
         const pendingWebSeek = pendingWebSeekRef.current;
@@ -1214,9 +1311,14 @@ export function PlayerProvider({ children }) {
     }
 
     playEpisodeInternal(episode, updatedQueue);
-  }, [playEpisodeInternal]);
+  }, [
+    beginWebResumeRequest,
+    isCurrentWebResumeRequest,
+    playEpisodeInternal,
+    requestAuthenticatedProgressRefresh,
+  ]);
 
-  const togglePlay = useCallback(() => {
+  const togglePlay = useCallback(async () => {
     if (isNative && nativeAudioPlayer.isReady()) {
       // Let onStateChange (fired by native) be the source of truth for isPlaying.
       // We optimistically update UI immediately, but native corrects it if needed.
@@ -1232,6 +1334,7 @@ export function PlayerProvider({ children }) {
       if (!audio) return;
       if (isPlaying) { audio.pause(); setIsPlaying(false); }
       else {
+        const requestGeneration = beginWebResumeRequest();
         const activeEpisode = currentEpisodeRef.current;
         const activeTransition = webPlaybackTransitionRef.current.getCurrent();
         const pendingSeekGuard = activeProgressRegressionGuardRef.current;
@@ -1255,6 +1358,13 @@ export function PlayerProvider({ children }) {
           playEpisodeInternal(activeEpisode, queueRef.current);
           return;
         }
+        await requestAuthenticatedProgressRefresh('toggle-resume');
+        if (!activeEpisode?.audioUrl || !isCurrentWebResumeRequest(requestGeneration, activeEpisode.audioUrl)) return;
+        const refreshedPendingWebSeek = pendingWebSeekRef.current;
+        if (activeEpisode?.audioUrl && refreshedPendingWebSeek?.audioUrl === activeEpisode.audioUrl) {
+          playEpisodeInternal(activeEpisode, queueRef.current);
+          return;
+        }
         console.log('[WEB AUDIO] togglePlay — play() call',
           'src:', audio.src, 'readyState:', audio.readyState);
         audio.play().then(() => setIsPlaying(true)).catch(e =>
@@ -1262,7 +1372,13 @@ export function PlayerProvider({ children }) {
         );
       }
     }
-  }, [isPlaying, playEpisodeInternal]);
+  }, [
+    beginWebResumeRequest,
+    isCurrentWebResumeRequest,
+    isPlaying,
+    playEpisodeInternal,
+    requestAuthenticatedProgressRefresh,
+  ]);
 
   const seek = useCallback((time) => {
     if (isNative && nativeAudioPlayer.isReady()) {
