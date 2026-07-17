@@ -24,8 +24,9 @@ import {
 import {
   beginWebEpisodeSourceSwitch,
   createWebPlaybackTransitionCoordinator,
+  createWebResumeTransitionProtection,
+  establishWebPlaybackTransition,
   isObsoleteWebPlaybackError,
-  requestGuardedWebPlayback,
 } from '@/lib/webPlaybackTransition';
 import { nativeAudioPlayer, isNative } from '@/lib/nativeAudioPlayer';
 import {
@@ -89,6 +90,7 @@ export function PlayerProvider({ children }) {
   const progressHydrationRecoveryRef = useRef(null);
   const progressHydrationControllerRef = useRef(null);
   const activeProgressRegressionGuardRef = useRef(null);
+  const pendingWebSeekRef = useRef(null);
 
   // ─── Native time/duration state (mirrors nativeAudioPlayer callbacks) ────
   const nativeCurrentTimeRef = useRef(0);
@@ -287,6 +289,7 @@ export function PlayerProvider({ children }) {
     podcastPlaySessionRef.current = null;
     currentEpisodeRef.current = null;
     activeProgressRegressionGuardRef.current = null;
+    pendingWebSeekRef.current = null;
     currentIndexRef.current = -1;
     queueRef.current = [];
     nativeCurrentTimeRef.current = 0;
@@ -339,15 +342,6 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('canplay', finish, { once: true });
     audio.addEventListener('canplaythrough', finish, { once: true });
   }), []);
-
-  const requestWebPlayback = useCallback((audio, transitionLabel, transition) =>
-    requestGuardedWebPlayback({
-      audio,
-      transitionLabel,
-      retryDelays: PLAY_RETRY_DELAYS_MS,
-      waitForMediaReady,
-      isCurrent: () => !transition || webPlaybackTransitionRef.current.isCurrent(transition),
-    }), [waitForMediaReady]);
 
   // ── Web-only: MediaSession metadata ───────────────────────────────────────
   const updateMediaSession = useCallback((episode) => {
@@ -496,6 +490,14 @@ export function PlayerProvider({ children }) {
             armLoadingWatchdog(`advance:${source}`);
           },
         });
+        const webSeekProtection = createWebResumeTransitionProtection({
+          isWebPlayback: true,
+          shouldProtectCanonicalResume: false,
+          audioUrl: nextEpisode.audioUrl,
+          resumeAt: startAt,
+          transitionGeneration: webTransition.generation,
+        });
+        pendingWebSeekRef.current = webSeekProtection.pendingWebSeek;
         audio.volume = volumeRef.current ?? 1;
         console.log('[PLAYLIST] next URL assigned', {
           title: nextEpisode.title,
@@ -506,18 +508,21 @@ export function PlayerProvider({ children }) {
           url: nextEpisode.audioUrl,
         });
 
-        if (startAt > 0) {
-          await waitForMediaReady(audio, 2000);
-          webPlaybackTransitionRef.current.assertCurrent(webTransition);
-          audio.currentTime = startAt;
-        }
-
-        webPlaybackTransitionRef.current.assertCurrent(webTransition);
-        await requestWebPlayback(audio, `advance:${source}`, webTransition);
-        webPlaybackTransitionRef.current.assertCurrent(webTransition);
-        webPlaybackTransitionRef.current.markEstablished(webTransition);
+        const establishedPosition = await establishWebPlaybackTransition({
+          audio,
+          coordinator: webPlaybackTransitionRef.current,
+          transition: webTransition,
+          transitionLabel: `advance:${source}`,
+          resumeAt: startAt,
+          retryDelays: PLAY_RETRY_DELAYS_MS,
+          waitForMediaReady,
+        });
+        if (startAt > 0) setCurrentTime(establishedPosition || startAt);
         setIsPlaying(true);
         clearLoadingState();
+        if (pendingWebSeekRef.current?.transitionGeneration === webTransition.generation) {
+          pendingWebSeekRef.current = null;
+        }
         markPodcastPlaySessionPlaying();
         startSaveTimers();
         requestWakeLock();
@@ -544,7 +549,6 @@ export function PlayerProvider({ children }) {
     clearLoadingState,
     cleanupFailedWebTransition,
     markPodcastPlaySessionPlaying,
-    requestWebPlayback,
     requestWakeLock,
     saveCurrentProgress,
     startPodcastPlaySession,
@@ -770,6 +774,7 @@ export function PlayerProvider({ children }) {
       stopSaveTimers();
       pausePodcastPlaySessionTimer();
       clearPodcastPlayRetry(podcastPlaySessionRef.current);
+      pendingWebSeekRef.current = null;
       clearTimeout(loadingWatchdogRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1019,7 +1024,15 @@ export function PlayerProvider({ children }) {
     if (!hydrationReady) {
       requestProgressHydrationRecovery('playback-request');
     }
-    const { resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
+    const { savedProgress, resumeAt, durationSeconds } = getEpisodeResumeState(episode, skipResume);
+    const canonicalResumePosition = Number(savedProgress?.position_seconds);
+    const shouldProtectResumeSeek = Boolean(
+      !skipResume &&
+      savedProgress &&
+      Number.isFinite(canonicalResumePosition) &&
+      canonicalResumePosition > MIN_SAVE_POSITION &&
+      canonicalResumePosition === resumeAt
+    );
 
     armLoadingWatchdog('manual-play');
     setCurrentTime(resumeAt);
@@ -1084,6 +1097,22 @@ export function PlayerProvider({ children }) {
         resumeAt,
         durationSeconds,
       });
+      const webSeekProtection = createWebResumeTransitionProtection({
+        isWebPlayback: true,
+        shouldProtectCanonicalResume: shouldProtectResumeSeek,
+        audioUrl: episode.audioUrl,
+        resumeAt,
+        transitionGeneration: transition.generation,
+      });
+      pendingWebSeekRef.current = webSeekProtection.pendingWebSeek;
+      if (webSeekProtection.progressRegressionGuard) {
+        activeProgressRegressionGuardRef.current = webSeekProtection.progressRegressionGuard;
+      } else if (activeProgressRegressionGuardRef.current?.audioUrl === episode.audioUrl) {
+        activeProgressRegressionGuardRef.current = {
+          ...activeProgressRegressionGuardRef.current,
+          transitionGeneration: transition.generation,
+        };
+      }
       audio.volume = volumeRef.current ?? 1;
       console.log('[PLAYLIST] next URL assigned', {
         title: episode.title,
@@ -1095,17 +1124,24 @@ export function PlayerProvider({ children }) {
       });
 
       try {
-        if (resumeAt > 0) {
-          await waitForMediaReady(audio, 2000);
-          webPlaybackTransitionRef.current.assertCurrent(transition);
-          audio.currentTime = resumeAt;
-        }
-        webPlaybackTransitionRef.current.assertCurrent(transition);
-        await requestWebPlayback(audio, 'manual-play', transition);
-        webPlaybackTransitionRef.current.assertCurrent(transition);
-        webPlaybackTransitionRef.current.markEstablished(transition);
+        const establishedPosition = await establishWebPlaybackTransition({
+          audio,
+          coordinator: webPlaybackTransitionRef.current,
+          transition,
+          transitionLabel: 'manual-play',
+          resumeAt,
+          retryDelays: PLAY_RETRY_DELAYS_MS,
+          waitForMediaReady,
+        });
+        if (resumeAt > 0) setCurrentTime(establishedPosition || resumeAt);
         setIsPlaying(true);
         clearLoadingState();
+        if (activeProgressRegressionGuardRef.current?.transitionGeneration === transition.generation) {
+          activeProgressRegressionGuardRef.current = null;
+        }
+        if (pendingWebSeekRef.current?.transitionGeneration === transition.generation) {
+          pendingWebSeekRef.current = null;
+        }
         markPodcastPlaySessionPlaying();
         startSaveTimers();
         requestWakeLock();
@@ -1133,7 +1169,6 @@ export function PlayerProvider({ children }) {
     markPodcastPlaySessionPlaying,
     pausePodcastPlaySessionTimer,
     requestWakeLock,
-    requestWebPlayback,
     saveCurrentProgress,
     startPodcastPlaySession,
     stopSaveTimers,
@@ -1155,9 +1190,20 @@ export function PlayerProvider({ children }) {
       if (isNative && nativeAudioPlayer.isReady()) nativeAudioPlayer.resume();
       else {
         const activeTransition = webPlaybackTransitionRef.current.getCurrent();
+        const pendingSeekGuard = activeProgressRegressionGuardRef.current;
+        const pendingWebSeek = pendingWebSeekRef.current;
         if (
-          activeTransition?.audioUrl === episode.audioUrl &&
-          webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+          (
+            activeTransition?.audioUrl === episode.audioUrl &&
+            webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+          ) ||
+          (
+            pendingSeekGuard?.audioUrl === episode.audioUrl &&
+            pendingSeekGuard?.pendingSeek
+          ) ||
+          (
+            pendingWebSeek?.audioUrl === episode.audioUrl
+          )
         ) {
           playEpisodeInternal(episode, updatedQueue);
           return;
@@ -1188,10 +1234,23 @@ export function PlayerProvider({ children }) {
       else {
         const activeEpisode = currentEpisodeRef.current;
         const activeTransition = webPlaybackTransitionRef.current.getCurrent();
+        const pendingSeekGuard = activeProgressRegressionGuardRef.current;
+        const pendingWebSeek = pendingWebSeekRef.current;
         if (
           activeEpisode?.audioUrl &&
-          activeTransition?.audioUrl === activeEpisode.audioUrl &&
-          webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+          (
+            (
+              activeTransition?.audioUrl === activeEpisode.audioUrl &&
+              webPlaybackTransitionRef.current.getPhase(activeTransition) === 'switching'
+            ) ||
+            (
+              pendingSeekGuard?.audioUrl === activeEpisode.audioUrl &&
+              pendingSeekGuard?.pendingSeek
+            ) ||
+            (
+              pendingWebSeek?.audioUrl === activeEpisode.audioUrl
+            )
+          )
         ) {
           playEpisodeInternal(activeEpisode, queueRef.current);
           return;
