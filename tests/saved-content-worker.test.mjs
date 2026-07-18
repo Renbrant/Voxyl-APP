@@ -244,6 +244,9 @@ function createSavedContentDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
+              }
               if (/FROM playlist_likes/s.test(sql)) {
                 const hasLegacy = /legacy_base44_user_id = \?/s.test(sql);
                 const limit = params.at(-1);
@@ -282,7 +285,8 @@ function createSavedContentDb() {
             async run() {
               state.calls.push({ kind: 'run', sql, params });
               if (/INSERT INTO users/s.test(sql)) return { meta: { changes: 0 } };
-              if (/UPDATE users|UPDATE playlist_likes|UPDATE episode_progress|UPDATE podcast_plays/s.test(sql)) return { meta: { changes: 0 } };
+              if (/UPDATE users\s+SET clerk_user_id/s.test(sql)) return { meta: { changes: 1 } };
+              if (/UPDATE users|UPDATE playlist_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE playlists\s+SET creator_clerk_user_id/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE playlists\s+SET likes_count/s.test(sql)) {
                 if (state.failNextBatchUpdate) {

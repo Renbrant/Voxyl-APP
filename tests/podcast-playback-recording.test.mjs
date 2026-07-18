@@ -142,6 +142,9 @@ function createPlaybackDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
+              }
               if (/FROM podcast_plays/s.test(sql)) {
                 const hasLegacyPredicate = /legacy_base44_user_id = \?/s.test(sql);
                 const [user_id, clerk_user_id] = params;
@@ -199,7 +202,10 @@ function createPlaybackDb() {
                 }
                 return { meta: { changes: 1 } };
               }
-              if (/UPDATE users|UPDATE playlists|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress/s.test(sql)) {
+              if (/UPDATE users\s+SET clerk_user_id/s.test(sql)) {
+                return { meta: { changes: 1 } };
+              }
+              if (/UPDATE users|UPDATE playlists|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) {
                 return { meta: { changes: 0 } };
               }
               if (/UPDATE podcast_plays\s+SET clerk_user_id/s.test(sql)) {
@@ -542,7 +548,7 @@ describe('podcast playback recording Worker route', () => {
     assert.equal(data.items.length, 100);
     assert.equal(data.items[0].id, 'play-104');
     assert.equal(data.items[1].id, 'play-103');
-    assert.equal(db.state.calls.find((call) => call.kind === 'all').params.at(-1), 100);
+    assert.equal(db.state.calls.find((call) => call.kind === 'all' && /FROM podcast_plays/s.test(call.sql)).params.at(-1), 100);
   });
 
   it('stores valid guest playback with nullable user identity', async () => {

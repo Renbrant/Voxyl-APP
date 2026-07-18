@@ -214,6 +214,9 @@ function createBlockDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
+              }
               if (/CASE\s+WHEN/s.test(sql)) {
                 const results = [];
                 for (const row of state.blocks) {
@@ -235,7 +238,8 @@ function createBlockDb() {
             async run() {
               state.calls.push({ kind: 'run', sql, params });
               if (/INSERT INTO users/s.test(sql)) return { meta: { changes: 0 } };
-              if (/UPDATE users|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE playlists/s.test(sql)) {
+              if (/UPDATE users\s+SET clerk_user_id/s.test(sql)) return { meta: { changes: 1 } };
+              if (/UPDATE users|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE playlists|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) {
                 return { meta: { changes: 0 } };
               }
               if (/INSERT INTO blocks/s.test(sql)) {
