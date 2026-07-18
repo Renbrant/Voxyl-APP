@@ -2205,31 +2205,18 @@ async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1Us
     .first<D1User>();
 }
 
-async function getUserByEmail(env: Env, email: string): Promise<D1User | null> {
-  return env.DB.prepare(
+async function getUsersByEmail(env: Env, email: string): Promise<D1User[]> {
+  const { results } = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
       profile_picture, profile_hidden, created_at, updated_at
      FROM users
      WHERE lower(email) = lower(?)
-     ORDER BY legacy_base44_user_id IS NULL, imported_at IS NULL, created_at ASC
-     LIMIT 1`,
+     ORDER BY imported_at IS NULL, created_at ASC`,
   )
     .bind(email)
-    .first<D1User>();
-}
+    .all<D1User>();
 
-async function getLegacyUserByEmail(env: Env, email: string): Promise<D1User | null> {
-  return env.DB.prepare(
-    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, created_at, updated_at
-     FROM users
-     WHERE lower(email) = lower(?)
-       AND legacy_base44_user_id IS NOT NULL
-     ORDER BY imported_at IS NULL, created_at ASC
-     LIMIT 1`,
-  )
-    .bind(email)
-    .first<D1User>();
+  return results || [];
 }
 
 async function createUserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<void> {
@@ -2263,6 +2250,7 @@ function normalizeLegacyBase44UserId(value: string | null): string | null {
 
 function isTemporaryClerkDuplicate(conflict: D1User, claims: ClerkClaims, email: string | null): boolean {
   return conflict.id === claims.userId &&
+    conflict.clerk_user_id === claims.userId &&
     !normalizeLegacyBase44UserId(conflict.legacy_base44_user_id) &&
     normalizeEmail(conflict.email) === email;
 }
@@ -2287,6 +2275,18 @@ async function getUserReferenceCount(env: Env, userId: string): Promise<number> 
   return row?.count || 0;
 }
 
+async function isHarmlessClerkPlaceholder(env: Env, user: D1User, claims: ClerkClaims, email: string | null): Promise<boolean> {
+  if (!isTemporaryClerkDuplicate(user, claims, email)) {
+    return false;
+  }
+
+  return (await getUserReferenceCount(env, user.id)) === 0;
+}
+
+function identityConflict(): PodcastPlayError {
+  return new PodcastPlayError(409, "identity-conflict", "Authenticated identity conflicts with an existing Voxyl user");
+}
+
 async function assertClerkUserIdCanBeReassigned(
   env: Env,
   user: D1User,
@@ -2299,17 +2299,56 @@ async function assertClerkUserIdCanBeReassigned(
     return { conflictingTemporaryUserId: null };
   }
 
-  if (!isTemporaryClerkDuplicate(conflict, claims, email)) {
-    throw new PodcastPlayError(409, "identity-conflict", "Authenticated identity conflicts with an existing Voxyl user");
-  }
-
-  const conflictReferenceCount = await getUserReferenceCount(env, conflict.id);
-
-  if (conflictReferenceCount > 0) {
-    throw new PodcastPlayError(409, "identity-conflict", "Authenticated identity conflicts with an existing Voxyl user");
+  if (!(await isHarmlessClerkPlaceholder(env, conflict, claims, email))) {
+    throw identityConflict();
   }
 
   return { conflictingTemporaryUserId: conflict.id };
+}
+
+async function resolveUniqueUserByEmail(
+  env: Env,
+  email: string,
+  claims: ClerkClaims,
+  clerkUser: D1User | null,
+): Promise<D1User | null> {
+  const candidates = await getUsersByEmail(env, email);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const classified = await Promise.all(
+    candidates.map(async (candidate) => ({
+      user: candidate,
+      harmlessPlaceholder: await isHarmlessClerkPlaceholder(env, candidate, claims, email),
+    })),
+  );
+  const meaningfulCandidates = classified
+    .filter((candidate) => !candidate.harmlessPlaceholder)
+    .map((candidate) => candidate.user);
+  const legacyCandidates = meaningfulCandidates.filter((candidate) => normalizeLegacyBase44UserId(candidate.legacy_base44_user_id));
+  const clerkCandidate = clerkUser ? classified.find((candidate) => candidate.user.id === clerkUser.id) : null;
+
+  if (legacyCandidates.length > 1 || meaningfulCandidates.length > 1) {
+    throw identityConflict();
+  }
+
+  if (meaningfulCandidates.length === 1) {
+    const canonicalUser = meaningfulCandidates[0];
+
+    if (clerkUser && clerkUser.id !== canonicalUser.id && !clerkCandidate?.harmlessPlaceholder) {
+      throw identityConflict();
+    }
+
+    return canonicalUser;
+  }
+
+  if (clerkUser && clerkCandidate) {
+    return clerkUser;
+  }
+
+  throw identityConflict();
 }
 
 async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkClaims): Promise<void> {
@@ -2474,30 +2513,26 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   };
 
   let user = await getUserByClerkUserId(env, enrichedClaims.userId);
+  const emailUser = enrichedClaims.email
+    ? await resolveUniqueUserByEmail(env, enrichedClaims.email, enrichedClaims, user)
+    : null;
+  const expectedUserId = emailUser?.id || user?.id || null;
 
-  if (user && !user.legacy_base44_user_id && enrichedClaims.email) {
-    const legacyUser = await getLegacyUserByEmail(env, enrichedClaims.email);
-
-    if (legacyUser) {
-      user = legacyUser;
-    }
-  }
-
-  if (user && enrichedClaims.email) {
-    const emailUser = await getUserByEmail(env, enrichedClaims.email);
-
-    if (emailUser && emailUser.id !== user.id) {
-      user = emailUser;
-    }
-  }
-
-  if (!user) {
-    user = enrichedClaims.email ? await getUserByEmail(env, enrichedClaims.email) : null;
+  if (expectedUserId) {
+    user = user?.id === expectedUserId
+      ? user
+      : emailUser?.id === expectedUserId
+        ? emailUser
+        : null;
   }
 
   if (user) {
     await linkClerkUserToLegacyData(env, user, enrichedClaims);
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
+
+    if (!user || user.id !== expectedUserId) {
+      throw identityConflict();
+    }
   }
 
   if (!user) {

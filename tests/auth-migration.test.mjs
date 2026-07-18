@@ -136,6 +136,16 @@ function createAuthMigrationDb({ users } = {}) {
     return rows[0] || null;
   }
 
+  function emailUsers(email) {
+    return state.users
+      .filter((user) => user.email?.toLowerCase() === String(email).toLowerCase())
+      .sort((left, right) => {
+        const importedOrder = Number(!left.imported_at) - Number(!right.imported_at);
+        if (importedOrder !== 0) return importedOrder;
+        return String(left.created_at).localeCompare(String(right.created_at));
+      });
+  }
+
   function referenceCount(userId) {
     return [
       state.playlists.filter((row) => row.creator_id === userId).length,
@@ -210,6 +220,13 @@ function createAuthMigrationDb({ users } = {}) {
                 return { count: referenceCount(params[0]) };
               }
               throw new Error(`Unhandled first SQL: ${sql}`);
+            },
+            async all() {
+              state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: emailUsers(params[0]) };
+              }
+              throw new Error(`Unhandled all SQL: ${sql}`);
             },
             async run() {
               state.calls.push({ kind: 'run', sql, params });
@@ -329,6 +346,90 @@ describe('Clerk production identity migration', () => {
     assert.equal(db.state.users.find((user) => user.id === 'd1-real-user').clerk_user_id, 'clerk-dev-user');
     assert.equal(db.state.users.find((user) => user.id === 'clerk-prod-user').clerk_user_id, 'clerk-prod-user');
     assert.equal(db.state.playlistLikes[0].clerk_user_id, 'clerk-dev-user');
+  });
+
+  it('returns 409 when two unrelated meaningful users share the normalized email', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'REAL@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({ legacy_base44_user_id: null }),
+        baseUser({ id: 'same-email-user', clerk_user_id: 'clerk-same-email', legacy_base44_user_id: null, email: 'real@example.com', username: 'same-email', imported_at: null }),
+      ],
+    });
+    const before = JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    }), before);
+    assert.equal(db.state.calls.some((call) => call.kind === 'batch'), false);
+  });
+
+  it('returns 409 when two legacy users share the normalized email', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser(),
+        baseUser({ id: 'second-legacy-user', clerk_user_id: 'clerk-second-legacy', legacy_base44_user_id: 'legacy-second-user', email: 'REAL@example.com', username: 'second-legacy' }),
+      ],
+    });
+    const before = JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    }), before);
+    assert.equal(db.state.calls.some((call) => call.kind === 'batch'), false);
+  });
+
+  it('does not displace a meaningful user that already owns the authenticated Clerk ID', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser(),
+        baseUser({ id: 'prod-owner', clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null, email: 'real@example.com', username: 'prod-owner', imported_at: null }),
+      ],
+    });
+    const before = JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(JSON.stringify({
+      users: db.state.users,
+      playlistLikes: db.state.playlistLikes,
+      episodeProgress: db.state.episodeProgress,
+    }), before);
+    assert.equal(db.state.users.find((user) => user.id === 'prod-owner').clerk_user_id, 'clerk-prod-user');
   });
 
   it('keeps the existing-ID bootstrap path working', async () => {

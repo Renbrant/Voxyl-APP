@@ -408,6 +408,9 @@ function createEpisodeProgressDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
+              }
               if (/FROM episode_progress/s.test(sql)) {
                 const idCount = identityCount(sql);
                 const limit = params.at(-1);

@@ -244,6 +244,9 @@ function createSavedContentDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
+              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+                return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
+              }
               if (/FROM playlist_likes/s.test(sql)) {
                 const hasLegacy = /legacy_base44_user_id = \?/s.test(sql);
                 const limit = params.at(-1);
