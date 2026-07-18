@@ -428,7 +428,7 @@ function createEpisodeProgressDb() {
             async run() {
               state.calls.push({ kind: 'run', sql, params });
               if (/INSERT INTO users/s.test(sql)) return { meta: { changes: 0 } };
-              if (/UPDATE users|UPDATE playlists|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE podcast_plays/s.test(sql)) return { meta: { changes: 0 } };
+              if (/UPDATE users|UPDATE playlists|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE podcast_plays|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE episode_progress\s+SET clerk_user_id/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE episode_progress\s+SET user_id = \?/s.test(sql)) {
                 const updateHasPlayback = /position_seconds = \?/s.test(sql);

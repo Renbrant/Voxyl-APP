@@ -235,7 +235,7 @@ function createBlockDb() {
             async run() {
               state.calls.push({ kind: 'run', sql, params });
               if (/INSERT INTO users/s.test(sql)) return { meta: { changes: 0 } };
-              if (/UPDATE users|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE playlists/s.test(sql)) {
+              if (/UPDATE users|UPDATE playlist_likes|UPDATE podcast_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE playlists|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) {
                 return { meta: { changes: 0 } };
               }
               if (/INSERT INTO blocks/s.test(sql)) {

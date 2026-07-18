@@ -157,6 +157,7 @@ type PodcastPlayErrorCode =
   | "invalid-request"
   | "unauthorized"
   | "invalid-playlist"
+  | "identity-conflict"
   | "internal-error";
 
 class PodcastPlayError extends Error {
@@ -2210,25 +2211,24 @@ async function getUserByEmail(env: Env, email: string): Promise<D1User | null> {
       profile_picture, profile_hidden, created_at, updated_at
      FROM users
      WHERE lower(email) = lower(?)
-     ORDER BY imported_at IS NULL, created_at ASC
+     ORDER BY legacy_base44_user_id IS NULL, imported_at IS NULL, created_at ASC
      LIMIT 1`,
   )
     .bind(email)
     .first<D1User>();
 }
 
-async function getLegacyUserByEmail(env: Env, email: string, clerkUserId: string): Promise<D1User | null> {
+async function getLegacyUserByEmail(env: Env, email: string): Promise<D1User | null> {
   return env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
       profile_picture, profile_hidden, created_at, updated_at
      FROM users
      WHERE lower(email) = lower(?)
        AND legacy_base44_user_id IS NOT NULL
-       AND (clerk_user_id IS NULL OR clerk_user_id = ?)
      ORDER BY imported_at IS NULL, created_at ASC
      LIMIT 1`,
   )
-    .bind(email, clerkUserId)
+    .bind(email)
     .first<D1User>();
 }
 
@@ -2242,83 +2242,227 @@ async function createUserFromClerkClaims(env: Env, claims: ClerkClaims): Promise
     .run();
 }
 
+type CountRow = {
+  count: number;
+};
+
+async function runD1Batch(env: Env, statements: D1PreparedStatement[]): Promise<void> {
+  if (typeof env.DB.batch === "function") {
+    await env.DB.batch(statements);
+    return;
+  }
+
+  for (const statement of statements) {
+    await statement.run();
+  }
+}
+
+function normalizeLegacyBase44UserId(value: string | null): string | null {
+  return value?.trim() || null;
+}
+
+function isTemporaryClerkDuplicate(conflict: D1User, claims: ClerkClaims, email: string | null): boolean {
+  return conflict.id === claims.userId &&
+    !normalizeLegacyBase44UserId(conflict.legacy_base44_user_id) &&
+    normalizeEmail(conflict.email) === email;
+}
+
+async function getUserReferenceCount(env: Env, userId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT (
+       (SELECT COUNT(*) FROM playlists WHERE creator_id = ?) +
+       (SELECT COUNT(*) FROM playlist_likes WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_likes WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_plays WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM episode_progress WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM follows WHERE follower_id = ? OR following_id = ?) +
+       (SELECT COUNT(*) FROM blocks WHERE blocker_id = ? OR blocked_id = ?) +
+       (SELECT COUNT(*) FROM reports WHERE reporter_id = ? OR reported_user_id = ?) +
+       (SELECT COUNT(*) FROM referrals WHERE inviter_id = ? OR invitee_user_id = ?)
+     ) AS count`,
+  )
+    .bind(userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId)
+    .first<CountRow>();
+
+  return row?.count || 0;
+}
+
+async function assertClerkUserIdCanBeReassigned(
+  env: Env,
+  user: D1User,
+  claims: ClerkClaims,
+  email: string | null,
+): Promise<{ conflictingTemporaryUserId: string | null }> {
+  const conflict = await getUserByClerkUserId(env, claims.userId);
+
+  if (!conflict || conflict.id === user.id) {
+    return { conflictingTemporaryUserId: null };
+  }
+
+  if (!isTemporaryClerkDuplicate(conflict, claims, email)) {
+    throw new PodcastPlayError(409, "identity-conflict", "Authenticated identity conflicts with an existing Voxyl user");
+  }
+
+  const conflictReferenceCount = await getUserReferenceCount(env, conflict.id);
+
+  if (conflictReferenceCount > 0) {
+    throw new PodcastPlayError(409, "identity-conflict", "Authenticated identity conflicts with an existing Voxyl user");
+  }
+
+  return { conflictingTemporaryUserId: conflict.id };
+}
+
 async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkClaims): Promise<void> {
   const email = normalizeEmail(claims.email || user.email);
   const name = claims.name || user.name;
+  const legacyBase44UserId = normalizeLegacyBase44UserId(user.legacy_base44_user_id);
+  const oldClerkUserId = user.clerk_user_id === claims.userId ? null : user.clerk_user_id;
 
-  if (user.legacy_base44_user_id) {
+  if (!oldClerkUserId && !legacyBase44UserId) {
     await env.DB.prepare(
       `UPDATE users
-       SET clerk_user_id = NULL,
+       SET email = COALESCE(email, ?),
+           name = COALESCE(name, ?),
            updated_at = CURRENT_TIMESTAMP
-       WHERE clerk_user_id = ?
-         AND id != ?
-         AND legacy_base44_user_id IS NULL
-         AND lower(COALESCE(email, '')) = lower(?)`,
+       WHERE id = ?`,
     )
-      .bind(claims.userId, user.id, email || "")
+      .bind(email, name, user.id)
       .run();
+    return;
   }
 
-  await env.DB.prepare(
-    `UPDATE users
-     SET clerk_user_id = COALESCE(clerk_user_id, ?),
-         email = COALESCE(email, ?),
-         name = COALESCE(name, ?),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-  )
-    .bind(claims.userId, email, name, user.id)
-    .run();
+  const { conflictingTemporaryUserId } = await assertClerkUserIdCanBeReassigned(env, user, claims, email);
+  const relatedIdentityParams = [
+    claims.userId,
+    user.id,
+    legacyBase44UserId || "",
+    oldClerkUserId || "",
+  ];
+  const statements: D1PreparedStatement[] = [];
 
-  await env.DB.prepare(
-    `UPDATE playlists
-     SET creator_clerk_user_id = ?
-     WHERE creator_clerk_user_id IS NULL
-       AND (
-         creator_id = ?
-         OR creator_legacy_base44_user_id = ?
-         OR lower(COALESCE(creator_email, '')) = lower(?)
-       )`,
-  )
-    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
-    .run();
+  if (conflictingTemporaryUserId) {
+    statements.push(
+      env.DB.prepare(
+        `DELETE FROM users
+         WHERE id = ?
+           AND clerk_user_id = ?
+           AND legacy_base44_user_id IS NULL
+           AND lower(COALESCE(email, '')) = lower(?)`,
+      )
+        .bind(conflictingTemporaryUserId, claims.userId, email || ""),
+    );
+  }
 
-  await env.DB.prepare(
-    `UPDATE playlist_likes
-     SET clerk_user_id = ?
-     WHERE clerk_user_id IS NULL
-       AND (user_id = ? OR legacy_base44_user_id = ? OR lower(COALESCE(user_email, '')) = lower(?))`,
-  )
-    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
-    .run();
+  statements.push(
+    env.DB.prepare(
+      `UPDATE users
+       SET clerk_user_id = ?,
+           email = COALESCE(email, ?),
+           name = COALESCE(name, ?),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND (clerk_user_id IS NULL OR clerk_user_id = ? OR clerk_user_id = ?)`,
+    )
+      .bind(claims.userId, email, name, user.id, user.clerk_user_id || "", claims.userId),
+    env.DB.prepare(
+      `UPDATE playlists
+       SET creator_clerk_user_id = ?
+       WHERE creator_id = ?
+          OR (creator_legacy_base44_user_id IS NOT NULL AND creator_legacy_base44_user_id = ?)
+          OR (creator_clerk_user_id IS NOT NULL AND creator_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE playlist_likes
+       SET clerk_user_id = ?
+       WHERE user_id = ?
+          OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE podcast_likes
+       SET clerk_user_id = ?
+       WHERE user_id = ?
+          OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE podcast_plays
+       SET clerk_user_id = ?
+       WHERE user_id = ?
+          OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE episode_progress
+       SET clerk_user_id = ?
+       WHERE user_id = ?
+          OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE follows
+       SET follower_clerk_user_id = ?
+       WHERE follower_id = ?
+          OR (follower_legacy_base44_user_id IS NOT NULL AND follower_legacy_base44_user_id = ?)
+          OR (follower_clerk_user_id IS NOT NULL AND follower_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE follows
+       SET following_clerk_user_id = ?
+       WHERE following_id = ?
+          OR (following_legacy_base44_user_id IS NOT NULL AND following_legacy_base44_user_id = ?)
+          OR (following_clerk_user_id IS NOT NULL AND following_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE blocks
+       SET blocker_clerk_user_id = ?
+       WHERE blocker_id = ?
+          OR (blocker_legacy_base44_user_id IS NOT NULL AND blocker_legacy_base44_user_id = ?)
+          OR (blocker_clerk_user_id IS NOT NULL AND blocker_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE blocks
+       SET blocked_clerk_user_id = ?
+       WHERE blocked_id = ?
+          OR (blocked_legacy_base44_user_id IS NOT NULL AND blocked_legacy_base44_user_id = ?)
+          OR (blocked_clerk_user_id IS NOT NULL AND blocked_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE reports
+       SET reporter_clerk_user_id = ?
+       WHERE reporter_id = ?
+          OR (reporter_legacy_base44_user_id IS NOT NULL AND reporter_legacy_base44_user_id = ?)
+          OR (reporter_clerk_user_id IS NOT NULL AND reporter_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE referrals
+       SET inviter_clerk_user_id = ?
+       WHERE inviter_id = ?
+          OR (inviter_legacy_base44_user_id IS NOT NULL AND inviter_legacy_base44_user_id = ?)
+          OR (inviter_clerk_user_id IS NOT NULL AND inviter_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+    env.DB.prepare(
+      `UPDATE referrals
+       SET invitee_clerk_user_id = ?
+       WHERE invitee_user_id = ?
+          OR (invitee_legacy_base44_user_id IS NOT NULL AND invitee_legacy_base44_user_id = ?)
+          OR (invitee_clerk_user_id IS NOT NULL AND invitee_clerk_user_id = ?)`,
+    )
+      .bind(...relatedIdentityParams),
+  );
 
-  await env.DB.prepare(
-    `UPDATE podcast_likes
-     SET clerk_user_id = ?
-     WHERE clerk_user_id IS NULL
-       AND (user_id = ? OR legacy_base44_user_id = ? OR lower(COALESCE(user_email, '')) = lower(?))`,
-  )
-    .bind(claims.userId, user.id, user.legacy_base44_user_id || "", email || "")
-    .run();
-
-  await env.DB.prepare(
-    `UPDATE podcast_plays
-     SET clerk_user_id = ?
-     WHERE clerk_user_id IS NULL
-       AND (user_id = ? OR legacy_base44_user_id = ?)`,
-  )
-    .bind(claims.userId, user.id, user.legacy_base44_user_id || "")
-    .run();
-
-  await env.DB.prepare(
-    `UPDATE episode_progress
-     SET clerk_user_id = ?
-     WHERE clerk_user_id IS NULL
-       AND (user_id = ? OR legacy_base44_user_id = ?)`,
-  )
-    .bind(claims.userId, user.id, user.legacy_base44_user_id || "")
-    .run();
+  await runD1Batch(env, statements);
 }
 
 async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<D1User | null> {
@@ -2332,10 +2476,18 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   let user = await getUserByClerkUserId(env, enrichedClaims.userId);
 
   if (user && !user.legacy_base44_user_id && enrichedClaims.email) {
-    const legacyUser = await getLegacyUserByEmail(env, enrichedClaims.email, enrichedClaims.userId);
+    const legacyUser = await getLegacyUserByEmail(env, enrichedClaims.email);
 
     if (legacyUser) {
       user = legacyUser;
+    }
+  }
+
+  if (user && enrichedClaims.email) {
+    const emailUser = await getUserByEmail(env, enrichedClaims.email);
+
+    if (emailUser && emailUser.id !== user.id) {
+      user = emailUser;
     }
   }
 
