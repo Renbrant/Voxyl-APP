@@ -91,6 +91,41 @@ function baseUser(overrides) {
   };
 }
 
+const productionCanonicalUserId = '69e2ae13aa773b21002b1fe5';
+const productionDevClerkUserId = 'user_3GEQX0wuk6BL8CBIeiU222Dfcj2';
+const productionEmail = 'renatobrant@gmail.com';
+
+function productionCanonicalUser(overrides = {}) {
+  return baseUser({
+    id: productionCanonicalUserId,
+    clerk_user_id: productionDevClerkUserId,
+    legacy_base44_user_id: productionCanonicalUserId,
+    email: productionEmail,
+    name: 'Renato Brant',
+    username: 'renatobrant',
+    imported_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  });
+}
+
+function productionOrphanUser(overrides = {}) {
+  return baseUser({
+    id: productionDevClerkUserId,
+    clerk_user_id: null,
+    legacy_base44_user_id: null,
+    email: productionEmail,
+    name: null,
+    username: null,
+    role: 'user',
+    profile_picture: null,
+    profile_hidden: 0,
+    imported_at: null,
+    created_at: '2026-07-18T00:00:00.000Z',
+    updated_at: '2026-07-18T00:00:00.000Z',
+    ...overrides,
+  });
+}
+
 function createAuthMigrationDb({ users, beforeBatch } = {}) {
   const state = {
     users: users || [
@@ -176,6 +211,20 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
     ].reduce((sum, count) => sum + count, 0);
   }
 
+  function stableReferenceCount(userId) {
+    return [
+      state.playlists.filter((row) => row.creator_id === userId).length,
+      state.playlistLikes.filter((row) => row.user_id === userId).length,
+      state.podcastLikes.filter((row) => row.user_id === userId).length,
+      state.podcastPlays.filter((row) => row.user_id === userId).length,
+      state.episodeProgress.filter((row) => row.user_id === userId).length,
+      state.follows.filter((row) => row.follower_id === userId || row.following_id === userId).length,
+      state.blocks.filter((row) => row.blocker_id === userId || row.blocked_id === userId).length,
+      state.reports.filter((row) => row.reporter_id === userId || row.reported_user_id === userId).length,
+      state.referrals.filter((row) => row.inviter_id === userId || row.invitee_user_id === userId).length,
+    ].reduce((sum, count) => sum + count, 0);
+  }
+
   function updateRows(rows, params, column, idColumn, legacyColumn, clerkColumn) {
     const [newClerkUserId, userId, legacyBase44UserId, oldClerkUserId] = params;
     if (!state.users.some((user) => user.id === params.at(-2) && user.clerk_user_id === params.at(-1))) {
@@ -240,7 +289,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                 return emailUser(params[0], /legacy_base44_user_id IS NOT NULL/s.test(sql));
               }
               if (/SELECT \(/s.test(sql) && /AS count/s.test(sql)) {
-                return { count: referenceCount(params[0], params[1]) };
+                return { count: /creator_clerk_user_id/s.test(sql) ? referenceCount(params[0], params[1]) : stableReferenceCount(params[0]) };
               }
               throw new Error(`Unhandled first SQL: ${sql}`);
             },
@@ -262,6 +311,38 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                 return { meta: { changes: 0 } };
               }
               if (/DELETE FROM users/s.test(sql)) {
+                if (/AND clerk_user_id IS NULL/s.test(sql)) {
+                  const [
+                    orphanId,
+                    email,
+                    canonicalPrecondition,
+                    expectedOrphanId,
+                    canonicalId,
+                    canonicalClerkPrecondition,
+                  ] = params;
+                  const orphan = state.users.find((user) => user.id === orphanId);
+                  const canonical = state.users.find((user) => user.id === canonicalId);
+                  const before = state.users.length;
+                  if (
+                    orphan &&
+                    canonical &&
+                    orphan.id === expectedOrphanId &&
+                    orphan.id === canonicalPrecondition &&
+                    orphan.clerk_user_id === null &&
+                    !orphan.legacy_base44_user_id &&
+                    orphan.email?.toLowerCase() === String(email).toLowerCase() &&
+                    orphan.username === null &&
+                    orphan.profile_picture === null &&
+                    (orphan.role || 'user') === 'user' &&
+                    Number(orphan.profile_hidden || 0) === 0 &&
+                    orphan.imported_at === null &&
+                    canonical.clerk_user_id === canonicalClerkPrecondition &&
+                    stableReferenceCount(orphanId) === 0
+                  ) {
+                    state.users = state.users.filter((user) => user.id !== orphanId);
+                  }
+                  return { meta: { changes: before - state.users.length } };
+                }
                 const [
                   placeholderId,
                   clerkUserId,
@@ -282,6 +363,8 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
               }
               if (/UPDATE users\s+       SET clerk_user_id/s.test(sql)) {
                 const [clerkUserId, email, name, id, oldClerkUserId] = params;
+                const orphanGuardId = params[6];
+                if (orphanGuardId && state.users.some((item) => item.id === orphanGuardId)) return { meta: { changes: 0 } };
                 const user = state.users.find((item) => item.id === id && ((oldClerkUserId === null && item.clerk_user_id === null) || item.clerk_user_id === oldClerkUserId));
                 if (!user) return { meta: { changes: 0 } };
                 const conflict = state.users.find((item) => item.id !== id && item.clerk_user_id === clerkUserId);
@@ -313,11 +396,209 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
   };
 }
 
+function createProductionOrphanDb(options = {}) {
+  const db = createAuthMigrationDb({
+    users: [
+      productionCanonicalUser(options.canonicalOverrides),
+      productionOrphanUser(options.orphanOverrides),
+      baseUser({
+        id: 'production-other-user',
+        clerk_user_id: 'user_other',
+        legacy_base44_user_id: null,
+        email: 'other-production@example.com',
+        username: 'other-production',
+        imported_at: null,
+      }),
+    ],
+    beforeBatch: options.beforeBatch,
+  });
+
+  db.state.playlists = [
+    { id: 'prod-playlist-1', creator_id: productionCanonicalUserId, creator_clerk_user_id: productionDevClerkUserId, creator_legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.playlistLikes = [
+    { id: 'prod-playlist-like-1', playlist_id: 'prod-playlist-1', user_id: productionCanonicalUserId, clerk_user_id: productionDevClerkUserId, legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.podcastLikes = [
+    { id: 'prod-podcast-like-1', user_id: productionCanonicalUserId, clerk_user_id: productionDevClerkUserId, legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.podcastPlays = [
+    { id: 'prod-podcast-play-1', user_id: productionCanonicalUserId, clerk_user_id: productionDevClerkUserId, legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.episodeProgress = [
+    { id: 'prod-progress-1', user_id: productionCanonicalUserId, clerk_user_id: productionDevClerkUserId, legacy_base44_user_id: productionCanonicalUserId, audio_url: 'https://cdn.example.com/prod.mp3' },
+  ];
+  db.state.follows = [
+    { id: 'prod-follow-out', follower_id: productionCanonicalUserId, follower_clerk_user_id: productionDevClerkUserId, follower_legacy_base44_user_id: productionCanonicalUserId, following_id: 'production-other-user', following_clerk_user_id: 'user_other', following_legacy_base44_user_id: null },
+    { id: 'prod-follow-in', follower_id: 'production-other-user', follower_clerk_user_id: 'user_other', follower_legacy_base44_user_id: null, following_id: productionCanonicalUserId, following_clerk_user_id: productionDevClerkUserId, following_legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.blocks = [
+    { id: 'prod-block-out', blocker_id: productionCanonicalUserId, blocker_clerk_user_id: productionDevClerkUserId, blocker_legacy_base44_user_id: productionCanonicalUserId, blocked_id: 'production-other-user', blocked_clerk_user_id: 'user_other', blocked_legacy_base44_user_id: null },
+    { id: 'prod-block-in', blocker_id: 'production-other-user', blocker_clerk_user_id: 'user_other', blocker_legacy_base44_user_id: null, blocked_id: productionCanonicalUserId, blocked_clerk_user_id: productionDevClerkUserId, blocked_legacy_base44_user_id: productionCanonicalUserId },
+  ];
+  db.state.reports = [
+    { id: 'prod-report-1', reporter_id: productionCanonicalUserId, reporter_clerk_user_id: productionDevClerkUserId, reporter_legacy_base44_user_id: productionCanonicalUserId, reported_user_id: 'production-other-user' },
+  ];
+  db.state.referrals = [
+    { id: 'prod-referral-out', inviter_id: productionCanonicalUserId, inviter_clerk_user_id: productionDevClerkUserId, inviter_legacy_base44_user_id: productionCanonicalUserId, invitee_user_id: 'production-other-user', invitee_clerk_user_id: 'user_other', invitee_legacy_base44_user_id: null },
+    { id: 'prod-referral-in', inviter_id: 'production-other-user', inviter_clerk_user_id: 'user_other', inviter_legacy_base44_user_id: null, invitee_user_id: productionCanonicalUserId, invitee_clerk_user_id: productionDevClerkUserId, invitee_legacy_base44_user_id: productionCanonicalUserId },
+  ];
+
+  return db;
+}
+
 afterEach(() => {
   mock.restoreAll();
 });
 
 describe('Clerk production identity migration', () => {
+  it('resolves the exact production canonical user during current Development authentication and removes the orphan', async () => {
+    const { token, jwk } = createJwt({ sub: productionDevClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb();
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.user.id, productionCanonicalUserId);
+    assert.equal(data.user.clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.users.some((user) => user.id === productionDevClerkUserId), false);
+    assert.equal(db.state.users.filter((user) => user.email === productionEmail).length, 1);
+    assert.equal(db.state.playlists[0].creator_id, productionCanonicalUserId);
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastPlays[0].user_id, productionCanonicalUserId);
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, productionDevClerkUserId);
+  });
+
+  it('relinks the exact production canonical user for future Production authentication without inheriting orphan Clerk counts', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb();
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.user.id, productionCanonicalUserId);
+    assert.equal(data.user.clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.users.some((user) => user.id === productionDevClerkUserId), false);
+    assert.equal(db.state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.users.filter((user) => user.email === productionEmail).length, 1);
+    assert.equal(db.state.playlists[0].creator_id, productionCanonicalUserId);
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.playlistLikes[0].user_id, productionCanonicalUserId);
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.podcastLikes[0].user_id, productionCanonicalUserId);
+    assert.equal(db.state.podcastLikes[0].clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.podcastPlays[0].user_id, productionCanonicalUserId);
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.episodeProgress[0].user_id, productionCanonicalUserId);
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.follows[0].follower_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.follows[1].following_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.blocks[0].blocker_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.blocks[1].blocked_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.reports[0].reporter_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.referrals[0].inviter_clerk_user_id, productionClerkUserId);
+    assert.equal(db.state.referrals[1].invitee_clerk_user_id, productionClerkUserId);
+  });
+
+  it('keeps the exact production orphan unchanged when it has a stable reference', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb();
+    db.state.podcastPlays.push({ id: 'orphan-stable-play', user_id: productionDevClerkUserId, clerk_user_id: null, legacy_base44_user_id: null });
+    const before = identityStateSnapshot(db.state);
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(identityStateSnapshot(db.state), before);
+  });
+
+  it('keeps the exact production orphan unchanged when it has customized profile state', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb({ orphanOverrides: { username: 'unexpected-orphan' } });
+    const before = identityStateSnapshot(db.state);
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(identityStateSnapshot(db.state), before);
+  });
+
+  it('does not partially migrate when the production orphan gains a stable relationship before the batch', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb({
+      beforeBatch(state) {
+        state.podcastPlays.push({ id: 'orphan-race-play', user_id: productionDevClerkUserId, clerk_user_id: null, legacy_base44_user_id: null });
+      },
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(db.state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.users.some((user) => user.id === productionDevClerkUserId), true);
+    assert.equal(db.state.podcastPlays.some((row) => row.id === 'orphan-race-play'), true);
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[0].follower_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[1].following_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[0].blocker_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[1].blocked_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.reports[0].reporter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[0].inviter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[1].invitee_clerk_user_id, productionDevClerkUserId);
+  });
+
+  it('does not partially migrate when the production canonical old Clerk ID changes before the batch', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb({
+      beforeBatch(state) {
+        state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id = 'user_raced';
+      },
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(db.state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id, 'user_raced');
+    assert.equal(db.state.users.some((user) => user.id === productionDevClerkUserId), true);
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[0].follower_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[1].following_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[0].blocker_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[1].blocked_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.reports[0].reporter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[0].inviter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[1].invitee_clerk_user_id, productionDevClerkUserId);
+  });
+
   it('replaces a development Clerk ID with the production Clerk ID without changing the D1 user', async () => {
     const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'REAL@example.com' });
     installJwksMock(jwk);
