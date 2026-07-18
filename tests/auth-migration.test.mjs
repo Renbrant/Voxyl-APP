@@ -58,6 +58,21 @@ async function body(response) {
   return response.json();
 }
 
+function identityStateSnapshot(state) {
+  return JSON.stringify({
+    users: state.users,
+    playlists: state.playlists,
+    playlistLikes: state.playlistLikes,
+    podcastLikes: state.podcastLikes,
+    podcastPlays: state.podcastPlays,
+    episodeProgress: state.episodeProgress,
+    follows: state.follows,
+    blocks: state.blocks,
+    reports: state.reports,
+    referrals: state.referrals,
+  });
+}
+
 function baseUser(overrides) {
   return {
     id: 'd1-real-user',
@@ -76,7 +91,7 @@ function baseUser(overrides) {
   };
 }
 
-function createAuthMigrationDb({ users } = {}) {
+function createAuthMigrationDb({ users, beforeBatch } = {}) {
   const state = {
     users: users || [
       baseUser(),
@@ -120,6 +135,7 @@ function createAuthMigrationDb({ users } = {}) {
       { id: 'referral-in', inviter_id: 'other-user', inviter_clerk_user_id: 'clerk-other', inviter_legacy_base44_user_id: null, invitee_user_id: 'd1-real-user', invitee_clerk_user_id: 'clerk-dev-user', invitee_legacy_base44_user_id: 'legacy-real-user' },
     ],
     calls: [],
+    beforeBatch,
   };
 
   function emailUser(email, legacyOnly) {
@@ -146,22 +162,25 @@ function createAuthMigrationDb({ users } = {}) {
       });
   }
 
-  function referenceCount(userId) {
+  function referenceCount(userId, clerkUserId = null) {
     return [
-      state.playlists.filter((row) => row.creator_id === userId).length,
-      state.playlistLikes.filter((row) => row.user_id === userId).length,
-      state.podcastLikes.filter((row) => row.user_id === userId).length,
-      state.podcastPlays.filter((row) => row.user_id === userId).length,
-      state.episodeProgress.filter((row) => row.user_id === userId).length,
-      state.follows.filter((row) => row.follower_id === userId || row.following_id === userId).length,
-      state.blocks.filter((row) => row.blocker_id === userId || row.blocked_id === userId).length,
-      state.reports.filter((row) => row.reporter_id === userId || row.reported_user_id === userId).length,
-      state.referrals.filter((row) => row.inviter_id === userId || row.invitee_user_id === userId).length,
+      state.playlists.filter((row) => row.creator_id === userId || row.creator_clerk_user_id === clerkUserId).length,
+      state.playlistLikes.filter((row) => row.user_id === userId || row.clerk_user_id === clerkUserId).length,
+      state.podcastLikes.filter((row) => row.user_id === userId || row.clerk_user_id === clerkUserId).length,
+      state.podcastPlays.filter((row) => row.user_id === userId || row.clerk_user_id === clerkUserId).length,
+      state.episodeProgress.filter((row) => row.user_id === userId || row.clerk_user_id === clerkUserId).length,
+      state.follows.filter((row) => row.follower_id === userId || row.follower_clerk_user_id === clerkUserId || row.following_id === userId || row.following_clerk_user_id === clerkUserId).length,
+      state.blocks.filter((row) => row.blocker_id === userId || row.blocker_clerk_user_id === clerkUserId || row.blocked_id === userId || row.blocked_clerk_user_id === clerkUserId).length,
+      state.reports.filter((row) => row.reporter_id === userId || row.reporter_clerk_user_id === clerkUserId || row.reported_user_id === userId).length,
+      state.referrals.filter((row) => row.inviter_id === userId || row.inviter_clerk_user_id === clerkUserId || row.invitee_user_id === userId || row.invitee_clerk_user_id === clerkUserId).length,
     ].reduce((sum, count) => sum + count, 0);
   }
 
   function updateRows(rows, params, column, idColumn, legacyColumn, clerkColumn) {
     const [newClerkUserId, userId, legacyBase44UserId, oldClerkUserId] = params;
+    if (!state.users.some((user) => user.id === params.at(-2) && user.clerk_user_id === params.at(-1))) {
+      return 0;
+    }
     let changes = 0;
     for (const row of rows) {
       if (
@@ -190,6 +209,10 @@ function createAuthMigrationDb({ users } = {}) {
     state,
     async batch(statements) {
       state.calls.push({ kind: 'batch', statements: statements.map((statement) => ({ sql: statement.sql, params: statement.params })) });
+      if (state.beforeBatch) {
+        state.beforeBatch(state);
+        state.beforeBatch = null;
+      }
       const previous = snapshot();
       try {
         const results = [];
@@ -217,7 +240,7 @@ function createAuthMigrationDb({ users } = {}) {
                 return emailUser(params[0], /legacy_base44_user_id IS NOT NULL/s.test(sql));
               }
               if (/SELECT \(/s.test(sql) && /AS count/s.test(sql)) {
-                return { count: referenceCount(params[0]) };
+                return { count: referenceCount(params[0], params[1]) };
               }
               throw new Error(`Unhandled first SQL: ${sql}`);
             },
@@ -239,14 +262,30 @@ function createAuthMigrationDb({ users } = {}) {
                 return { meta: { changes: 0 } };
               }
               if (/DELETE FROM users/s.test(sql)) {
+                const [
+                  placeholderId,
+                  clerkUserId,
+                  email,
+                  canonicalId,
+                  canonicalPrecondition,
+                ] = params;
+                const canonical = state.users.find((user) => user.id === canonicalId);
+                const canonicalMatches = canonical && (
+                  (canonicalPrecondition === null && canonical.clerk_user_id === null) ||
+                  canonical.clerk_user_id === canonicalPrecondition
+                );
                 const before = state.users.length;
-                state.users = state.users.filter((user) => !(user.id === params[0] && user.clerk_user_id === params[1] && !user.legacy_base44_user_id && user.email?.toLowerCase() === String(params[2]).toLowerCase()));
+                if (canonicalMatches && referenceCount(placeholderId, clerkUserId) === 0) {
+                  state.users = state.users.filter((user) => !(user.id === placeholderId && user.clerk_user_id === clerkUserId && !user.legacy_base44_user_id && user.email?.toLowerCase() === String(email).toLowerCase()));
+                }
                 return { meta: { changes: before - state.users.length } };
               }
               if (/UPDATE users\s+       SET clerk_user_id/s.test(sql)) {
-                const [clerkUserId, email, name, id, oldClerkUserId, newClerkUserId] = params;
-                const user = state.users.find((item) => item.id === id && (!item.clerk_user_id || item.clerk_user_id === oldClerkUserId || item.clerk_user_id === newClerkUserId));
+                const [clerkUserId, email, name, id, oldClerkUserId] = params;
+                const user = state.users.find((item) => item.id === id && ((oldClerkUserId === null && item.clerk_user_id === null) || item.clerk_user_id === oldClerkUserId));
                 if (!user) return { meta: { changes: 0 } };
+                const conflict = state.users.find((item) => item.id !== id && item.clerk_user_id === clerkUserId);
+                if (conflict) throw new Error('UNIQUE constraint failed: users.clerk_user_id');
                 user.clerk_user_id = clerkUserId;
                 user.email ||= email;
                 user.name ||= name;
@@ -326,6 +365,101 @@ describe('Clerk production identity migration', () => {
     assert.equal(db.state.users.length, 1);
     assert.equal(db.state.users[0].id, 'd1-real-user');
     assert.equal(db.state.users[0].clerk_user_id, 'clerk-prod-user');
+  });
+
+  it('does not treat a placeholder with Clerk-only podcast plays as harmless', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser(),
+        baseUser({ id: 'clerk-prod-user', clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null, email: 'real@example.com', username: null, imported_at: null }),
+      ],
+    });
+    db.state.podcastPlays.push({ id: 'placeholder-play', user_id: null, clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null });
+    const before = identityStateSnapshot(db.state);
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(identityStateSnapshot(db.state), before);
+  });
+
+  it('does not delete a placeholder referenced only by report or referral Clerk IDs', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser(),
+        baseUser({ id: 'clerk-prod-user', clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null, email: 'real@example.com', username: null, imported_at: null }),
+      ],
+    });
+    db.state.reports.push({ id: 'placeholder-report', reporter_id: null, reporter_clerk_user_id: 'clerk-prod-user', reporter_legacy_base44_user_id: null, reported_user_id: null });
+    db.state.referrals.push({ id: 'placeholder-referral', inviter_id: null, inviter_clerk_user_id: 'clerk-prod-user', inviter_legacy_base44_user_id: null, invitee_user_id: null, invitee_clerk_user_id: 'clerk-prod-user', invitee_legacy_base44_user_id: null });
+    const before = identityStateSnapshot(db.state);
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(identityStateSnapshot(db.state), before);
+  });
+
+  it('rolls back when a placeholder gains Clerk-only related data before the batch executes', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser(),
+        baseUser({ id: 'clerk-prod-user', clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null, email: 'real@example.com', username: null, imported_at: null }),
+      ],
+      beforeBatch(state) {
+        state.podcastPlays.push({ id: 'concurrent-placeholder-play', user_id: null, clerk_user_id: 'clerk-prod-user', legacy_base44_user_id: null });
+      },
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(db.state.users.find((user) => user.id === 'd1-real-user').clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.users.find((user) => user.id === 'clerk-prod-user').clerk_user_id, 'clerk-prod-user');
+    assert.equal(db.state.podcastPlays.some((row) => row.id === 'concurrent-placeholder-play'), true);
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, 'clerk-dev-user');
+  });
+
+  it('does not partially migrate when the canonical old Clerk ID changes before the batch executes', async () => {
+    const { token, jwk } = createJwt({ sub: 'clerk-prod-user', email: 'real@example.com' });
+    installJwksMock(jwk);
+    const db = createAuthMigrationDb({
+      beforeBatch(state) {
+        state.users.find((user) => user.id === 'd1-real-user').clerk_user_id = 'clerk-raced-user';
+      },
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(db.state.users.find((user) => user.id === 'd1-real-user').clerk_user_id, 'clerk-raced-user');
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.podcastLikes[0].clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.follows[0].follower_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.follows[1].following_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.blocks[0].blocker_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.blocks[1].blocked_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.reports[0].reporter_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.referrals[0].inviter_clerk_user_id, 'clerk-dev-user');
+    assert.equal(db.state.referrals[1].invitee_clerk_user_id, 'clerk-dev-user');
   });
 
   it('fails safely when the new Clerk ID belongs to an unrelated D1 user', async () => {

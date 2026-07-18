@@ -2233,15 +2233,18 @@ type CountRow = {
   count: number;
 };
 
-async function runD1Batch(env: Env, statements: D1PreparedStatement[]): Promise<void> {
+async function runD1Batch(env: Env, statements: D1PreparedStatement[]): Promise<D1Result[]> {
   if (typeof env.DB.batch === "function") {
-    await env.DB.batch(statements);
-    return;
+    return env.DB.batch(statements);
   }
 
+  const results: D1Result[] = [];
+
   for (const statement of statements) {
-    await statement.run();
+    results.push(await statement.run());
   }
+
+  return results;
 }
 
 function normalizeLegacyBase44UserId(value: string | null): string | null {
@@ -2255,21 +2258,32 @@ function isTemporaryClerkDuplicate(conflict: D1User, claims: ClerkClaims, email:
     normalizeEmail(conflict.email) === email;
 }
 
-async function getUserReferenceCount(env: Env, userId: string): Promise<number> {
+async function getUserReferenceCount(env: Env, userId: string, clerkUserId: string | null = null): Promise<number> {
+  const clerkIdentity = clerkUserId || "";
   const row = await env.DB.prepare(
     `SELECT (
-       (SELECT COUNT(*) FROM playlists WHERE creator_id = ?) +
-       (SELECT COUNT(*) FROM playlist_likes WHERE user_id = ?) +
-       (SELECT COUNT(*) FROM podcast_likes WHERE user_id = ?) +
-       (SELECT COUNT(*) FROM podcast_plays WHERE user_id = ?) +
-       (SELECT COUNT(*) FROM episode_progress WHERE user_id = ?) +
-       (SELECT COUNT(*) FROM follows WHERE follower_id = ? OR following_id = ?) +
-       (SELECT COUNT(*) FROM blocks WHERE blocker_id = ? OR blocked_id = ?) +
-       (SELECT COUNT(*) FROM reports WHERE reporter_id = ? OR reported_user_id = ?) +
-       (SELECT COUNT(*) FROM referrals WHERE inviter_id = ? OR invitee_user_id = ?)
+       (SELECT COUNT(*) FROM playlists WHERE creator_id = ? OR creator_clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM playlist_likes WHERE user_id = ? OR clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_likes WHERE user_id = ? OR clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_plays WHERE user_id = ? OR clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM episode_progress WHERE user_id = ? OR clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM follows WHERE follower_id = ? OR follower_clerk_user_id = ? OR following_id = ? OR following_clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM blocks WHERE blocker_id = ? OR blocker_clerk_user_id = ? OR blocked_id = ? OR blocked_clerk_user_id = ?) +
+       (SELECT COUNT(*) FROM reports WHERE reporter_id = ? OR reporter_clerk_user_id = ? OR reported_user_id = ?) +
+       (SELECT COUNT(*) FROM referrals WHERE inviter_id = ? OR inviter_clerk_user_id = ? OR invitee_user_id = ? OR invitee_clerk_user_id = ?)
      ) AS count`,
   )
-    .bind(userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId)
+    .bind(
+      userId, clerkIdentity,
+      userId, clerkIdentity,
+      userId, clerkIdentity,
+      userId, clerkIdentity,
+      userId, clerkIdentity,
+      userId, clerkIdentity, userId, clerkIdentity,
+      userId, clerkIdentity, userId, clerkIdentity,
+      userId, clerkIdentity, userId,
+      userId, clerkIdentity, userId, clerkIdentity,
+    )
     .first<CountRow>();
 
   return row?.count || 0;
@@ -2280,7 +2294,7 @@ async function isHarmlessClerkPlaceholder(env: Env, user: D1User, claims: ClerkC
     return false;
   }
 
-  return (await getUserReferenceCount(env, user.id)) === 0;
+  return (await getUserReferenceCount(env, user.id, claims.userId)) === 0;
 }
 
 function identityConflict(): PodcastPlayError {
@@ -2371,6 +2385,7 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
   }
 
   const { conflictingTemporaryUserId } = await assertClerkUserIdCanBeReassigned(env, user, claims, email);
+  const canonicalClerkPrecondition = user.clerk_user_id;
   const relatedIdentityParams = [
     claims.userId,
     user.id,
@@ -2386,11 +2401,55 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
          WHERE id = ?
            AND clerk_user_id = ?
            AND legacy_base44_user_id IS NULL
-           AND lower(COALESCE(email, '')) = lower(?)`,
+           AND lower(COALESCE(email, '')) = lower(?)
+           AND EXISTS (
+             SELECT 1 FROM users canonical
+             WHERE canonical.id = ?
+               AND ((? IS NULL AND canonical.clerk_user_id IS NULL) OR canonical.clerk_user_id = ?)
+           )
+           AND NOT EXISTS (SELECT 1 FROM playlists WHERE creator_id = ? OR creator_clerk_user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM playlist_likes WHERE user_id = ? OR clerk_user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM podcast_likes WHERE user_id = ? OR clerk_user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM podcast_plays WHERE user_id = ? OR clerk_user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM episode_progress WHERE user_id = ? OR clerk_user_id = ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM follows
+             WHERE follower_id = ? OR follower_clerk_user_id = ? OR following_id = ? OR following_clerk_user_id = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks
+             WHERE blocker_id = ? OR blocker_clerk_user_id = ? OR blocked_id = ? OR blocked_clerk_user_id = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM reports
+             WHERE reporter_id = ? OR reporter_clerk_user_id = ? OR reported_user_id = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM referrals
+             WHERE inviter_id = ? OR inviter_clerk_user_id = ? OR invitee_user_id = ? OR invitee_clerk_user_id = ?
+           )`,
       )
-        .bind(conflictingTemporaryUserId, claims.userId, email || ""),
+        .bind(
+          conflictingTemporaryUserId,
+          claims.userId,
+          email || "",
+          user.id,
+          canonicalClerkPrecondition,
+          canonicalClerkPrecondition,
+          conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId, conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId, conflictingTemporaryUserId, claims.userId,
+          conflictingTemporaryUserId, claims.userId, conflictingTemporaryUserId,
+          conflictingTemporaryUserId, claims.userId, conflictingTemporaryUserId, claims.userId,
+        ),
     );
   }
+
+  const canonicalUpdateIndex = statements.length;
 
   statements.push(
     env.DB.prepare(
@@ -2400,108 +2459,136 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
            name = COALESCE(name, ?),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
-         AND (clerk_user_id IS NULL OR clerk_user_id = ? OR clerk_user_id = ?)`,
+         AND ((? IS NULL AND clerk_user_id IS NULL) OR clerk_user_id = ?)`,
     )
-      .bind(claims.userId, email, name, user.id, user.clerk_user_id || "", claims.userId),
+      .bind(claims.userId, email, name, user.id, canonicalClerkPrecondition, canonicalClerkPrecondition),
     env.DB.prepare(
       `UPDATE playlists
        SET creator_clerk_user_id = ?
-       WHERE creator_id = ?
+       WHERE (creator_id = ?
           OR (creator_legacy_base44_user_id IS NOT NULL AND creator_legacy_base44_user_id = ?)
-          OR (creator_clerk_user_id IS NOT NULL AND creator_clerk_user_id = ?)`,
+          OR (creator_clerk_user_id IS NOT NULL AND creator_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE playlist_likes
        SET clerk_user_id = ?
-       WHERE user_id = ?
+       WHERE (user_id = ?
           OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
-          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE podcast_likes
        SET clerk_user_id = ?
-       WHERE user_id = ?
+       WHERE (user_id = ?
           OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
-          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE podcast_plays
        SET clerk_user_id = ?
-       WHERE user_id = ?
+       WHERE (user_id = ?
           OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
-          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE episode_progress
        SET clerk_user_id = ?
-       WHERE user_id = ?
+       WHERE (user_id = ?
           OR (legacy_base44_user_id IS NOT NULL AND legacy_base44_user_id = ?)
-          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?)`,
+          OR (clerk_user_id IS NOT NULL AND clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE follows
        SET follower_clerk_user_id = ?
-       WHERE follower_id = ?
+       WHERE (follower_id = ?
           OR (follower_legacy_base44_user_id IS NOT NULL AND follower_legacy_base44_user_id = ?)
-          OR (follower_clerk_user_id IS NOT NULL AND follower_clerk_user_id = ?)`,
+          OR (follower_clerk_user_id IS NOT NULL AND follower_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE follows
        SET following_clerk_user_id = ?
-       WHERE following_id = ?
+       WHERE (following_id = ?
           OR (following_legacy_base44_user_id IS NOT NULL AND following_legacy_base44_user_id = ?)
-          OR (following_clerk_user_id IS NOT NULL AND following_clerk_user_id = ?)`,
+          OR (following_clerk_user_id IS NOT NULL AND following_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE blocks
        SET blocker_clerk_user_id = ?
-       WHERE blocker_id = ?
+       WHERE (blocker_id = ?
           OR (blocker_legacy_base44_user_id IS NOT NULL AND blocker_legacy_base44_user_id = ?)
-          OR (blocker_clerk_user_id IS NOT NULL AND blocker_clerk_user_id = ?)`,
+          OR (blocker_clerk_user_id IS NOT NULL AND blocker_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE blocks
        SET blocked_clerk_user_id = ?
-       WHERE blocked_id = ?
+       WHERE (blocked_id = ?
           OR (blocked_legacy_base44_user_id IS NOT NULL AND blocked_legacy_base44_user_id = ?)
-          OR (blocked_clerk_user_id IS NOT NULL AND blocked_clerk_user_id = ?)`,
+          OR (blocked_clerk_user_id IS NOT NULL AND blocked_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE reports
        SET reporter_clerk_user_id = ?
-       WHERE reporter_id = ?
+       WHERE (reporter_id = ?
           OR (reporter_legacy_base44_user_id IS NOT NULL AND reporter_legacy_base44_user_id = ?)
-          OR (reporter_clerk_user_id IS NOT NULL AND reporter_clerk_user_id = ?)`,
+          OR (reporter_clerk_user_id IS NOT NULL AND reporter_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE referrals
        SET inviter_clerk_user_id = ?
-       WHERE inviter_id = ?
+       WHERE (inviter_id = ?
           OR (inviter_legacy_base44_user_id IS NOT NULL AND inviter_legacy_base44_user_id = ?)
-          OR (inviter_clerk_user_id IS NOT NULL AND inviter_clerk_user_id = ?)`,
+          OR (inviter_clerk_user_id IS NOT NULL AND inviter_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
     env.DB.prepare(
       `UPDATE referrals
        SET invitee_clerk_user_id = ?
-       WHERE invitee_user_id = ?
+       WHERE (invitee_user_id = ?
           OR (invitee_legacy_base44_user_id IS NOT NULL AND invitee_legacy_base44_user_id = ?)
-          OR (invitee_clerk_user_id IS NOT NULL AND invitee_clerk_user_id = ?)`,
+          OR (invitee_clerk_user_id IS NOT NULL AND invitee_clerk_user_id = ?))
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND clerk_user_id = ?)`,
     )
-      .bind(...relatedIdentityParams),
+      .bind(...relatedIdentityParams, user.id, claims.userId),
   );
 
-  await runD1Batch(env, statements);
+  let results: D1Result[];
+
+  try {
+    results = await runD1Batch(env, statements);
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE constraint failed: users\.clerk_user_id/i.test(error.message)) {
+      throw identityConflict();
+    }
+
+    throw error;
+  }
+
+  const canonicalUpdateChanges = results[canonicalUpdateIndex]?.meta?.changes;
+
+  if (canonicalUpdateChanges !== 1) {
+    throw identityConflict();
+  }
 }
 
 async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<D1User | null> {

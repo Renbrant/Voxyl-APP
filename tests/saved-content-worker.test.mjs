@@ -285,6 +285,7 @@ function createSavedContentDb() {
             async run() {
               state.calls.push({ kind: 'run', sql, params });
               if (/INSERT INTO users/s.test(sql)) return { meta: { changes: 0 } };
+              if (/UPDATE users\s+SET clerk_user_id/s.test(sql)) return { meta: { changes: 1 } };
               if (/UPDATE users|UPDATE playlist_likes|UPDATE episode_progress|UPDATE podcast_plays|UPDATE follows|UPDATE blocks|UPDATE reports|UPDATE referrals/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE playlists\s+SET creator_clerk_user_id/s.test(sql)) return { meta: { changes: 0 } };
               if (/UPDATE playlists\s+SET likes_count/s.test(sql)) {
