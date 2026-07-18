@@ -381,7 +381,7 @@ function createEpisodeProgressDb() {
               if (/FROM users\s+WHERE clerk_user_id = \?/s.test(sql)) {
                 return state.users.find((user) => user.clerk_user_id === params[0]) || null;
               }
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return state.users.find((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) || null;
               }
               if (/SELECT id(?:,\s+last_played_at)?(?:,\s+updated_at)?\s+FROM episode_progress/s.test(sql)) {
@@ -408,7 +408,7 @@ function createEpisodeProgressDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
               }
               if (/FROM episode_progress/s.test(sql)) {

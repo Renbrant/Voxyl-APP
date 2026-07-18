@@ -2190,6 +2190,7 @@ type D1User = {
   role: string;
   profile_picture: string | null;
   profile_hidden: number;
+  imported_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2197,7 +2198,7 @@ type D1User = {
 async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1User | null> {
   return env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, created_at, updated_at
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE clerk_user_id = ?`,
   )
@@ -2207,10 +2208,10 @@ async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1Us
 
 async function getUsersByEmail(env: Env, email: string): Promise<D1User[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, created_at, updated_at
+     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
-     WHERE lower(email) = lower(?)
+     WHERE lower(TRIM(email)) = lower(TRIM(?))
      ORDER BY imported_at IS NULL, created_at ASC`,
   )
     .bind(email)
@@ -2289,12 +2290,65 @@ async function getUserReferenceCount(env: Env, userId: string, clerkUserId: stri
   return row?.count || 0;
 }
 
+async function getStableUserReferenceCount(env: Env, userId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT (
+       (SELECT COUNT(*) FROM playlists WHERE creator_id = ?) +
+       (SELECT COUNT(*) FROM playlist_likes WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_likes WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM podcast_plays WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM episode_progress WHERE user_id = ?) +
+       (SELECT COUNT(*) FROM follows WHERE follower_id = ? OR following_id = ?) +
+       (SELECT COUNT(*) FROM blocks WHERE blocker_id = ? OR blocked_id = ?) +
+       (SELECT COUNT(*) FROM reports WHERE reporter_id = ? OR reported_user_id = ?) +
+       (SELECT COUNT(*) FROM referrals WHERE inviter_id = ? OR invitee_user_id = ?)
+     ) AS count`,
+  )
+    .bind(userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId, userId)
+    .first<CountRow>();
+
+  return row?.count || 0;
+}
+
 async function isHarmlessClerkPlaceholder(env: Env, user: D1User, claims: ClerkClaims, email: string | null): Promise<boolean> {
   if (!isTemporaryClerkDuplicate(user, claims, email)) {
     return false;
   }
 
   return (await getUserReferenceCount(env, user.id, claims.userId)) === 0;
+}
+
+function normalizeIdentityName(name: string | null): string | null {
+  return name?.trim().toLowerCase() || null;
+}
+
+function hasDefaultOrphanProfile(user: D1User): boolean {
+  return user.clerk_user_id === null &&
+    !normalizeLegacyBase44UserId(user.legacy_base44_user_id) &&
+    user.username === null &&
+    user.profile_picture === null &&
+    (user.role || "user") === "user" &&
+    Number(user.profile_hidden || 0) === 0 &&
+    user.imported_at === null;
+}
+
+function orphanNameMatchesCanonical(user: D1User, canonicalUser: D1User): boolean {
+  const orphanName = normalizeIdentityName(user.name);
+
+  return !orphanName || orphanName === normalizeIdentityName(canonicalUser.name);
+}
+
+async function isHarmlessOrphanClerkKeyedPlaceholder(
+  env: Env,
+  user: D1User,
+  canonicalUser: D1User,
+  email: string,
+): Promise<boolean> {
+  return hasDefaultOrphanProfile(user) &&
+    orphanNameMatchesCanonical(user, canonicalUser) &&
+    normalizeEmail(user.email) === email &&
+    user.id === canonicalUser.clerk_user_id &&
+    (await getStableUserReferenceCount(env, user.id)) === 0;
 }
 
 function identityConflict(): PodcastPlayError {
@@ -2320,29 +2374,54 @@ async function assertClerkUserIdCanBeReassigned(
   return { conflictingTemporaryUserId: conflict.id };
 }
 
+type ResolvedEmailUser = {
+  user: D1User | null;
+  orphanPlaceholderUserId: string | null;
+};
+
 async function resolveUniqueUserByEmail(
   env: Env,
   email: string,
   claims: ClerkClaims,
   clerkUser: D1User | null,
-): Promise<D1User | null> {
+): Promise<ResolvedEmailUser> {
   const candidates = await getUsersByEmail(env, email);
 
   if (candidates.length === 0) {
-    return null;
+    return { user: null, orphanPlaceholderUserId: null };
   }
 
   const classified = await Promise.all(
     candidates.map(async (candidate) => ({
       user: candidate,
       harmlessPlaceholder: await isHarmlessClerkPlaceholder(env, candidate, claims, email),
+      harmlessOrphanPlaceholder: false,
     })),
   );
-  const meaningfulCandidates = classified
+
+  let meaningfulCandidates = classified
     .filter((candidate) => !candidate.harmlessPlaceholder)
     .map((candidate) => candidate.user);
-  const legacyCandidates = meaningfulCandidates.filter((candidate) => normalizeLegacyBase44UserId(candidate.legacy_base44_user_id));
+  let legacyCandidates = meaningfulCandidates.filter((candidate) => normalizeLegacyBase44UserId(candidate.legacy_base44_user_id));
+
+  if (legacyCandidates.length === 1 && meaningfulCandidates.length === 2) {
+    const canonicalUser = legacyCandidates[0];
+    const orphanCandidate = classified.find((candidate) =>
+      candidate.user.id !== canonicalUser.id &&
+      !candidate.harmlessPlaceholder
+    );
+
+    if (orphanCandidate && await isHarmlessOrphanClerkKeyedPlaceholder(env, orphanCandidate.user, canonicalUser, email)) {
+      orphanCandidate.harmlessOrphanPlaceholder = true;
+      meaningfulCandidates = classified
+        .filter((candidate) => !candidate.harmlessPlaceholder && !candidate.harmlessOrphanPlaceholder)
+        .map((candidate) => candidate.user);
+      legacyCandidates = meaningfulCandidates.filter((candidate) => normalizeLegacyBase44UserId(candidate.legacy_base44_user_id));
+    }
+  }
+
   const clerkCandidate = clerkUser ? classified.find((candidate) => candidate.user.id === clerkUser.id) : null;
+  const orphanPlaceholder = classified.find((candidate) => candidate.harmlessOrphanPlaceholder)?.user || null;
 
   if (legacyCandidates.length > 1 || meaningfulCandidates.length > 1) {
     throw identityConflict();
@@ -2355,17 +2434,22 @@ async function resolveUniqueUserByEmail(
       throw identityConflict();
     }
 
-    return canonicalUser;
+    return { user: canonicalUser, orphanPlaceholderUserId: orphanPlaceholder?.id || null };
   }
 
   if (clerkUser && clerkCandidate) {
-    return clerkUser;
+    return { user: clerkUser, orphanPlaceholderUserId: null };
   }
 
   throw identityConflict();
 }
 
-async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkClaims): Promise<void> {
+async function linkClerkUserToLegacyData(
+  env: Env,
+  user: D1User,
+  claims: ClerkClaims,
+  orphanPlaceholderUserId: string | null = null,
+): Promise<void> {
   const email = normalizeEmail(claims.email || user.email);
   const name = claims.name || user.name;
   const legacyBase44UserId = normalizeLegacyBase44UserId(user.legacy_base44_user_id);
@@ -2401,7 +2485,7 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
          WHERE id = ?
            AND clerk_user_id = ?
            AND legacy_base44_user_id IS NULL
-           AND lower(COALESCE(email, '')) = lower(?)
+           AND lower(TRIM(COALESCE(email, ''))) = lower(TRIM(?))
            AND EXISTS (
              SELECT 1 FROM users canonical
              WHERE canonical.id = ?
@@ -2449,6 +2533,60 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
     );
   }
 
+  if (orphanPlaceholderUserId) {
+    statements.push(
+      env.DB.prepare(
+        `DELETE FROM users
+         WHERE id = ?
+           AND clerk_user_id IS NULL
+           AND (legacy_base44_user_id IS NULL OR TRIM(legacy_base44_user_id) = '')
+           AND lower(TRIM(COALESCE(email, ''))) = lower(TRIM(?))
+           AND username IS NULL
+           AND profile_picture IS NULL
+           AND COALESCE(role, 'user') = 'user'
+           AND COALESCE(profile_hidden, 0) = 0
+           AND imported_at IS NULL
+           AND ? IS NOT NULL
+           AND id = ?
+           AND EXISTS (
+             SELECT 1 FROM users canonical
+             WHERE canonical.id = ?
+               AND canonical.clerk_user_id = ?
+               AND (
+                 TRIM(COALESCE(users.name, '')) = ''
+                 OR lower(TRIM(users.name)) = lower(TRIM(COALESCE(canonical.name, '')))
+               )
+           )
+           AND NOT EXISTS (SELECT 1 FROM playlists WHERE creator_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM playlist_likes WHERE user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM podcast_likes WHERE user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM podcast_plays WHERE user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM episode_progress WHERE user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM follows WHERE follower_id = ? OR following_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocker_id = ? OR blocked_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM reports WHERE reporter_id = ? OR reported_user_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM referrals WHERE inviter_id = ? OR invitee_user_id = ?)`,
+      )
+        .bind(
+          orphanPlaceholderUserId,
+          email || "",
+          canonicalClerkPrecondition,
+          canonicalClerkPrecondition,
+          user.id,
+          canonicalClerkPrecondition,
+          orphanPlaceholderUserId,
+          orphanPlaceholderUserId,
+          orphanPlaceholderUserId,
+          orphanPlaceholderUserId,
+          orphanPlaceholderUserId,
+          orphanPlaceholderUserId, orphanPlaceholderUserId,
+          orphanPlaceholderUserId, orphanPlaceholderUserId,
+          orphanPlaceholderUserId, orphanPlaceholderUserId,
+          orphanPlaceholderUserId, orphanPlaceholderUserId,
+        ),
+    );
+  }
+
   const canonicalUpdateIndex = statements.length;
 
   statements.push(
@@ -2459,9 +2597,19 @@ async function linkClerkUserToLegacyData(env: Env, user: D1User, claims: ClerkCl
            name = COALESCE(name, ?),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
-         AND ((? IS NULL AND clerk_user_id IS NULL) OR clerk_user_id = ?)`,
+         AND ((? IS NULL AND clerk_user_id IS NULL) OR clerk_user_id = ?)
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM users WHERE id = ?))`,
     )
-      .bind(claims.userId, email, name, user.id, canonicalClerkPrecondition, canonicalClerkPrecondition),
+      .bind(
+        claims.userId,
+        email,
+        name,
+        user.id,
+        canonicalClerkPrecondition,
+        canonicalClerkPrecondition,
+        orphanPlaceholderUserId,
+        orphanPlaceholderUserId,
+      ),
     env.DB.prepare(
       `UPDATE playlists
        SET creator_clerk_user_id = ?
@@ -2600,9 +2748,10 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   };
 
   let user = await getUserByClerkUserId(env, enrichedClaims.userId);
-  const emailUser = enrichedClaims.email
+  const emailResolution = enrichedClaims.email
     ? await resolveUniqueUserByEmail(env, enrichedClaims.email, enrichedClaims, user)
-    : null;
+    : { user: null, orphanPlaceholderUserId: null };
+  const emailUser = emailResolution.user;
   const expectedUserId = emailUser?.id || user?.id || null;
 
   if (expectedUserId) {
@@ -2614,7 +2763,7 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   }
 
   if (user) {
-    await linkClerkUserToLegacyData(env, user, enrichedClaims);
+    await linkClerkUserToLegacyData(env, user, enrichedClaims, emailResolution.orphanPlaceholderUserId);
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
 
     if (!user || user.id !== expectedUserId) {
@@ -4085,7 +4234,7 @@ async function createBlockResponse(request: Request, env: Env): Promise<Response
   const payload = await parseBlockPayload(request);
   const targetUser = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, created_at, updated_at
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -4222,7 +4371,7 @@ async function blockStatusResponse(request: Request, env: Env, targetUserId: str
 
   const targetUser = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, created_at, updated_at
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
