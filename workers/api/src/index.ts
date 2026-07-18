@@ -2208,10 +2208,10 @@ async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1Us
 
 async function getUsersByEmail(env: Env, email: string): Promise<D1User[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
       profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
-     WHERE lower(email) = lower(?)
+     WHERE lower(TRIM(email)) = lower(TRIM(?))
      ORDER BY imported_at IS NULL, created_at ASC`,
   )
     .bind(email)
@@ -2318,6 +2318,10 @@ async function isHarmlessClerkPlaceholder(env: Env, user: D1User, claims: ClerkC
   return (await getUserReferenceCount(env, user.id, claims.userId)) === 0;
 }
 
+function normalizeIdentityName(name: string | null): string | null {
+  return name?.trim().toLowerCase() || null;
+}
+
 function hasDefaultOrphanProfile(user: D1User): boolean {
   return user.clerk_user_id === null &&
     !normalizeLegacyBase44UserId(user.legacy_base44_user_id) &&
@@ -2328,6 +2332,12 @@ function hasDefaultOrphanProfile(user: D1User): boolean {
     user.imported_at === null;
 }
 
+function orphanNameMatchesCanonical(user: D1User, canonicalUser: D1User): boolean {
+  const orphanName = normalizeIdentityName(user.name);
+
+  return !orphanName || orphanName === normalizeIdentityName(canonicalUser.name);
+}
+
 async function isHarmlessOrphanClerkKeyedPlaceholder(
   env: Env,
   user: D1User,
@@ -2335,6 +2345,7 @@ async function isHarmlessOrphanClerkKeyedPlaceholder(
   email: string,
 ): Promise<boolean> {
   return hasDefaultOrphanProfile(user) &&
+    orphanNameMatchesCanonical(user, canonicalUser) &&
     normalizeEmail(user.email) === email &&
     user.id === canonicalUser.clerk_user_id &&
     (await getStableUserReferenceCount(env, user.id)) === 0;
@@ -2474,7 +2485,7 @@ async function linkClerkUserToLegacyData(
          WHERE id = ?
            AND clerk_user_id = ?
            AND legacy_base44_user_id IS NULL
-           AND lower(COALESCE(email, '')) = lower(?)
+           AND lower(TRIM(COALESCE(email, ''))) = lower(TRIM(?))
            AND EXISTS (
              SELECT 1 FROM users canonical
              WHERE canonical.id = ?
@@ -2529,7 +2540,7 @@ async function linkClerkUserToLegacyData(
          WHERE id = ?
            AND clerk_user_id IS NULL
            AND (legacy_base44_user_id IS NULL OR TRIM(legacy_base44_user_id) = '')
-           AND lower(COALESCE(email, '')) = lower(?)
+           AND lower(TRIM(COALESCE(email, ''))) = lower(TRIM(?))
            AND username IS NULL
            AND profile_picture IS NULL
            AND COALESCE(role, 'user') = 'user'
@@ -2541,6 +2552,10 @@ async function linkClerkUserToLegacyData(
              SELECT 1 FROM users canonical
              WHERE canonical.id = ?
                AND canonical.clerk_user_id = ?
+               AND (
+                 TRIM(COALESCE(users.name, '')) = ''
+                 OR lower(TRIM(users.name)) = lower(TRIM(COALESCE(canonical.name, '')))
+               )
            )
            AND NOT EXISTS (SELECT 1 FROM playlists WHERE creator_id = ?)
            AND NOT EXISTS (SELECT 1 FROM playlist_likes WHERE user_id = ?)

@@ -73,6 +73,14 @@ function identityStateSnapshot(state) {
   });
 }
 
+function normalizeTestEmail(email) {
+  return String(email ?? '').trim().toLowerCase();
+}
+
+function normalizeTestName(name) {
+  return String(name ?? '').trim().toLowerCase();
+}
+
 function baseUser(overrides) {
   return {
     id: 'd1-real-user',
@@ -103,7 +111,8 @@ function productionCanonicalUser(overrides = {}) {
     email: productionEmail,
     name: 'Renato Brant',
     username: 'renatobrant',
-    imported_at: '2026-07-01T00:00:00.000Z',
+    imported_at: '2026-07-08T22:14:25.690Z',
+    created_at: '2026-07-08 22:34:08',
     ...overrides,
   });
 }
@@ -114,14 +123,14 @@ function productionOrphanUser(overrides = {}) {
     clerk_user_id: null,
     legacy_base44_user_id: null,
     email: productionEmail,
-    name: null,
+    name: 'Renato Brant',
     username: null,
     role: 'user',
     profile_picture: null,
     profile_hidden: 0,
     imported_at: null,
-    created_at: '2026-07-18T00:00:00.000Z',
-    updated_at: '2026-07-18T00:00:00.000Z',
+    created_at: '2026-07-08 19:16:52',
+    updated_at: '2026-07-09 03:34:38',
     ...overrides,
   });
 }
@@ -175,7 +184,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
 
   function emailUser(email, legacyOnly) {
     const rows = state.users
-      .filter((user) => user.email?.toLowerCase() === String(email).toLowerCase())
+      .filter((user) => normalizeTestEmail(user.email) === normalizeTestEmail(email))
       .filter((user) => !legacyOnly || user.legacy_base44_user_id)
       .sort((left, right) => {
         const legacyOrder = Number(!left.legacy_base44_user_id) - Number(!right.legacy_base44_user_id);
@@ -189,7 +198,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
 
   function emailUsers(email) {
     return state.users
-      .filter((user) => user.email?.toLowerCase() === String(email).toLowerCase())
+      .filter((user) => normalizeTestEmail(user.email) === normalizeTestEmail(email))
       .sort((left, right) => {
         const importedOrder = Number(!left.imported_at) - Number(!right.imported_at);
         if (importedOrder !== 0) return importedOrder;
@@ -285,7 +294,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
               if (/FROM users\s+WHERE clerk_user_id = \?/s.test(sql)) {
                 return state.users.find((user) => user.clerk_user_id === params[0]) || null;
               }
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return emailUser(params[0], /legacy_base44_user_id IS NOT NULL/s.test(sql));
               }
               if (/SELECT \(/s.test(sql) && /AS count/s.test(sql)) {
@@ -295,7 +304,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return { results: emailUsers(params[0]) };
               }
               throw new Error(`Unhandled all SQL: ${sql}`);
@@ -330,7 +339,8 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                     orphan.id === canonicalPrecondition &&
                     orphan.clerk_user_id === null &&
                     !orphan.legacy_base44_user_id &&
-                    orphan.email?.toLowerCase() === String(email).toLowerCase() &&
+                    normalizeTestEmail(orphan.email) === normalizeTestEmail(email) &&
+                    (!normalizeTestName(orphan.name) || normalizeTestName(orphan.name) === normalizeTestName(canonical.name)) &&
                     orphan.username === null &&
                     orphan.profile_picture === null &&
                     (orphan.role || 'user') === 'user' &&
@@ -357,7 +367,7 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                 );
                 const before = state.users.length;
                 if (canonicalMatches && referenceCount(placeholderId, clerkUserId) === 0) {
-                  state.users = state.users.filter((user) => !(user.id === placeholderId && user.clerk_user_id === clerkUserId && !user.legacy_base44_user_id && user.email?.toLowerCase() === String(email).toLowerCase()));
+                  state.users = state.users.filter((user) => !(user.id === placeholderId && user.clerk_user_id === clerkUserId && !user.legacy_base44_user_id && normalizeTestEmail(user.email) === normalizeTestEmail(email)));
                 }
                 return { meta: { changes: before - state.users.length } };
               }
@@ -536,6 +546,21 @@ describe('Clerk production identity migration', () => {
     assert.equal(identityStateSnapshot(db.state), before);
   });
 
+  it('keeps the exact production orphan unchanged when it has an unrelated name', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb({ orphanOverrides: { name: 'Different Person' } });
+    const before = identityStateSnapshot(db.state);
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(identityStateSnapshot(db.state), before);
+  });
+
   it('does not partially migrate when the production orphan gains a stable relationship before the batch', async () => {
     const productionClerkUserId = 'user_production_new';
     const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
@@ -566,6 +591,54 @@ describe('Clerk production identity migration', () => {
     assert.equal(db.state.reports[0].reporter_clerk_user_id, productionDevClerkUserId);
     assert.equal(db.state.referrals[0].inviter_clerk_user_id, productionDevClerkUserId);
     assert.equal(db.state.referrals[1].invitee_clerk_user_id, productionDevClerkUserId);
+  });
+
+  it('does not partially migrate when the production orphan name changes before the batch', async () => {
+    const productionClerkUserId = 'user_production_new';
+    const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+    installJwksMock(jwk);
+    const db = createProductionOrphanDb({
+      beforeBatch(state) {
+        state.users.find((user) => user.id === productionDevClerkUserId).name = 'Different Person';
+      },
+    });
+
+    const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    const data = await body(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(data.code, 'identity-conflict');
+    assert.equal(db.state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.users.find((user) => user.id === productionDevClerkUserId).name, 'Different Person');
+    assert.equal(db.state.playlists[0].creator_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.playlistLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastLikes[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.podcastPlays[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.episodeProgress[0].clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[0].follower_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.follows[1].following_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[0].blocker_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.blocks[1].blocked_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.reports[0].reporter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[0].inviter_clerk_user_id, productionDevClerkUserId);
+    assert.equal(db.state.referrals[1].invitee_clerk_user_id, productionDevClerkUserId);
+  });
+
+  it('accepts exact production orphans with null or blank names', async () => {
+    for (const orphanName of [null, '   ']) {
+      const productionClerkUserId = `user_production_${orphanName === null ? 'null' : 'blank'}`;
+      const { token, jwk } = createJwt({ sub: productionClerkUserId, email: productionEmail, name: 'Renato Brant' });
+      installJwksMock(jwk);
+      const db = createProductionOrphanDb({ orphanOverrides: { name: orphanName } });
+
+      const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+      const data = await body(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(data.user.id, productionCanonicalUserId);
+      assert.equal(db.state.users.some((user) => user.id === productionDevClerkUserId), false);
+      assert.equal(db.state.users.find((user) => user.id === productionCanonicalUserId).clerk_user_id, productionClerkUserId);
+    }
   });
 
   it('does not partially migrate when the production canonical old Clerk ID changes before the batch', async () => {

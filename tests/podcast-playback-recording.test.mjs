@@ -132,7 +132,7 @@ function createPlaybackDb() {
               if (/FROM users\s+WHERE clerk_user_id = \?/s.test(sql)) {
                 return state.users.find((user) => user.clerk_user_id === params[0]) || null;
               }
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return state.users.find((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) || null;
               }
               if (/FROM playlists\s+WHERE id = \?/s.test(sql)) {
@@ -142,7 +142,7 @@ function createPlaybackDb() {
             },
             async all() {
               state.calls.push({ kind: 'all', sql, params });
-              if (/FROM users\s+WHERE lower\(email\)/s.test(sql)) {
+              if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return { results: state.users.filter((user) => user.email?.toLowerCase() === String(params[0]).toLowerCase()) };
               }
               if (/FROM podcast_plays/s.test(sql)) {
