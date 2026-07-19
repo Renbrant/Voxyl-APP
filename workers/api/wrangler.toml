@@ -8,7 +8,7 @@ routes = [
 
 [vars]
 CLERK_AUTHORIZED_PARTIES = "http://127.0.0.1:5173,http://localhost:5173,https://voxyl.renbrant.com,https://v.renbrant.com"
-CLERK_ISSUER = "https://engaged-swine-46.clerk.accounts.dev"
+CLERK_ISSUER = "https://clerk.v.renbrant.com"
 
 [[d1_databases]]
 binding = "DB"
