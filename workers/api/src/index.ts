@@ -156,6 +156,7 @@ class RssFetchError extends Error {
 type PodcastPlayErrorCode =
   | "invalid-request"
   | "unauthorized"
+  | "forbidden"
   | "invalid-playlist"
   | "identity-conflict"
   | "internal-error";
@@ -508,7 +509,7 @@ function getEpisodeProgressId(pathname: string): string | null {
 }
 
 function getPlaylistId(pathname: string): string | null {
-  const prefixes = ["/playlists/", "/api/playlists/"];
+  const prefixes = ["/playlists/", "/api/playlists/", "/entities/playlist/", "/api/entities/playlist/"];
 
   for (const prefix of prefixes) {
     if (!pathname.startsWith(prefix)) {
@@ -2815,6 +2816,9 @@ type D1Playlist = {
   cover_image: string | null;
   visibility: string;
   rss_feeds: string | null;
+  max_duration: number | null;
+  time_filter_hours: number | null;
+  episodes_sort_order: string | null;
   likes_count: number;
   plays_count: number;
   creator_username: string | null;
@@ -2841,14 +2845,14 @@ type RankedPublicPlaylist = PublicPlaylist & {
 
 const playlistSelect = `SELECT id, legacy_base44_playlist_id, creator_id, creator_clerk_user_id,
   creator_legacy_base44_user_id, title, description, cover_image, visibility, rss_feeds,
-  likes_count, plays_count, creator_username, creator_picture, creator_hidden, created_at,
-  updated_at
+  max_duration, time_filter_hours, episodes_sort_order, likes_count, plays_count,
+  creator_username, creator_picture, creator_hidden, created_at, updated_at
  FROM playlists`;
 
 const rankedPlaylistSelect = `SELECT p.id, p.legacy_base44_playlist_id, p.creator_id, p.creator_clerk_user_id,
   p.creator_legacy_base44_user_id, p.title, p.description, p.cover_image, p.visibility, p.rss_feeds,
-  p.likes_count, p.plays_count, p.creator_username, p.creator_picture, p.creator_hidden, p.created_at,
-  p.updated_at`;
+  p.max_duration, p.time_filter_hours, p.episodes_sort_order, p.likes_count, p.plays_count,
+  p.creator_username, p.creator_picture, p.creator_hidden, p.created_at, p.updated_at`;
 
 function parseRssFeeds(value: string | null): unknown[] {
   if (!value) {
@@ -2876,6 +2880,9 @@ function toPublicPlaylist(playlist: D1Playlist): PublicPlaylist {
     cover_image: playlist.cover_image,
     visibility: playlist.visibility,
     rss_feeds: parseRssFeeds(playlist.rss_feeds),
+    max_duration: Number(playlist.max_duration) || 0,
+    time_filter_hours: Number(playlist.time_filter_hours) || 0,
+    episodes_sort_order: playlist.episodes_sort_order || "newest_first",
     likes_count: playlist.likes_count ?? 0,
     plays_count: playlist.plays_count ?? 0,
     creator_username: playlist.creator_username,
@@ -2892,6 +2899,164 @@ function toRankedPublicPlaylist(playlist: D1RankedPlaylist): RankedPublicPlaylis
   return {
     ...toPublicPlaylist(playlist),
     recent_plays_count: Number(playlist.recent_plays_count) || 0,
+  };
+}
+
+type PlaylistUpdatePayload = {
+  name?: string;
+  description?: string | null;
+  max_duration?: number;
+  time_filter_hours?: number;
+  episodes_sort_order?: string;
+  rss_feeds?: unknown[];
+  cover_image?: string | null;
+  visibility?: string;
+};
+
+function hasOwn(payload: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+function validateOptionalPlaylistString(
+  payload: Record<string, unknown>,
+  key: string,
+  fieldName: string,
+  maxLength: number,
+  required = false,
+): string | null | undefined {
+  if (!hasOwn(payload, key)) {
+    return undefined;
+  }
+
+  return validateBoundedString(payload[key], fieldName, maxLength, required);
+}
+
+function validateOptionalPlaylistInteger(payload: Record<string, unknown>, key: string, fieldName: string): number | undefined {
+  if (!hasOwn(payload, key)) {
+    return undefined;
+  }
+
+  const value = payload[key];
+
+  if (value === null || value === "") {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must be a non-negative integer`);
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new PodcastPlayError(400, "invalid-request", `${fieldName} must be a non-negative integer`);
+  }
+
+  return Math.trunc(parsed);
+}
+
+function validateOptionalPlaylistVisibility(payload: Record<string, unknown>): string | undefined {
+  if (!hasOwn(payload, "visibility")) {
+    return undefined;
+  }
+
+  const visibility = validateBoundedString(payload.visibility, "visibility", 32, true);
+  const allowed = new Set(["public", "friends_only", "private"]);
+
+  if (!visibility || !allowed.has(visibility)) {
+    throw new PodcastPlayError(400, "invalid-request", "visibility is invalid");
+  }
+
+  return visibility;
+}
+
+function validateOptionalPlaylistSortOrder(payload: Record<string, unknown>): string | undefined {
+  if (!hasOwn(payload, "episodes_sort_order")) {
+    return undefined;
+  }
+
+  const sortOrder = validateBoundedString(payload.episodes_sort_order, "episodes_sort_order", 32, true);
+  const allowed = new Set(["newest_first", "oldest_first"]);
+
+  if (!sortOrder || !allowed.has(sortOrder)) {
+    throw new PodcastPlayError(400, "invalid-request", "episodes_sort_order is invalid");
+  }
+
+  return sortOrder;
+}
+
+function validatePlaylistFeed(feed: unknown, index: number): unknown {
+  if (!feed || typeof feed !== "object" || Array.isArray(feed)) {
+    throw new PodcastPlayError(400, "invalid-request", `rss_feeds[${index}] must be an object`);
+  }
+
+  const typedFeed = feed as Record<string, unknown>;
+  const url = typedFeed.url ?? typedFeed.feed_url;
+
+  if (typeof url !== "string" || !normalizePlaybackFeedUrl(url)) {
+    throw new PodcastPlayError(400, "invalid-request", `rss_feeds[${index}].url must be a valid absolute HTTP or HTTPS URL`);
+  }
+
+  return {
+    ...typedFeed,
+    url,
+    skip_start_seconds: coerceNonNegativeInteger(typedFeed.skip_start_seconds),
+    skip_end_seconds: coerceNonNegativeInteger(typedFeed.skip_end_seconds),
+  };
+}
+
+async function parsePlaylistUpdatePayload(request: Request): Promise<PlaylistUpdatePayload> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+  const rssFeeds = hasOwn(payload, "rss_feeds") ? payload.rss_feeds : undefined;
+
+  if (rssFeeds !== undefined && !Array.isArray(rssFeeds)) {
+    throw new PodcastPlayError(400, "invalid-request", "rss_feeds must be an array");
+  }
+
+  return {
+    name: validateOptionalPlaylistString(payload, "name", "name", 200, true) ?? undefined,
+    description: validateOptionalPlaylistString(payload, "description", "description", 4000),
+    max_duration: validateOptionalPlaylistInteger(payload, "max_duration", "max_duration"),
+    time_filter_hours: validateOptionalPlaylistInteger(payload, "time_filter_hours", "time_filter_hours"),
+    episodes_sort_order: validateOptionalPlaylistSortOrder(payload),
+    rss_feeds: rssFeeds?.map(validatePlaylistFeed),
+    cover_image: validateOptionalPlaylistString(payload, "cover_image", "cover_image", 2048),
+    visibility: validateOptionalPlaylistVisibility(payload),
+  };
+}
+
+function isPlaylistOwner(playlist: D1Playlist, user: D1User, claims: ClerkClaims): boolean {
+  return playlist.creator_id === user.id ||
+    playlist.creator_clerk_user_id === claims.userId ||
+    playlist.creator_clerk_user_id === user.clerk_user_id ||
+    Boolean(user.legacy_base44_user_id && playlist.creator_legacy_base44_user_id === user.legacy_base44_user_id);
+}
+
+function getPlaylistOwnerUpdatePredicate(user: D1User, claims: ClerkClaims): { sql: string; params: string[] } {
+  const predicates = ["creator_id = ?", "creator_clerk_user_id = ?"];
+  const params = [user.id, claims.userId];
+
+  if (user.clerk_user_id && user.clerk_user_id !== claims.userId) {
+    predicates.push("creator_clerk_user_id = ?");
+    params.push(user.clerk_user_id);
+  }
+
+  if (user.legacy_base44_user_id) {
+    predicates.push("creator_legacy_base44_user_id = ?");
+    params.push(user.legacy_base44_user_id);
+  }
+
+  return {
+    sql: `(${predicates.join(" OR ")})`,
+    params,
   };
 }
 
@@ -4517,6 +4682,119 @@ async function playlistsResponse(request: Request, env: Env): Promise<Response> 
   );
 }
 
+async function updatePlaylistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+
+  if (!user) {
+    return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
+  }
+
+  const payload = await parsePlaylistUpdatePayload(request);
+  const playlist = await env.DB.prepare(
+    `${playlistSelect}
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(playlistId)
+    .first<D1Playlist>();
+
+  if (!playlist) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (!isPlaylistOwner(playlist, user, claims)) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
+  const updates: string[] = [];
+  const params: unknown[] = [];
+
+  if (payload.name !== undefined) {
+    updates.push("title = ?");
+    params.push(payload.name);
+  }
+
+  if (payload.description !== undefined) {
+    updates.push("description = ?");
+    params.push(payload.description);
+  }
+
+  if (payload.max_duration !== undefined) {
+    updates.push("max_duration = ?");
+    params.push(payload.max_duration);
+  }
+
+  if (payload.time_filter_hours !== undefined) {
+    updates.push("time_filter_hours = ?");
+    params.push(payload.time_filter_hours);
+  }
+
+  if (payload.episodes_sort_order !== undefined) {
+    updates.push("episodes_sort_order = ?");
+    params.push(payload.episodes_sort_order);
+  }
+
+  if (payload.rss_feeds !== undefined) {
+    updates.push("rss_feeds = ?");
+    params.push(JSON.stringify(payload.rss_feeds));
+  }
+
+  if (payload.cover_image !== undefined) {
+    updates.push("cover_image = ?");
+    params.push(payload.cover_image);
+  }
+
+  if (payload.visibility !== undefined) {
+    updates.push("visibility = ?");
+    params.push(payload.visibility);
+  }
+
+  if (updates.length > 0) {
+    updates.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    const ownerPredicate = getPlaylistOwnerUpdatePredicate(user, claims);
+    const result = await env.DB.prepare(
+      `UPDATE playlists
+       SET ${updates.join(", ")}
+       WHERE id = ? AND ${ownerPredicate.sql}`,
+    )
+      .bind(...params, playlistId, ...ownerPredicate.params)
+      .run();
+    const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+    if (changes === 0) {
+      return jsonResponse({ ok: false, error: "Playlist was not updated" }, 409, corsHeaders);
+    }
+  }
+
+  const updatedPlaylist = await env.DB.prepare(
+    `${playlistSelect}
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(playlistId)
+    .first<D1Playlist>();
+
+  if (!updatedPlaylist) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      playlist: toPublicPlaylist(updatedPlaylist),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function followsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -5019,8 +5297,8 @@ async function topPlaylistsByPlaybackResponse(request: Request, env: Env): Promi
      WHERE p.visibility = 'public'
      GROUP BY p.id, p.legacy_base44_playlist_id, p.creator_id, p.creator_clerk_user_id,
        p.creator_legacy_base44_user_id, p.title, p.description, p.cover_image, p.visibility,
-       p.rss_feeds, p.likes_count, p.plays_count, p.creator_username, p.creator_picture,
-       p.creator_hidden, p.created_at, p.updated_at
+       p.rss_feeds, p.max_duration, p.time_filter_hours, p.episodes_sort_order, p.likes_count,
+       p.plays_count, p.creator_username, p.creator_picture, p.creator_hidden, p.created_at, p.updated_at
      ORDER BY recent_plays_count DESC, p.plays_count DESC, p.likes_count DESC,
        p.updated_at DESC, p.id ASC
      LIMIT 50`,
@@ -5174,6 +5452,10 @@ export default {
 
       if (request.method === "GET" && playlistId) {
         return withCors(await playlistResponse(request, env, playlistId), request, env);
+      }
+
+      if (request.method === "PATCH" && playlistId) {
+        return withCors(await updatePlaylistResponse(request, env, playlistId), request, env);
       }
 
       return withCors(jsonResponse(notFoundResponse, 404), request, env);

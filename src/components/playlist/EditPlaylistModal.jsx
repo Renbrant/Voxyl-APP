@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
-import { X, Plus, Trash2, GripVertical, Loader2, Clock, Save, Image as ImageIcon, Lock, Globe, Users, ChevronDown, ChevronUp, Timer, ArrowDown, ArrowUp } from 'lucide-react';
+import { X, Plus, Trash2, GripVertical, Loader2, Clock, Save, Image as ImageIcon, Lock, Globe, Users, ChevronDown, ChevronUp, Timer, ArrowDown, ArrowUp, AlertCircle } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
 
@@ -58,6 +58,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
   const [newFeedUrl, setNewFeedUrl] = useState('');
   const [addingFeed, setAddingFeed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [feedError, setFeedError] = useState('');
@@ -114,19 +115,27 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
   const handleSave = async () => {
     setSaving(true);
-    await voxylApi.entities.Playlist.update(playlist.id, {
-      name: name.trim() || playlist.name,
-      description,
-      max_duration: maxDuration,
-      time_filter_hours: timeFilterHours,
-      episodes_sort_order: sortOrder,
-      rss_feeds: feeds,
-      cover_image: coverImage,
-      visibility,
-    });
-    setSaving(false);
-    onSaved();
-    onClose();
+    setSaveError('');
+
+    try {
+      await voxylApi.entities.Playlist.update(playlist.id, {
+        name: name.trim() || playlist.name,
+        description,
+        max_duration: maxDuration,
+        time_filter_hours: timeFilterHours,
+        episodes_sort_order: sortOrder,
+        rss_feeds: feeds,
+        cover_image: coverImage,
+        visibility,
+      });
+      onSaved();
+      onClose();
+    } catch (error) {
+      console.error('Playlist save error:', error);
+      setSaveError(error?.message || 'Não foi possível salvar a playlist. Tente novamente.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -423,6 +432,13 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
         {/* Footer buttons */}
         <div className="px-5 pt-3 flex-shrink-0 border-t border-border space-y-2" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 5rem)' }}>
+          {saveError && (
+            <div role="alert" className="flex items-start gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+              <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+              <p>{saveError}</p>
+            </div>
+          )}
+
           <button
             onClick={handleSave}
             disabled={saving || deleting}
