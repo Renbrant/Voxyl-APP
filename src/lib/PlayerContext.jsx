@@ -29,6 +29,7 @@ import {
   createWebPlaybackTransitionCoordinator,
   createWebResumeTransitionProtection,
   establishWebPlaybackTransition,
+  getEstablishedWebPlaybackProgress,
   isObsoleteWebPlaybackError,
 } from '@/lib/webPlaybackTransition';
 import { nativeAudioPlayer, isNative } from '@/lib/nativeAudioPlayer';
@@ -553,13 +554,16 @@ export function PlayerProvider({ children }) {
         if (!audio) throw new Error('Shared audio element is unavailable');
 
         invalidateWebResumeRequest();
-        const startAt = nextEpisode.skip_start_seconds || 0;
+        const {
+          resumeAt: startAt,
+          durationSeconds: nextDurationSeconds,
+        } = getEpisodeResumeState(nextEpisode, true);
         webTransition = beginWebEpisodeSourceSwitch({
           coordinator: webPlaybackTransitionRef.current,
           audio,
           audioUrl: nextEpisode.audioUrl,
           resumeAt: startAt,
-          durationSeconds: 0,
+          durationSeconds: nextDurationSeconds,
           onBeforeSource: () => {
             audio.pause();
             currentEpisodeRef.current = nextEpisode;
@@ -567,7 +571,7 @@ export function PlayerProvider({ children }) {
             startPodcastPlaySession(nextEpisode);
             setCurrentEpisode(nextEpisode);
             setCurrentTime(startAt);
-            setDuration(0);
+            setDuration(nextDurationSeconds);
             setFinishedUrls(new Set(finishedUrlsRef.current));
             armLoadingWatchdog(`advance:${source}`);
           },
@@ -599,7 +603,13 @@ export function PlayerProvider({ children }) {
           retryDelays: PLAY_RETRY_DELAYS_MS,
           waitForMediaReady,
         });
-        if (startAt > 0) setCurrentTime(establishedPosition || startAt);
+        const progress = getEstablishedWebPlaybackProgress({
+          audio,
+          fallbackPosition: establishedPosition || startAt,
+          fallbackDuration: nextDurationSeconds,
+        });
+        setCurrentTime(progress.currentTime);
+        setDuration(progress.duration);
         setIsPlaying(true);
         clearLoadingState();
         if (pendingWebSeekRef.current?.transitionGeneration === webTransition.generation) {
@@ -1226,7 +1236,13 @@ export function PlayerProvider({ children }) {
           retryDelays: PLAY_RETRY_DELAYS_MS,
           waitForMediaReady,
         });
-        if (resumeAt > 0) setCurrentTime(establishedPosition || resumeAt);
+        const progress = getEstablishedWebPlaybackProgress({
+          audio,
+          fallbackPosition: establishedPosition || resumeAt,
+          fallbackDuration: durationSeconds,
+        });
+        setCurrentTime(progress.currentTime);
+        setDuration(progress.duration);
         setIsPlaying(true);
         clearLoadingState();
         if (activeProgressRegressionGuardRef.current?.transitionGeneration === transition.generation) {

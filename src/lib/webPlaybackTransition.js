@@ -149,6 +149,28 @@ export function createWebResumeTransitionProtection({
   };
 }
 
+export function getEstablishedWebPlaybackProgress({
+  audio,
+  fallbackPosition = 0,
+  fallbackDuration = 0,
+} = {}) {
+  const audioPosition = Number(audio?.currentTime);
+  const fallbackCurrentTime = Number(fallbackPosition);
+  const audioDuration = Number(audio?.duration);
+  const fallbackDurationSeconds = Number(fallbackDuration);
+
+  // Source-switch events are intentionally suppressed while switching, so the
+  // visual progress state is reconciled from the element once the switch wins.
+  return {
+    currentTime: Number.isFinite(audioPosition) && audioPosition >= 0
+      ? audioPosition
+      : (Number.isFinite(fallbackCurrentTime) && fallbackCurrentTime >= 0 ? fallbackCurrentTime : 0),
+    duration: Number.isFinite(audioDuration) && audioDuration > 0
+      ? audioDuration
+      : (Number.isFinite(fallbackDurationSeconds) && fallbackDurationSeconds > 0 ? fallbackDurationSeconds : 0),
+  };
+}
+
 function isNearRequestedPosition(audio, requestedPosition, toleranceSeconds) {
   const current = Number(audio?.currentTime);
   return Number.isFinite(current) && Math.abs(current - requestedPosition) <= toleranceSeconds;
