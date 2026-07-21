@@ -33,6 +33,7 @@ import {
   createWebPlaybackTransitionCoordinator,
   createWebResumeTransitionProtection,
   establishWebPlaybackTransition,
+  getEstablishedWebPlaybackProgress,
   isObsoleteWebPlaybackError,
   requestGuardedWebPlayback,
 } from '../src/lib/webPlaybackTransition.js';
@@ -3857,6 +3858,61 @@ describe('EpisodeProgress frontend cache helpers', () => {
     coordinator.markEstablished(transition);
     if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
     assert.equal(visibleDuration, 240);
+  });
+
+  it('reconciles progress from the audio element after ignored switch-time events', () => {
+    const coordinator = createWebPlaybackTransitionCoordinator();
+    const audio = {
+      src: '',
+      currentSrc: '',
+      currentTime: 75,
+      duration: 240,
+      load() { this.currentSrc = this.src; },
+    };
+    let visibleCurrentTime = 0;
+    let visibleDuration = 180;
+    const transition = beginWebEpisodeSourceSwitch({
+      coordinator,
+      audio,
+      audioUrl: 'https://cdn.example.com/b.mp3',
+      resumeAt: 0,
+      durationSeconds: visibleDuration,
+    });
+
+    audio.currentTime = 2;
+    audio.duration = 210;
+    if (!coordinator.shouldIgnoreEvent('timeupdate', audio)) visibleCurrentTime = audio.currentTime;
+    if (!coordinator.shouldIgnoreEvent('durationchange', audio)) visibleDuration = audio.duration;
+    assert.equal(visibleCurrentTime, 0);
+    assert.equal(visibleDuration, 180);
+
+    coordinator.markEstablished(transition);
+    const progress = getEstablishedWebPlaybackProgress({
+      audio,
+      fallbackPosition: transition.resumeAt,
+      fallbackDuration: transition.durationSeconds,
+    });
+    visibleCurrentTime = progress.currentTime;
+    visibleDuration = progress.duration;
+
+    assert.equal(visibleCurrentTime, 2);
+    assert.equal(visibleDuration, 210);
+  });
+
+  it('keeps cached duration visible when established playback has no duration yet', () => {
+    const audio = {
+      currentTime: 50,
+      duration: Number.NaN,
+    };
+
+    assert.deepEqual(getEstablishedWebPlaybackProgress({
+      audio,
+      fallbackPosition: 50,
+      fallbackDuration: 180,
+    }), {
+      currentTime: 50,
+      duration: 180,
+    });
   });
 
   it('cancels the current web transition on cleanup and starts later playback fresh', () => {
