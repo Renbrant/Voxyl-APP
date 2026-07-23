@@ -27,6 +27,7 @@ interface Env {
   DB: D1Database;
   VOXYL_CACHE: KVNamespace;
   VOXYL_MEDIA: R2Bucket;
+  MEDIA_PUBLIC_BASE_URL?: string;
   DIAGNOSTICS_TOKEN: string;
   CLERK_SECRET_KEY: string;
   CLERK_JWT_KEY: string;
@@ -359,6 +360,30 @@ function isEntityPlaylistRoute(pathname: string): boolean {
 
 function isEntityFollowRoute(pathname: string): boolean {
   return pathname === "/entities/follow" || pathname === "/api/entities/follow";
+}
+
+function getFollowId(pathname: string): string | null {
+  const prefixes = ["/entities/follow/", "/api/entities/follow/"];
+
+  for (const prefix of prefixes) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+
+    const encodedId = pathname.slice(prefix.length);
+
+    if (!encodedId || encodedId.includes("/")) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(encodedId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function isBlocksRoute(pathname: string): boolean {
@@ -2224,12 +2249,14 @@ type PublicUserSearchResult = {
   id: string;
   username: string;
   profile_hidden: boolean;
+  profile_picture: string | null;
 };
 
 type D1UserSearchRow = {
   id: string;
   username: string;
   profile_hidden: number | string | boolean | null;
+  profile_picture: string | null;
 };
 
 type PublicUserProfile = {
@@ -2273,11 +2300,31 @@ function isTruthyD1Flag(value: number | string | boolean | null): boolean {
   return value === true || value === 1 || value === "1";
 }
 
-function toPublicUserSearchResult(row: D1UserSearchRow): PublicUserSearchResult {
+const DEFAULT_MEDIA_PUBLIC_BASE_URL = "https://voxyl-media.renbrant.com";
+const BROKEN_MEDIA_PUBLIC_BASE_URL = "https://media.renbrant.com";
+
+function getMediaPublicBaseUrl(env: Env): string {
+  return (env.MEDIA_PUBLIC_BASE_URL || DEFAULT_MEDIA_PUBLIC_BASE_URL).replace(/\/+$/, "");
+}
+
+function normalizeProfilePictureUrl(value: string | null, env: Env): string | null {
+  if (!value) {
+    return value;
+  }
+
+  if (value === BROKEN_MEDIA_PUBLIC_BASE_URL || value.startsWith(`${BROKEN_MEDIA_PUBLIC_BASE_URL}/`)) {
+    return `${getMediaPublicBaseUrl(env)}${value.slice(BROKEN_MEDIA_PUBLIC_BASE_URL.length)}`;
+  }
+
+  return value;
+}
+
+function toPublicUserSearchResult(row: D1UserSearchRow, env: Env): PublicUserSearchResult {
   return {
     id: row.id,
     username: row.username,
     profile_hidden: isTruthyD1Flag(row.profile_hidden),
+    profile_picture: normalizeProfilePictureUrl(row.profile_picture, env),
   };
 }
 
@@ -2865,11 +2912,14 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   return user;
 }
 
-function toClientUser(user: D1User): D1User & { full_name: string | null; picture: string | null } {
+function toClientUser(user: D1User, env: Env): D1User & { full_name: string | null; picture: string | null } {
+  const profilePicture = normalizeProfilePictureUrl(user.profile_picture, env);
+
   return {
     ...user,
+    profile_picture: profilePicture,
     full_name: user.name,
-    picture: user.profile_picture,
+    picture: profilePicture,
   };
 }
 
@@ -2887,7 +2937,7 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
   }
 
-  return jsonResponse({ ok: true, user: toClientUser(user) }, 200, corsHeaders);
+  return jsonResponse({ ok: true, user: toClientUser(user, env) }, 200, corsHeaders);
 }
 
 async function updateMeResponse(request: Request, env: Env): Promise<Response> {
@@ -2959,8 +3009,8 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
   return jsonResponse(
     {
       ok: true,
-      user: toClientUser(updated),
-      data: toClientUser(updated),
+      user: toClientUser(updated, env),
+      data: toClientUser(updated, env),
     },
     200,
     corsHeaders,
@@ -2992,7 +3042,7 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
 
   if (!normalizedQuery) {
     const response = await env.DB.prepare(
-      `SELECT id, username, profile_hidden
+      `SELECT id, username, profile_hidden, profile_picture
        FROM users
        WHERE username IS NOT NULL
          AND TRIM(username) <> ''
@@ -3004,7 +3054,7 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
     results = response.results || [];
   } else {
     const response = await env.DB.prepare(
-      `SELECT id, username, profile_hidden
+      `SELECT id, username, profile_hidden, profile_picture
        FROM users
        WHERE username IS NOT NULL
          AND TRIM(username) <> ''
@@ -3024,7 +3074,7 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
   return jsonResponse(
     {
       data: {
-        users: results.map(toPublicUserSearchResult),
+        users: results.map((row) => toPublicUserSearchResult(row, env)),
       },
     },
     200,
@@ -3050,12 +3100,12 @@ async function parseUserIdPayload(request: Request): Promise<{ userId: string }>
   };
 }
 
-function toPublicUserProfile(user: D1User): PublicUserProfile {
+function toPublicUserProfile(user: D1User, env: Env): PublicUserProfile {
   return {
     id: user.id,
     username: user.username,
     full_name: user.name,
-    profile_picture: user.profile_picture,
+    profile_picture: normalizeProfilePictureUrl(user.profile_picture, env),
     created_at: user.created_at,
   };
 }
@@ -3063,15 +3113,7 @@ function toPublicUserProfile(user: D1User): PublicUserProfile {
 async function handleGetPublicUserProfile(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const { userId } = await parseUserIdPayload(request);
-  const user = await env.DB.prepare(
-    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
-     FROM users
-     WHERE id = ?
-     LIMIT 1`,
-  )
-    .bind(userId)
-    .first<D1User>();
+  const user = await getUserByAnyIdentifier(env, userId);
 
   if (!user) {
     return jsonResponse({ data: {} }, 200, corsHeaders);
@@ -3081,10 +3123,10 @@ async function handleGetPublicUserProfile(request: Request, env: Env): Promise<R
     return jsonResponse(notFoundResponse, 404, corsHeaders);
   }
 
-  return jsonResponse({ data: toPublicUserProfile(user) }, 200, corsHeaders);
+  return jsonResponse({ data: toPublicUserProfile(user, env) }, 200, corsHeaders);
 }
 
-function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
+function toPublicUserPlaylist(row: D1UserPlaylistRow, env: Env): PublicUserPlaylist {
   return {
     id: row.id,
     name: row.title,
@@ -3093,7 +3135,7 @@ function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
     cover_image: row.cover_image,
     creator_id: row.creator_id,
     creator_username: row.creator_username,
-    creator_picture: row.creator_picture,
+    creator_picture: normalizeProfilePictureUrl(row.creator_picture, env),
     visibility: row.visibility,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -3105,6 +3147,12 @@ function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
 async function handleGetUserPlaylists(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const { userId } = await parseUserIdPayload(request);
+  const creatorId = await resolveCanonicalUserId(env, userId);
+
+  if (!creatorId) {
+    return jsonResponse({ data: { playlists: [] } }, 200, corsHeaders);
+  }
+
   const { results } = await env.DB.prepare(
     `SELECT id, title, description, cover_image, creator_id, creator_username,
       creator_picture, visibility, created_at, updated_at
@@ -3115,13 +3163,13 @@ async function handleGetUserPlaylists(request: Request, env: Env): Promise<Respo
        id ASC
      LIMIT 50`,
   )
-    .bind(userId)
+    .bind(creatorId)
     .all<D1UserPlaylistRow>();
 
   return jsonResponse(
     {
       data: {
-        playlists: (results || []).map(toPublicUserPlaylist),
+        playlists: (results || []).map((row) => toPublicUserPlaylist(row, env)),
       },
     },
     200,
@@ -3181,7 +3229,7 @@ async function handleFileUpload(request: Request, env: Env): Promise<Response> {
 
   return jsonResponse(
     {
-      file_url: `https://media.renbrant.com/${objectKey}`,
+      file_url: `${getMediaPublicBaseUrl(env)}/${objectKey}`,
     },
     200,
     corsHeaders,
@@ -3458,7 +3506,11 @@ type D1Follow = {
   follower_email: string | null;
   follower_name: string | null;
   follower_username: string | null;
+  follower_profile_picture: string | null;
   following_email: string | null;
+  following_name: string | null;
+  following_username: string | null;
+  following_profile_picture: string | null;
   base44_created_date: string | null;
   base44_updated_date: string | null;
 };
@@ -3468,16 +3520,26 @@ type PublicFollow = D1Follow & {
   updated_date: string;
 };
 
-const followSelect = `SELECT id, legacy_base44_follow_id, follower_id, follower_clerk_user_id,
-  follower_legacy_base44_user_id, following_id, following_clerk_user_id,
-  following_legacy_base44_user_id, status, created_at, updated_at, follower_email,
-  follower_name, follower_username, following_email,
-  base44_created_date, base44_updated_date
- FROM follows`;
+const followSelect = `SELECT f.id, f.legacy_base44_follow_id, f.follower_id, f.follower_clerk_user_id,
+  f.follower_legacy_base44_user_id, f.following_id, f.following_clerk_user_id,
+  f.following_legacy_base44_user_id, f.status, f.created_at, f.updated_at, f.follower_email,
+  COALESCE(follower_user.name, f.follower_name) AS follower_name,
+  COALESCE(follower_user.username, f.follower_username) AS follower_username,
+  follower_user.profile_picture AS follower_profile_picture,
+  f.following_email,
+  following_user.name AS following_name,
+  following_user.username AS following_username,
+  following_user.profile_picture AS following_profile_picture,
+  f.base44_created_date, f.base44_updated_date
+ FROM follows f
+ LEFT JOIN users follower_user ON follower_user.id = f.follower_id
+ LEFT JOIN users following_user ON following_user.id = f.following_id`;
 
-function toPublicFollow(follow: D1Follow): PublicFollow {
+function toPublicFollow(follow: D1Follow, env: Env): PublicFollow {
   return {
     ...follow,
+    follower_profile_picture: normalizeProfilePictureUrl(follow.follower_profile_picture, env),
+    following_profile_picture: normalizeProfilePictureUrl(follow.following_profile_picture, env),
     created_date: follow.base44_created_date || follow.created_at,
     updated_date: follow.base44_updated_date || follow.updated_at,
   };
@@ -3511,6 +3573,25 @@ async function getUserById(env: Env, userId: string): Promise<D1User | null> {
   )
     .bind(userId)
     .first<D1User>();
+}
+
+async function getUserByAnyIdentifier(env: Env, userId: string): Promise<D1User | null> {
+  return env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
+     FROM users
+     WHERE id = ?
+        OR clerk_user_id = ?
+        OR legacy_base44_user_id = ?
+     LIMIT 1`,
+  )
+    .bind(userId, userId, userId)
+    .first<D1User>();
+}
+
+async function resolveCanonicalUserId(env: Env, userId: string): Promise<string | null> {
+  const user = await getUserByAnyIdentifier(env, userId);
+  return user?.id || null;
 }
 
 type D1Block = {
@@ -3574,9 +3655,28 @@ function getBlockIdentityValues(user: Pick<D1User, "id" | "clerk_user_id" | "leg
   ].filter((value): value is string => Boolean(value));
 }
 
-function getFollowUserPredicate(prefix: "follower" | "following", values: string[]): string {
-  const columns = [`${prefix}_id`, `${prefix}_clerk_user_id`, `${prefix}_legacy_base44_user_id`];
+function getFollowUserPredicate(prefix: "follower" | "following", values: string[], tableAlias = ""): string {
+  const columnPrefix = tableAlias ? `${tableAlias}.` : "";
+  const columns = [`${prefix}_id`, `${prefix}_clerk_user_id`, `${prefix}_legacy_base44_user_id`]
+    .map((column) => `${columnPrefix}${column}`);
   return `(${columns.map((column) => `${column} IN (${values.map(() => "?").join(", ")})`).join(" OR ")})`;
+}
+
+function isFollowParticipant(follow: D1Follow, user: D1User): boolean {
+  const values = getBlockIdentityValues(user);
+  return values.includes(follow.follower_id) ||
+    values.includes(follow.follower_clerk_user_id || "") ||
+    values.includes(follow.follower_legacy_base44_user_id || "") ||
+    values.includes(follow.following_id) ||
+    values.includes(follow.following_clerk_user_id || "") ||
+    values.includes(follow.following_legacy_base44_user_id || "");
+}
+
+function isFollowRecipient(follow: D1Follow, user: D1User): boolean {
+  const values = getBlockIdentityValues(user);
+  return values.includes(follow.following_id) ||
+    values.includes(follow.following_clerk_user_id || "") ||
+    values.includes(follow.following_legacy_base44_user_id || "");
 }
 
 function toPublicBlock(block: D1Block): PublicBlock {
@@ -5210,33 +5310,38 @@ async function updatePlaylistResponse(request: Request, env: Env, playlistId: st
 
 async function followsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
-  const claims = await getVerifiedClerkClaims(request, env);
+  const claims = await getOptionalVerifiedClerkClaims(request, env);
+  const currentUser = claims ? await resolveD1UserFromClerkClaims(env, claims) : null;
 
-  if (!claims) {
+  const url = new URL(request.url);
+  const requestedFollowerId = url.searchParams.get("follower_id");
+  const requestedFollowingId = url.searchParams.get("following_id");
+  const followerId = requestedFollowerId ? await resolveCanonicalUserId(env, requestedFollowerId) : null;
+  const followingId = requestedFollowingId ? await resolveCanonicalUserId(env, requestedFollowingId) : null;
+  const status = url.searchParams.get("status");
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 100);
+
+  if ((requestedFollowerId && !followerId) || (requestedFollowingId && !followingId)) {
+    return jsonResponse({ ok: true, data: [], items: [] }, 200, corsHeaders);
+  }
+
+  const queryInvolvesCurrentUser = Boolean(currentUser) &&
+    ((followerId !== null && followerId === currentUser!.id) ||
+      (followingId !== null && followingId === currentUser!.id));
+  const queriedFollower = followerId ? await getUserById(env, followerId) : null;
+  const queriedFollowing = followingId ? await getUserById(env, followingId) : null;
+  const queriedProfiles = [queriedFollower, queriedFollowing].filter((user): user is D1User => Boolean(user));
+  const requestedProfileCount = Number(Boolean(followerId)) + Number(Boolean(followingId));
+  const allowsPublicAcceptedQuery = status === "accepted" &&
+    requestedProfileCount > 0 &&
+    queriedProfiles.length === requestedProfileCount &&
+    queriedProfiles.every((user) => !isTruthyD1Flag(user.profile_hidden));
+
+  if (!currentUser && !allowsPublicAcceptedQuery) {
     return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
   }
 
-  const currentUser = await getUserByClerkUserId(env, claims.userId);
-
-  if (!currentUser) {
-    return jsonResponse({ ok: false, error: "User not found" }, 403, corsHeaders);
-  }
-
-  const url = new URL(request.url);
-  const followerId = url.searchParams.get("follower_id");
-  const followingId = url.searchParams.get("following_id");
-  const status = url.searchParams.get("status");
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 100);
-  const allowedUserIds = new Set([
-    currentUser.id,
-    currentUser.clerk_user_id,
-    currentUser.legacy_base44_user_id,
-  ].filter((value): value is string => Boolean(value)));
-  const queryInvolvesCurrentUser =
-    (followerId !== null && allowedUserIds.has(followerId)) ||
-    (followingId !== null && allowedUserIds.has(followingId));
-
-  if (currentUser.role !== "admin" && !queryInvolvesCurrentUser) {
+  if (currentUser && currentUser.role !== "admin" && !queryInvolvesCurrentUser && !allowsPublicAcceptedQuery) {
     return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
   }
 
@@ -5244,27 +5349,27 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
   const params: string[] = [];
 
   if (followerId) {
-    where.push("follower_id = ?");
+    where.push("f.follower_id = ?");
     params.push(followerId);
   }
 
   if (followingId) {
-    where.push("following_id = ?");
+    where.push("f.following_id = ?");
     params.push(followingId);
   }
 
   if (status) {
-    where.push("status = ?");
+    where.push("f.status = ?");
     params.push(status);
   }
 
   const sql = `${followSelect}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
-    ORDER BY created_at DESC
+    ORDER BY f.created_at DESC
     LIMIT ?`;
   const { results } = await env.DB.prepare(sql)
     .bind(...params, limit)
     .all<D1Follow>();
-  const follows = (results || []).map(toPublicFollow);
+  const follows = (results || []).map((follow) => toPublicFollow(follow, env));
 
   return jsonResponse(
     {
@@ -5277,6 +5382,139 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
   );
 }
 
+async function getFollowById(env: Env, followId: string): Promise<D1Follow | null> {
+  return env.DB.prepare(
+    `${followSelect}
+     WHERE f.id = ?
+     LIMIT 1`,
+  )
+    .bind(followId)
+    .first<D1Follow>();
+}
+
+async function parseFollowUpdatePayload(request: Request): Promise<{ status: string }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+  const keys = Object.keys(payload);
+
+  if (keys.length !== 1 || !Object.prototype.hasOwnProperty.call(payload, "status")) {
+    throw new PodcastPlayError(400, "invalid-request", "Only status updates are supported");
+  }
+
+  const status = validateBoundedString(payload.status, "status", 32, true);
+
+  if (status !== "accepted") {
+    throw new PodcastPlayError(400, "invalid-request", "status is invalid");
+  }
+
+  return { status };
+}
+
+async function updateFollowResponse(request: Request, env: Env, followId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parseFollowUpdatePayload(request);
+  const follow = await getFollowById(env, followId);
+
+  if (!follow) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (!isFollowRecipient(follow, auth.user!)) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
+  if (follow.status !== "pending" || payload.status !== "accepted") {
+    throw new PodcastPlayError(400, "invalid-request", "Unsupported follow status transition");
+  }
+
+  await env.DB.prepare(
+    `UPDATE follows
+     SET status = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(payload.status, follow.id)
+    .run();
+
+  const updated = await getFollowById(env, follow.id);
+
+  if (!updated) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const publicFollow = toPublicFollow(updated, env);
+  return jsonResponse({ ok: true, data: publicFollow, item: publicFollow }, 200, corsHeaders);
+}
+
+async function deleteFollowResponse(request: Request, env: Env, followId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const follow = await getFollowById(env, followId);
+
+  if (!follow) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (!isFollowParticipant(follow, auth.user!)) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
+  await env.DB.prepare(
+    `DELETE FROM follows
+     WHERE id = ?`,
+  )
+    .bind(follow.id)
+    .run();
+
+  return jsonResponse({ ok: true, deleted: true, data: { deleted: true } }, 200, corsHeaders);
+}
+
+async function usersHaveBlockingRelationship(env: Env, left: D1User, right: D1User): Promise<boolean> {
+  const leftAsBlocker = getBlockIdentityScope(left, "blocker");
+  const rightAsBlocked = getBlockIdentityScope(right, "blocked");
+  const rightAsBlocker = getBlockIdentityScope(right, "blocker");
+  const leftAsBlocked = getBlockIdentityScope(left, "blocked");
+  const row = await env.DB.prepare(
+    `SELECT id
+     FROM blocks b
+     WHERE ((${leftAsBlocker.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+       AND (${rightAsBlocked.predicates.map((predicate) => `b.${predicate}`).join(" OR ")}))
+        OR ((${rightAsBlocker.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+       AND (${leftAsBlocked.predicates.map((predicate) => `b.${predicate}`).join(" OR ")}))
+     LIMIT 1`,
+  )
+    .bind(
+      ...leftAsBlocker.params,
+      ...rightAsBlocked.params,
+      ...rightAsBlocker.params,
+      ...leftAsBlocked.params,
+    )
+    .first<{ id: string }>();
+
+  return Boolean(row);
+}
+
 async function handleRequestFollow(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const auth = await requireSavedContentUser(request, env);
@@ -5287,28 +5525,35 @@ async function handleRequestFollow(request: Request, env: Env): Promise<Response
 
   const { targetUserId } = await parseTargetUserPayload(request);
   const follower = auth.user!;
-
-  if (targetUserId === follower.id) {
-    throw new PodcastPlayError(400, "invalid-request", "Cannot follow yourself");
-  }
-
-  const target = await getUserById(env, targetUserId);
+  const target = await getUserByAnyIdentifier(env, targetUserId);
 
   if (!target) {
     return jsonResponse(notFoundResponse, 404, corsHeaders);
   }
 
+  if (target.id === follower.id) {
+    throw new PodcastPlayError(400, "invalid-request", "Cannot follow yourself");
+  }
+
+  if (isTruthyD1Flag(target.profile_hidden)) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  if (await usersHaveBlockingRelationship(env, follower, target)) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
   const existing = await env.DB.prepare(
     `${followSelect}
-     WHERE follower_id = ?
-       AND following_id = ?
+     WHERE f.follower_id = ?
+       AND f.following_id = ?
      LIMIT 1`,
   )
     .bind(follower.id, target.id)
     .first<D1Follow>();
 
   if (existing) {
-    const publicFollow = toPublicFollow(existing);
+    const publicFollow = toPublicFollow(existing, env);
     return jsonResponse({ ok: true, data: publicFollow, item: publicFollow }, 200, corsHeaders);
   }
 
@@ -5339,7 +5584,7 @@ async function handleRequestFollow(request: Request, env: Env): Promise<Response
 
   const follow = await env.DB.prepare(
     `${followSelect}
-     WHERE id = ?
+     WHERE f.id = ?
      LIMIT 1`,
   )
     .bind(followId)
@@ -5349,7 +5594,7 @@ async function handleRequestFollow(request: Request, env: Env): Promise<Response
     throw new PodcastPlayError(500, "internal-error", "Follow request unavailable");
   }
 
-  const publicFollow = toPublicFollow(follow);
+  const publicFollow = toPublicFollow(follow, env);
   return jsonResponse({ ok: true, data: publicFollow, item: publicFollow }, 201, corsHeaders);
 }
 
@@ -5362,12 +5607,18 @@ async function handleCancelFollowRequest(request: Request, env: Env): Promise<Re
   }
 
   const { targetUserId } = await parseTargetUserPayload(request);
+  const target = await getUserByAnyIdentifier(env, targetUserId);
+
+  if (!target) {
+    return jsonResponse({ ok: true, data: { deleted: false } }, 200, corsHeaders);
+  }
+
   const result = await env.DB.prepare(
     `DELETE FROM follows
      WHERE follower_id = ?
        AND following_id = ?`,
   )
-    .bind(auth.user!.id, targetUserId)
+    .bind(auth.user!.id, target.id)
     .run();
   const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
 
@@ -5880,6 +6131,16 @@ export default {
 
       if (request.method === "GET" && isEntityFollowRoute(pathname)) {
         return withCors(await followsResponse(request, env), request, env);
+      }
+
+      const followId = getFollowId(pathname);
+
+      if (request.method === "PATCH" && followId) {
+        return withCors(await updateFollowResponse(request, env, followId), request, env);
+      }
+
+      if (request.method === "DELETE" && followId) {
+        return withCors(await deleteFollowResponse(request, env, followId), request, env);
       }
 
       if (request.method === "GET" && isBlocksRoute(pathname)) {
