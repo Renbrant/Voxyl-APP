@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { UserPlus, UserCheck, Clock, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from '@/components/ui/use-toast';
 
 // status: null = not following, 'pending' = request sent, 'accepted' = following
 export default function FollowButton({ currentUserId, currentUserEmail, currentUserName, targetUserId, targetUserEmail, followStatus, onStatusChange, theyFollowMe = false }) {
@@ -11,22 +12,25 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
     e.preventDefault();
     e.stopPropagation();
     if (!currentUserId) return;
+    const previousStatus = followStatus;
     setLoading(true);
 
     try {
       if (followStatus === 'accepted' || followStatus === 'pending') {
-        // Unfollow / cancel request via secure server function
-        const result = await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId });
-        console.log('[FollowButton] cancelFollowRequest result:', result);
+        await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId });
         onStatusChange?.(null);
       } else {
-        // Send follow request via secure server function
         const result = await voxylApi.functions.invoke('requestFollow', { targetUserId });
-        console.log('[FollowButton] requestFollow result:', result);
-        onStatusChange?.('pending');
+        onStatusChange?.(result?.data?.status || 'pending');
       }
     } catch (error) {
       console.error('[FollowButton] Error:', error);
+      onStatusChange?.(previousStatus);
+      toast({
+        title: 'Não foi possível atualizar',
+        description: 'Tente novamente em alguns instantes.',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }

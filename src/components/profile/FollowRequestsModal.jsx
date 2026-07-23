@@ -44,14 +44,8 @@ function RequesterPlaylists({ userId }) {
 
 function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) {
   const [expanded, setExpanded] = useState(false);
-  const [profilePicture, setProfilePicture] = useState(null);
+  const profilePicture = req.follower_profile_picture || null;
   const displayName = req.follower_username ? `@${req.follower_username}` : (req.follower_name || 'Usuário');
-
-  useEffect(() => {
-    voxylApi.functions.invoke('getPublicUserProfile', { userId: req.follower_id })
-      .then(res => setProfilePicture(res.data?.profile_picture))
-      .catch(error => console.error('[FollowRequestsModal] Failed to load requester profile picture', { userId: req.follower_id, error }));
-  }, [req.follower_id]);
 
   return (
     <motion.div

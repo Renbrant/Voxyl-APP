@@ -52,7 +52,7 @@ export default function UserProfile() {
       .then(follows => setFollowersCount(follows.length))
       .catch(error => console.error('[UserProfile] Failed to load followers count', { userId, error }));
 
-    voxylApi.entities.Follow.filter({ follower_id: userId })
+    voxylApi.entities.Follow.filter({ follower_id: userId, status: 'accepted' })
       .then(follows => {
         if (follows.length > 0 && follows[0].follower_username) {
           setProfileUser(prev => prev?.username ? prev : {
@@ -101,8 +101,8 @@ export default function UserProfile() {
     // Check follow status for pending
     voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
       .then(follows => {
-        if (follows.length > 0 && follows[0].status === 'pending') {
-          setFollowStatus('pending');
+        if (follows.length > 0 && ['pending', 'accepted'].includes(follows[0].status)) {
+          setFollowStatus(follows[0].status);
         }
       })
       .catch(error => console.error('[UserProfile] Failed to load follow status', { currentUserId: currentUser.id, userId, error }));
