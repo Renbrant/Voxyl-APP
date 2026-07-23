@@ -223,31 +223,18 @@ export default function Explore() {
     queryFn: () => voxylApi.entities.Follow.filter({ following_id: user.id, status: 'accepted' }),
   });
 
-  // Following: users I follow (accepted) - enrich with user profiles to get username
+  // Following: users I follow (accepted)
   const { data: followingList = [] } = useQuery({
     queryKey: ['explore-following', user?.id],
     enabled: !!user && tab === 'users',
-    queryFn: async () => {
-      const follows = await voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'accepted' });
-      // Fetch usernames from searchUsers for enrichment
-      const profiles = await voxylApi.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
-      const profileMap = {};
-      profiles.forEach(p => { profileMap[p.id] = p; });
-      return follows.map(f => ({ ...f, _profile: profileMap[f.following_id] || null }));
-    },
+    queryFn: () => voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'accepted' }),
   });
 
-  // Pending: requests I sent that are still pending - enrich with user profiles
+  // Pending: requests I sent that are still pending
   const { data: pendingList = [] } = useQuery({
     queryKey: ['explore-pending', user?.id],
     enabled: !!user && tab === 'users',
-    queryFn: async () => {
-      const follows = await voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'pending' });
-      const profiles = await voxylApi.functions.invoke('searchUsers', { query: '' }).then(r => r.data?.users || []).catch(() => []);
-      const profileMap = {};
-      profiles.forEach(p => { profileMap[p.id] = p; });
-      return follows.map(f => ({ ...f, _profile: profileMap[f.following_id] || null }));
-    },
+    queryFn: () => voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'pending' }),
   });
 
   // Search by exact username (only when query typed)
@@ -374,8 +361,8 @@ export default function Explore() {
       }));
       const following = followingList.map(f => ({
         id: f.following_id,
-        username: f._profile?.username || f.following_username || null,
-        full_name: f._profile?.full_name || f.following_name || '',
+        username: f.following_username,
+        full_name: f.following_name,
         type: 'following',
       }));
       return canRenderSocialContent ? [...followers, ...following].filter(item => !blockedIds.includes(item.id)) : [];
@@ -383,8 +370,8 @@ export default function Explore() {
     if (userFilter === 'pending') {
       return canRenderSocialContent ? pendingList.map(f => ({
         id: f.following_id,
-        username: f._profile?.username || f.following_username || null,
-        full_name: f._profile?.full_name || f.following_name || '',
+        username: f.following_username,
+        full_name: f.following_name,
         type: 'pending',
       })).filter(item => !blockedIds.includes(item.id)) : [];
     }
