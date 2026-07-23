@@ -13,17 +13,23 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
     if (!currentUserId) return;
     setLoading(true);
 
-    if (followStatus === 'accepted' || followStatus === 'pending') {
-      // Unfollow / cancel request via secure server function
-      await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId }).catch(() => {});
-      onStatusChange?.(null);
-    } else {
-      // Send follow request via secure server function
-      await voxylApi.functions.invoke('requestFollow', { targetUserId }).catch(() => {});
-      onStatusChange?.('pending');
+    try {
+      if (followStatus === 'accepted' || followStatus === 'pending') {
+        // Unfollow / cancel request via secure server function
+        const result = await voxylApi.functions.invoke('cancelFollowRequest', { targetUserId });
+        console.log('[FollowButton] cancelFollowRequest result:', result);
+        onStatusChange?.(null);
+      } else {
+        // Send follow request via secure server function
+        const result = await voxylApi.functions.invoke('requestFollow', { targetUserId });
+        console.log('[FollowButton] requestFollow result:', result);
+        onStatusChange?.('pending');
+      }
+    } catch (error) {
+      console.error('[FollowButton] Error:', error);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const label = followStatus === 'accepted' ? 'Seguindo' : followStatus === 'pending' ? 'Solicitado' : theyFollowMe ? 'Seguir de volta' : 'Seguir';
