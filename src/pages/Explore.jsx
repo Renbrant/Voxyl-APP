@@ -71,6 +71,7 @@ export default function Explore() {
     const newUrl = qs ? `/explore?${qs}` : '/explore';
     // Replace state to keep back button pointing to previous page (not previous search state)
     window.history.replaceState(null, '', newUrl);
+    console.log('[Explore] Current tab:', tab);
   }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory]);
 
   const debouncedQuery = useDebounce(search, 600);
