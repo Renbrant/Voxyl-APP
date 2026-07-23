@@ -462,6 +462,7 @@ export default function Explore() {
       {/* Search bar and filters */}
       <div className="px-4 mb-4 mt-3">
         {tab === 'playlists' && <PodcastSearchBar value={voxylSearch} onChange={setVoxylSearch} loading={false} placeholder={t('exploreSearchPlaylists')} />}
+        {tab === 'users' && <PodcastSearchBar value={userSearch} onChange={setUserSearch} loading={usersLoading} placeholder="Buscar usuários..." />}
         {tab === 'podcasts' && (
           <div className="space-y-3">
             <PodcastSearchBar value={search} onChange={setSearch} loading={podcastLoading} placeholder={t('exploreSearchPodcasts')} />

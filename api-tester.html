@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxyl API Tester - Issue #63</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+        
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .button-secondary {
+            background: #6c757d;
+            margin-top: 10px;
+        }
+        
+        .button-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .response-section {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        
+        .response-section h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 0.95em;
+        }
+        
+        .response-output {
+            background: white;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            color: #333;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+        }
+        
+        .response-output.success {
+            border-left: 4px solid #28a745;
+            color: #155724;
+        }
+        
+        .response-output.error {
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .status-badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-badge.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #0c5460;
+        }
+        
+        .info-box strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        
+        .test-status {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .test-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 2px solid #ddd;
+        }
+        
+        .test-item.passed {
+            border-color: #28a745;
+            background: #d4edda;
+        }
+        
+        .test-item.failed {
+            border-color: #dc3545;
+            background: #f8d7da;
+        }
+        
+        .test-item h3 {
+            font-size: 0.95em;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        
+        .test-item .status {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+            
+            .test-status {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .header h1 {
+                font-size: 1.5em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 Voxyl API Tester</h1>
+            <p>Issue #63 - Profile & Social Features Testing</p>
+        </div>
+        
+        <div class="info-box full-width">
+            <strong>ℹ️ Como usar:</strong>
+            1. Cole seu token Clerk no campo abaixo (obtenha em DevTools → Network após fazer login)
+            <br>2. Clique em "Auto-test All Endpoints" para validar tudo rapidamente
+            <br>3. Ou teste cada endpoint manualmente com os botões específicos
+        </div>
+        
+        <div class="content">
+            <!-- Token Input -->
+            <div class="card full-width">
+                <h2>🔐 Autenticação Clerk</h2>
+                <div class="form-group">
+                    <label for="clerkToken">Token Bearer (copie de qualquer requisição no Network do DevTools)</label>
+                    <textarea id="clerkToken" placeholder="eyJhbGc..."></textarea>
+                    <button onclick="testAllEndpoints()" style="margin-top: 10px;">🚀 Auto-test All Endpoints (Quick Validation)</button>
+                </div>
+            </div>
+            
+            <!-- Test Status Overview -->
+            <div id="testStatus" class="test-status full-width" style="display: none;">
+                <div class="test-item">
+                    <h3>POST /api/files/upload</h3>
+                    <div class="status" id="status-upload">⏳</div>
+                </div>
+                <div class="test-item">
+                    <h3>PATCH /api/me</h3>
+                    <div class="status" id="status-me">⏳</div>
+                </div>
+                <div class="test-item">
+                    <h3>requestFollow</h3>
+                    <div class="status" id="status-follow">⏳</div>
+                </div>
+                <div class="test-item">
+                    <h3>cancelFollowRequest</h3>
+                    <div class="status" id="status-cancel">⏳</div>
+                </div>
+            </div>
+            
+            <!-- Test 1: File Upload -->
+            <div class="card">
+                <h2>📸 Test 1: Profile Photo Upload</h2>
+                <div class="form-group">
+                    <label for="uploadFile">Selecione uma imagem (JPG/PNG)</label>
+                    <input type="file" id="uploadFile" accept="image/*">
+                </div>
+                <button onclick="testFileUpload()">Upload Photo</button>
+                <div id="uploadResponse"></div>
+            </div>
+            
+            <!-- Test 2: Update Profile -->
+            <div class="card">
+                <h2>👤 Test 2: Update Profile</h2>
+                <div class="form-group">
+                    <label for="profilePicture">Profile Picture URL</label>
+                    <input type="text" id="profilePicture" placeholder="https://media.renbrant.com/profiles/...">
+                </div>
+                <div class="form-group">
+                    <label for="profileHidden">
+                        <input type="checkbox" id="profileHidden" style="width: auto;">
+                        Hide Profile (profile_hidden)
+                    </label>
+                </div>
+                <button onclick="testUpdateProfile()">Update Profile</button>
+                <div id="profileResponse"></div>
+            </div>
+            
+            <!-- Test 3: Request Follow -->
+            <div class="card">
+                <h2>👥 Test 3: Request Follow</h2>
+                <div class="form-group">
+                    <label for="targetUserIdFollow">Target User ID</label>
+                    <input type="text" id="targetUserIdFollow" placeholder="user_xyz123">
+                </div>
+                <button onclick="testRequestFollow()">Send Follow Request</button>
+                <div id="followResponse"></div>
+            </div>
+            
+            <!-- Test 4: Cancel Follow -->
+            <div class="card">
+                <h2>❌ Test 4: Cancel Follow Request</h2>
+                <div class="form-group">
+                    <label for="targetUserIdCancel">Target User ID</label>
+                    <input type="text" id="targetUserIdCancel" placeholder="user_xyz123">
+                </div>
+                <button onclick="testCancelFollow()">Cancel Follow</button>
+                <div id="cancelResponse"></div>
+            </div>
+            
+            <!-- Raw API Request Tester -->
+            <div class="card full-width">
+                <h2>⚙️ Custom API Request</h2>
+                <div class="form-group">
+                    <label for="customMethod">HTTP Method</label>
+                    <select id="customMethod" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 1em;">
+                        <option>GET</option>
+                        <option>POST</option>
+                        <option>PATCH</option>
+                        <option>DELETE</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="customUrl">Endpoint URL</label>
+                    <input type="text" id="customUrl" placeholder="http://127.0.0.1:8787/api/me" value="http://127.0.0.1:8787/api/me">
+                </div>
+                <div class="form-group">
+                    <label for="customBody">Request Body (JSON)</label>
+                    <textarea id="customBody" placeholder='{"key": "value"}'>{}</textarea>
+                </div>
+                <button onclick="testCustomRequest()">Send Custom Request</button>
+                <div id="customResponse"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://127.0.0.1:8787';
+        
+        function getToken() {
+            const token = document.getElementById('clerkToken').value.trim();
+            if (!token) {
+                alert('❌ Cole seu token Clerk primeiro!\n\nPara obter:\n1. Abra http://localhost:5173\n2. Faça login\n3. Abra DevTools (F12) → Network\n4. Copie o token de "Authorization: Bearer ..."');
+                return null;
+            }
+            return token;
+        }
+        
+        function displayResponse(elementId, response, isSuccess) {
+            const div = document.getElementById(elementId);
+            div.innerHTML = `
+                <div class="response-section">
+                    <h3>Response:</h3>
+                    <div class="response-output ${isSuccess ? 'success' : 'error'}">
+                        ${JSON.stringify(response, null, 2)}
+                    </div>
+                    <span class="status-badge ${isSuccess ? 'success' : 'error'}">
+                        ${isSuccess ? '✅ Success' : '❌ Error'}
+                    </span>
+                </div>
+            `;
+        }
+        
+        async function testFileUpload() {
+            const token = getToken();
+            if (!token) return;
+            
+            const fileInput = document.getElementById('uploadFile');
+            if (!fileInput.files.length) {
+                alert('❌ Selecione uma imagem primeiro!');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/files/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                displayResponse('uploadResponse', data, response.ok);
+                if (response.ok && data.file_url) {
+                    document.getElementById('profilePicture').value = data.file_url;
+                }
+            } catch (error) {
+                displayResponse('uploadResponse', { error: error.message }, false);
+            }
+        }
+        
+        async function testUpdateProfile() {
+            const token = getToken();
+            if (!token) return;
+            
+            const profilePicture = document.getElementById('profilePicture').value;
+            const profileHidden = document.getElementById('profileHidden').checked;
+            
+            const body = {};
+            if (profilePicture) body.profile_picture = profilePicture;
+            if (profileHidden !== undefined) body.profile_hidden = profileHidden;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/me`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                const data = await response.json();
+                displayResponse('profileResponse', data, response.ok);
+            } catch (error) {
+                displayResponse('profileResponse', { error: error.message }, false);
+            }
+        }
+        
+        async function testRequestFollow() {
+            const token = getToken();
+            if (!token) return;
+            
+            const targetUserId = document.getElementById('targetUserIdFollow').value.trim();
+            if (!targetUserId) {
+                alert('❌ Digite um User ID válido!');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/functions/requestFollow`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ targetUserId })
+                });
+                
+                const data = await response.json();
+                displayResponse('followResponse', data, response.ok);
+            } catch (error) {
+                displayResponse('followResponse', { error: error.message }, false);
+            }
+        }
+        
+        async function testCancelFollow() {
+            const token = getToken();
+            if (!token) return;
+            
+            const targetUserId = document.getElementById('targetUserIdCancel').value.trim();
+            if (!targetUserId) {
+                alert('❌ Digite um User ID válido!');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/functions/cancelFollowRequest`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ targetUserId })
+                });
+                
+                const data = await response.json();
+                displayResponse('cancelResponse', data, response.ok);
+            } catch (error) {
+                displayResponse('cancelResponse', { error: error.message }, false);
+            }
+        }
+        
+        async function testCustomRequest() {
+            const token = getToken();
+            if (!token) return;
+            
+            const method = document.getElementById('customMethod').value;
+            const url = document.getElementById('customUrl').value.trim();
+            const bodyText = document.getElementById('customBody').value.trim();
+            
+            if (!url) {
+                alert('❌ Digite uma URL!');
+                return;
+            }
+            
+            try {
+                const options = {
+                    method,
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                };
+                
+                if (bodyText && method !== 'GET') {
+                    options.body = bodyText;
+                }
+                
+                const response = await fetch(url, options);
+                const data = await response.json();
+                displayResponse('customResponse', data, response.ok);
+            } catch (error) {
+                displayResponse('customResponse', { error: error.message }, false);
+            }
+        }
+        
+        async function testAllEndpoints() {
+            const token = getToken();
+            if (!token) return;
+            
+            document.getElementById('testStatus').style.display = 'grid';
+            
+            const tests = [
+                {
+                    id: 'upload',
+                    name: 'POST /api/files/upload',
+                    url: `${API_BASE}/api/files/upload`,
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: new FormData()
+                },
+                {
+                    id: 'me',
+                    name: 'PATCH /api/me',
+                    url: `${API_BASE}/api/me`,
+                    method: 'PATCH',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                },
+                {
+                    id: 'follow',
+                    name: 'POST /api/functions/requestFollow',
+                    url: `${API_BASE}/api/functions/requestFollow`,
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ targetUserId: 'test' })
+                },
+                {
+                    id: 'cancel',
+                    name: 'POST /api/functions/cancelFollowRequest',
+                    url: `${API_BASE}/api/functions/cancelFollowRequest`,
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ targetUserId: 'test' })
+                }
+            ];
+            
+            for (const test of tests) {
+                try {
+                    const response = await fetch(test.url, {
+                        method: test.method,
+                        headers: test.headers,
+                        body: test.body instanceof FormData ? test.body : test.body
+                    });
+                    
+                    const statusEl = document.getElementById(`status-${test.id}`);
+                    if (response.ok) {
+                        statusEl.textContent = '✅';
+                        statusEl.parentElement.classList.add('passed');
+                        statusEl.parentElement.classList.remove('failed');
+                    } else {
+                        statusEl.textContent = '❌';
+                        statusEl.parentElement.classList.add('failed');
+                        statusEl.parentElement.classList.remove('passed');
+                    }
+                } catch (error) {
+                    const statusEl = document.getElementById(`status-${test.id}`);
+                    statusEl.textContent = '⚠️';
+                    statusEl.parentElement.classList.add('failed');
+                }
+            }
+        }
+    </script>
+</body>
+</html>
