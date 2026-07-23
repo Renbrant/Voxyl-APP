@@ -3459,8 +3459,6 @@ type D1Follow = {
   follower_name: string | null;
   follower_username: string | null;
   following_email: string | null;
-  following_name: string | null;
-  following_username: string | null;
   base44_created_date: string | null;
   base44_updated_date: string | null;
 };
@@ -3473,7 +3471,7 @@ type PublicFollow = D1Follow & {
 const followSelect = `SELECT id, legacy_base44_follow_id, follower_id, follower_clerk_user_id,
   follower_legacy_base44_user_id, following_id, following_clerk_user_id,
   following_legacy_base44_user_id, status, created_at, updated_at, follower_email,
-  follower_name, follower_username, following_email, following_name, following_username,
+  follower_name, follower_username, following_email,
   base44_created_date, base44_updated_date
  FROM follows`;
 
@@ -5320,9 +5318,9 @@ async function handleRequestFollow(request: Request, env: Env): Promise<Response
        id, follower_id, follower_clerk_user_id, follower_legacy_base44_user_id,
        follower_email, follower_name, follower_username,
        following_id, following_clerk_user_id, following_legacy_base44_user_id,
-       following_email, following_name, following_username, status, created_at, updated_at
+       following_email, status, created_at, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   )
     .bind(
       followId,
@@ -5336,8 +5334,6 @@ async function handleRequestFollow(request: Request, env: Env): Promise<Response
       target.clerk_user_id,
       target.legacy_base44_user_id,
       target.email,
-      target.name,
-      target.username,
     )
     .run();
 
