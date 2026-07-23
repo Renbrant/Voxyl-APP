@@ -2196,6 +2196,30 @@ type D1User = {
   updated_at: string;
 };
 
+type PublicUserSearchResult = {
+  id: string;
+  username: string;
+  profile_hidden: boolean;
+};
+
+type D1UserSearchRow = {
+  id: string;
+  username: string;
+  profile_hidden: number | string | boolean | null;
+};
+
+function isTruthyD1Flag(value: number | string | boolean | null): boolean {
+  return value === true || value === 1 || value === "1";
+}
+
+function toPublicUserSearchResult(row: D1UserSearchRow): PublicUserSearchResult {
+  return {
+    id: row.id,
+    username: row.username,
+    profile_hidden: isTruthyD1Flag(row.profile_hidden),
+  };
+}
+
 async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1User | null> {
   return env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
@@ -2803,6 +2827,71 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
   }
 
   return jsonResponse({ ok: true, user: toClientUser(user) }, 200, corsHeaders);
+}
+
+async function parseSearchUsersPayload(request: Request): Promise<{ query: string }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const query = validateBoundedString((body as Record<string, unknown>).query, "query", 64) || "";
+  return { query };
+}
+
+async function handleSearchUsers(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const { query } = await parseSearchUsersPayload(request);
+  const normalizedQuery = query.trim();
+  let results: D1UserSearchRow[];
+
+  if (!normalizedQuery) {
+    const response = await env.DB.prepare(
+      `SELECT id, username, profile_hidden
+       FROM users
+       WHERE username IS NOT NULL
+         AND TRIM(username) <> ''
+         AND COALESCE(profile_hidden, 0) = 0
+       ORDER BY datetime(COALESCE(NULLIF(TRIM(created_at), ''), '1970-01-01')) DESC,
+         id ASC
+       LIMIT 10`,
+    ).all<D1UserSearchRow>();
+    results = response.results || [];
+  } else {
+    const response = await env.DB.prepare(
+      `SELECT id, username, profile_hidden
+       FROM users
+       WHERE username IS NOT NULL
+         AND TRIM(username) <> ''
+         AND LOWER(username) LIKE LOWER(? || '%')
+         AND (COALESCE(profile_hidden, 0) = 0 OR LOWER(username) = LOWER(?))
+       ORDER BY
+         CASE WHEN LOWER(username) = LOWER(?) THEN 0 ELSE 1 END,
+         LOWER(username) ASC,
+         id ASC
+       LIMIT 25`,
+    )
+      .bind(normalizedQuery, normalizedQuery, normalizedQuery)
+      .all<D1UserSearchRow>();
+    results = response.results || [];
+  }
+
+  return jsonResponse(
+    {
+      data: {
+        users: results.map(toPublicUserSearchResult),
+      },
+    },
+    200,
+    corsHeaders,
+  );
 }
 
 type D1Playlist = {
@@ -5384,6 +5473,10 @@ export default {
       if ((request.method === "GET" && isTopPlaylistsDiscoveryRoute(pathname)) ||
         (request.method === "POST" && isTopPlaylistsLegacyRoute(pathname))) {
         return withCors(await topPlaylistsByPlaybackResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isSearchUsersRoute(pathname)) {
+        return withCors(await handleSearchUsers(request, env), request, env);
       }
 
       if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
