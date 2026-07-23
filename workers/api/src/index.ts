@@ -434,6 +434,10 @@ function isGetUserPlaylistsRoute(pathname: string): boolean {
   return pathname === "/api/functions/getUserPlaylists" || pathname === "/functions/getUserPlaylists";
 }
 
+function isFileUploadRoute(pathname: string): boolean {
+  return pathname === "/api/files/upload" || pathname === "/files/upload";
+}
+
 function isPodcastSearchRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchPodcasts" || pathname === "/api/podcasts/search";
 }
@@ -3040,6 +3044,65 @@ async function handleGetUserPlaylists(request: Request, env: Env): Promise<Respo
   );
 }
 
+function sanitizeUploadFileName(fileName: string): string {
+  const sanitized = fileName
+    .trim()
+    .replace(/[/\\]/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 120);
+
+  return sanitized || "profile-photo";
+}
+
+async function handleFileUpload(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  let formData: FormData;
+
+  try {
+    formData = await request.formData();
+  } catch {
+    return jsonResponse({ ok: false, error: "Request body must be multipart form data" }, 400, corsHeaders);
+  }
+
+  const file = formData.get("file");
+
+  if (!(file instanceof File) || file.size === 0) {
+    return jsonResponse({ ok: false, error: "No file provided" }, 400, corsHeaders);
+  }
+
+  if (!file.type.startsWith("image/")) {
+    return jsonResponse({ ok: false, error: "Only image files are allowed" }, 400, corsHeaders);
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    return jsonResponse({ ok: false, error: "File too large (max 5MB)" }, 400, corsHeaders);
+  }
+
+  const fileName = sanitizeUploadFileName(file.name);
+  const objectKey = `profiles/${claims.userId}/${Date.now()}-${crypto.randomUUID()}-${fileName}`;
+
+  await env.VOXYL_MEDIA.put(objectKey, await file.arrayBuffer(), {
+    httpMetadata: {
+      contentType: file.type,
+    },
+  });
+
+  return jsonResponse(
+    {
+      file_url: `https://media.renbrant.com/${objectKey}`,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 type D1Playlist = {
   id: string;
   legacy_base44_playlist_id: string | null;
@@ -5631,6 +5694,10 @@ export default {
 
       if (request.method === "POST" && isGetUserPlaylistsRoute(pathname)) {
         return withCors(await handleGetUserPlaylists(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isFileUploadRoute(pathname)) {
+        return withCors(await handleFileUpload(request, env), request, env);
       }
 
       if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
