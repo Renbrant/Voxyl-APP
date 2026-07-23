@@ -468,6 +468,14 @@ function isTogglePlaylistLikeRoute(pathname: string): boolean {
   return pathname === "/api/functions/togglePlaylistLike" || pathname === "/functions/togglePlaylistLike";
 }
 
+function isRequestFollowRoute(pathname: string): boolean {
+  return pathname === "/api/functions/requestFollow" || pathname === "/functions/requestFollow";
+}
+
+function isCancelFollowRequestRoute(pathname: string): boolean {
+  return pathname === "/api/functions/cancelFollowRequest" || pathname === "/functions/cancelFollowRequest";
+}
+
 function isPodcastLikeRoute(pathname: string): boolean {
   return pathname === "/api/entities/podcast-like" || pathname === "/entities/podcast-like";
 }
@@ -3475,6 +3483,36 @@ function toPublicFollow(follow: D1Follow): PublicFollow {
   };
 }
 
+async function parseTargetUserPayload(request: Request): Promise<{ targetUserId: string }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const targetUserId = validateBoundedString((body as Record<string, unknown>).targetUserId, "targetUserId", 128, true);
+
+  return { targetUserId: targetUserId! };
+}
+
+async function getUserById(env: Env, userId: string): Promise<D1User | null> {
+  return env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<D1User>();
+}
+
 type D1Block = {
   id: string;
   blocked_id: string;
@@ -5239,6 +5277,112 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
   );
 }
 
+async function handleRequestFollow(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const { targetUserId } = await parseTargetUserPayload(request);
+  const follower = auth.user!;
+
+  if (targetUserId === follower.id) {
+    throw new PodcastPlayError(400, "invalid-request", "Cannot follow yourself");
+  }
+
+  const target = await getUserById(env, targetUserId);
+
+  if (!target) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const existing = await env.DB.prepare(
+    `${followSelect}
+     WHERE follower_id = ?
+       AND following_id = ?
+     LIMIT 1`,
+  )
+    .bind(follower.id, target.id)
+    .first<D1Follow>();
+
+  if (existing) {
+    const publicFollow = toPublicFollow(existing);
+    return jsonResponse({ ok: true, data: publicFollow, item: publicFollow }, 200, corsHeaders);
+  }
+
+  const followId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO follows (
+       id, follower_id, follower_clerk_user_id, follower_legacy_base44_user_id,
+       follower_email, follower_name, follower_username,
+       following_id, following_clerk_user_id, following_legacy_base44_user_id,
+       following_email, status, created_at, updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      followId,
+      follower.id,
+      auth.claims!.userId,
+      follower.legacy_base44_user_id,
+      follower.email,
+      follower.name,
+      follower.username,
+      target.id,
+      target.clerk_user_id,
+      target.legacy_base44_user_id,
+      target.email,
+    )
+    .run();
+
+  const follow = await env.DB.prepare(
+    `${followSelect}
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(followId)
+    .first<D1Follow>();
+
+  if (!follow) {
+    throw new PodcastPlayError(500, "internal-error", "Follow request unavailable");
+  }
+
+  const publicFollow = toPublicFollow(follow);
+  return jsonResponse({ ok: true, data: publicFollow, item: publicFollow }, 201, corsHeaders);
+}
+
+async function handleCancelFollowRequest(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const { targetUserId } = await parseTargetUserPayload(request);
+  const result = await env.DB.prepare(
+    `DELETE FROM follows
+     WHERE follower_id = ?
+       AND following_id = ?`,
+  )
+    .bind(auth.user!.id, targetUserId)
+    .run();
+  const changes = Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
+
+  return jsonResponse(
+    {
+      ok: true,
+      data: {
+        deleted: changes > 0,
+      },
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function playlistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const playlist = await env.DB.prepare(
@@ -5803,6 +5947,14 @@ export default {
 
       if (request.method === "POST" && isTogglePlaylistLikeRoute(pathname)) {
         return withCors(await togglePlaylistLikeResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isRequestFollowRoute(pathname)) {
+        return withCors(await handleRequestFollow(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isCancelFollowRequestRoute(pathname)) {
+        return withCors(await handleCancelFollowRequest(request, env), request, env);
       }
 
       if (request.method === "GET" && isPodcastLikeRoute(pathname)) {
