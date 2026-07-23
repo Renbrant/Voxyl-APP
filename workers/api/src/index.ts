@@ -2882,6 +2882,83 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ ok: true, user: toClientUser(user) }, 200, corsHeaders);
 }
 
+async function updateMeResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+
+  if (!user) {
+    return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
+  }
+
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const payload = body as Record<string, unknown>;
+  const updates: string[] = [];
+  const params: unknown[] = [];
+
+  if (Object.prototype.hasOwnProperty.call(payload, "profile_picture")) {
+    const profilePicture = validateBoundedString(payload.profile_picture, "profile_picture", 2048);
+    updates.push("profile_picture = ?");
+    params.push(profilePicture);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "profile_hidden")) {
+    updates.push("profile_hidden = ?");
+    params.push(payload.profile_hidden ? 1 : 0);
+  }
+
+  if (updates.length > 0) {
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    await env.DB.prepare(
+      `UPDATE users
+       SET ${updates.join(", ")}
+       WHERE id = ?`,
+    )
+      .bind(...params, user.id)
+      .run();
+  }
+
+  const updated = await env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(user.id)
+    .first<D1User>();
+
+  if (!updated) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      user: toClientUser(updated),
+      data: toClientUser(updated),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function parseSearchUsersPayload(request: Request): Promise<{ query: string }> {
   let body: unknown;
 
@@ -5647,6 +5724,10 @@ export default {
 
       if (request.method === "GET" && isMeRoute(pathname)) {
         return withCors(await meResponse(request, env), request, env);
+      }
+
+      if (request.method === "PATCH" && isMeRoute(pathname)) {
+        return withCors(await updateMeResponse(request, env), request, env);
       }
 
       if (request.method === "GET" && (isPlaylistsRoute(pathname) || isEntityPlaylistRoute(pathname))) {
