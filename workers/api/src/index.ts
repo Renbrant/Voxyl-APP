@@ -422,6 +422,18 @@ function isTopPlaylistsLegacyRoute(pathname: string): boolean {
     pathname === "/functions/getTopPlaylistsByPlayback";
 }
 
+function isSearchUsersRoute(pathname: string): boolean {
+  return pathname === "/api/functions/searchUsers" || pathname === "/functions/searchUsers";
+}
+
+function isGetPublicUserProfileRoute(pathname: string): boolean {
+  return pathname === "/api/functions/getPublicUserProfile" || pathname === "/functions/getPublicUserProfile";
+}
+
+function isGetUserPlaylistsRoute(pathname: string): boolean {
+  return pathname === "/api/functions/getUserPlaylists" || pathname === "/functions/getUserPlaylists";
+}
+
 function isPodcastSearchRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchPodcasts" || pathname === "/api/podcasts/search";
 }
