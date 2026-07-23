@@ -3459,6 +3459,8 @@ type D1Follow = {
   follower_name: string | null;
   follower_username: string | null;
   following_email: string | null;
+  following_name: string | null;
+  following_username: string | null;
   base44_created_date: string | null;
   base44_updated_date: string | null;
 };
