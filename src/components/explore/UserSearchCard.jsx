@@ -13,8 +13,12 @@ export default function UserSearchCard({ user, index, currentUser, followStatus,
       transition={{ delay: index * 0.04 }}
     >
       <Link to={`/user/${user.id}`} className="flex items-center gap-3 p-3 rounded-2xl bg-card border border-border hover:border-primary/30 transition-all">
-        <div className="w-11 h-11 rounded-full gradient-primary flex items-center justify-center flex-shrink-0">
-          <UserCircle2 size={22} className="text-white" />
+        <div className="w-11 h-11 rounded-full gradient-primary flex items-center justify-center flex-shrink-0 overflow-hidden">
+          {user.profile_picture ? (
+            <img src={user.profile_picture} alt={displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            <UserCircle2 size={22} className="text-white" />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm truncate">{displayName}</p>

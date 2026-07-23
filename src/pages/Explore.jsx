@@ -71,7 +71,6 @@ export default function Explore() {
     const newUrl = qs ? `/explore?${qs}` : '/explore';
     // Replace state to keep back button pointing to previous page (not previous search state)
     window.history.replaceState(null, '', newUrl);
-    console.log('[Explore] Current tab:', tab);
   }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory]);
 
   const debouncedQuery = useDebounce(search, 600);
@@ -237,8 +236,12 @@ export default function Explore() {
     queryFn: () => voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'pending' }),
   });
 
-  // Search by exact username (only when query typed)
-  const { data: searchedUsers = [], isLoading: usersLoading } = useQuery({
+  // Search by username prefix (privacy is enforced by the Worker)
+  const {
+    data: searchedUsers = [],
+    isError: usersSearchError,
+    isLoading: usersLoading,
+  } = useQuery({
     queryKey: ['explore-users', debouncedUserSearch],
     enabled: tab === 'users' && debouncedUserSearch.trim().length > 0,
     queryFn: () => voxylApi.functions.invoke('searchUsers', { query: debouncedUserSearch }).then(r => r.data?.users || []),
@@ -340,29 +343,27 @@ export default function Explore() {
     }) : [];
   const canRetryPlaylists = playlistsError && Boolean(playlistsQueryError) && !playlistsFetching;
   const showHiddenUsersGate = authResolved && user && !hiddenUsersReady && (tab === 'playlists' || tab === 'users');
+  const userSearchQuery = debouncedUserSearch.trim();
+  const isUserSearching = userSearchQuery.length > 0;
+  const visibleSearchedUsers = canRenderSocialContent
+    ? searchedUsers.filter(u => u.username && !blockedIds.includes(u.id))
+    : [];
 
   // Build user list based on active filter
   const filteredUsers = (() => {
-    const q = debouncedUserSearch.trim().toLowerCase();
-
-    if (q) {
-      // Exact username match only
-      return canRenderSocialContent
-        ? searchedUsers.filter(u => u.username && u.username.toLowerCase() === q && !blockedIds.includes(u.id))
-        : [];
-    }
-
     if (userFilter === 'connections') {
       const followers = followersList.map(f => ({
         id: f.follower_id,
         username: f.follower_username,
         full_name: f.follower_name,
+        profile_picture: f.follower_profile_picture,
         type: 'follower',
       }));
       const following = followingList.map(f => ({
         id: f.following_id,
         username: f.following_username,
         full_name: f.following_name,
+        profile_picture: f.following_profile_picture,
         type: 'following',
       }));
       return canRenderSocialContent ? [...followers, ...following].filter(item => !blockedIds.includes(item.id)) : [];
@@ -372,6 +373,7 @@ export default function Explore() {
         id: f.following_id,
         username: f.following_username,
         full_name: f.following_name,
+        profile_picture: f.following_profile_picture,
         type: 'pending',
       })).filter(item => !blockedIds.includes(item.id)) : [];
     }
@@ -570,7 +572,35 @@ export default function Explore() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredUsers.length === 0 ? (
+              {isUserSearching ? (
+                usersSearchError ? (
+                  <div className="text-center py-16 text-muted-foreground">
+                    <p className="text-4xl mb-3">⚠️</p>
+                    <p className="text-sm">{t('noResults')}</p>
+                  </div>
+                ) : visibleSearchedUsers.length === 0 ? (
+                  <div className="text-center py-16 text-muted-foreground">
+                    <p className="text-4xl mb-3">👤</p>
+                    <p className="text-sm">{t('noResults')}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {visibleSearchedUsers.map((searchedUser, i) => (
+                      <UserSearchCard
+                        key={searchedUser.id}
+                        user={searchedUser}
+                        index={i}
+                        currentUser={user}
+                        followStatus={followStatuses[searchedUser.id] || null}
+                        theyFollowMe={theyFollowMeIds.has(searchedUser.id)}
+                        onStatusChange={(status) =>
+                          setFollowStatuses(prev => ({ ...prev, [searchedUser.id]: status }))
+                        }
+                      />
+                    ))}
+                  </div>
+                )
+              ) : filteredUsers.length === 0 ? (
                 <div className="text-center py-16 text-muted-foreground">
                   <p className="text-4xl mb-3">👤</p>
                   <p className="text-sm">
@@ -590,6 +620,7 @@ export default function Explore() {
                               id: f.id,
                               username: f.username,
                               full_name: f.full_name,
+                              profile_picture: f.profile_picture,
                             }}
                             index={i}
                             currentUser={user}
@@ -614,6 +645,7 @@ export default function Explore() {
                                id: f.id,
                                username: f.username,
                                full_name: f.full_name,
+                               profile_picture: f.profile_picture,
                              }}
                             index={i}
                             currentUser={user}
@@ -637,6 +669,7 @@ export default function Explore() {
                          id: f.id,
                          username: f.username,
                          full_name: f.full_name,
+                         profile_picture: f.profile_picture,
                        }}
                       index={i}
                       currentUser={user}
