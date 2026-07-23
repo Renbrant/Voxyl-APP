@@ -2216,6 +2216,35 @@ type PublicUserProfile = {
   created_at: string;
 };
 
+type D1UserPlaylistRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  cover_image: string | null;
+  creator_id: string;
+  creator_username: string | null;
+  creator_picture: string | null;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type PublicUserPlaylist = {
+  id: string;
+  name: string;
+  title: string;
+  description: string | null;
+  cover_image: string | null;
+  creator_id: string;
+  creator_username: string | null;
+  creator_picture: string | null;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
+  created_date: string;
+  updated_date: string;
+};
+
 function isTruthyD1Flag(value: number | string | boolean | null): boolean {
   return value === true || value === 1 || value === "1";
 }
@@ -2952,6 +2981,51 @@ async function handleGetPublicUserProfile(request: Request, env: Env): Promise<R
   }
 
   return jsonResponse({ data: toPublicUserProfile(user) }, 200, corsHeaders);
+}
+
+function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
+  return {
+    id: row.id,
+    name: row.title,
+    title: row.title,
+    description: row.description,
+    cover_image: row.cover_image,
+    creator_id: row.creator_id,
+    creator_username: row.creator_username,
+    creator_picture: row.creator_picture,
+    visibility: row.visibility,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    created_date: row.created_at,
+    updated_date: row.updated_at,
+  };
+}
+
+async function handleGetUserPlaylists(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const { userId } = await parseUserIdPayload(request);
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, description, cover_image, creator_id, creator_username,
+      creator_picture, visibility, created_at, updated_at
+     FROM playlists
+     WHERE creator_id = ?
+       AND visibility = 'public'
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(created_at), ''), '1970-01-01')) DESC,
+       id ASC
+     LIMIT 50`,
+  )
+    .bind(userId)
+    .all<D1UserPlaylistRow>();
+
+  return jsonResponse(
+    {
+      data: {
+        playlists: (results || []).map(toPublicUserPlaylist),
+      },
+    },
+    200,
+    corsHeaders,
+  );
 }
 
 type D1Playlist = {
@@ -5541,6 +5615,10 @@ export default {
 
       if (request.method === "POST" && isGetPublicUserProfileRoute(pathname)) {
         return withCors(await handleGetPublicUserProfile(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isGetUserPlaylistsRoute(pathname)) {
+        return withCors(await handleGetUserPlaylists(request, env), request, env);
       }
 
       if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
