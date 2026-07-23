@@ -2208,6 +2208,14 @@ type D1UserSearchRow = {
   profile_hidden: number | string | boolean | null;
 };
 
+type PublicUserProfile = {
+  id: string;
+  username: string | null;
+  full_name: string | null;
+  profile_picture: string | null;
+  created_at: string;
+};
+
 function isTruthyD1Flag(value: number | string | boolean | null): boolean {
   return value === true || value === 1 || value === "1";
 }
@@ -2892,6 +2900,58 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
     200,
     corsHeaders,
   );
+}
+
+async function parseUserIdPayload(request: Request): Promise<{ userId: string }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  return {
+    userId: validateBoundedString((body as Record<string, unknown>).userId, "userId", 128, true) || "",
+  };
+}
+
+function toPublicUserProfile(user: D1User): PublicUserProfile {
+  return {
+    id: user.id,
+    username: user.username,
+    full_name: user.name,
+    profile_picture: user.profile_picture,
+    created_at: user.created_at,
+  };
+}
+
+async function handleGetPublicUserProfile(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const { userId } = await parseUserIdPayload(request);
+  const user = await env.DB.prepare(
+    `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
+      profile_picture, profile_hidden, imported_at, created_at, updated_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<D1User>();
+
+  if (!user) {
+    return jsonResponse({ data: {} }, 200, corsHeaders);
+  }
+
+  if (isTruthyD1Flag(user.profile_hidden)) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ data: toPublicUserProfile(user) }, 200, corsHeaders);
 }
 
 type D1Playlist = {
@@ -5477,6 +5537,10 @@ export default {
 
       if (request.method === "POST" && isSearchUsersRoute(pathname)) {
         return withCors(await handleSearchUsers(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isGetPublicUserProfileRoute(pathname)) {
+        return withCors(await handleGetPublicUserProfile(request, env), request, env);
       }
 
       if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
