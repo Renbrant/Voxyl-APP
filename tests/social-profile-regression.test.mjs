@@ -89,4 +89,34 @@ describe('Issue #63 social/profile regressions', () => {
 
     assert.equal(deleteResponse.status, 401);
   });
+  it('scopes follow acceptance to the request recipient', () => {
+    const start = workerSource.indexOf('async function updateFollowResponse');
+    const end = workerSource.indexOf('async function deleteFollowResponse', start);
+
+    assert.ok(start >= 0 && end > start);
+
+    const source = workerSource.slice(start, end);
+
+    assert.match(source, /following_id = \?/);
+    assert.match(source, /following_clerk_user_id = \?/);
+    assert.match(source, /following_legacy_base44_user_id = \?/);
+    assert.doesNotMatch(source, /follower_id = \?/);
+    assert.match(source, /status = 'pending'/);
+  });
+
+  it('allows follow deletion only for relationship participants', () => {
+    const start = workerSource.indexOf('async function deleteFollowResponse');
+    const end = workerSource.indexOf('async function playlistResponse', start);
+
+    assert.ok(start >= 0 && end > start);
+
+    const source = workerSource.slice(start, end);
+
+    assert.match(source, /follower_id = \?/);
+    assert.match(source, /follower_clerk_user_id = \?/);
+    assert.match(source, /follower_legacy_base44_user_id = \?/);
+    assert.match(source, /following_id = \?/);
+    assert.match(source, /following_clerk_user_id = \?/);
+    assert.match(source, /following_legacy_base44_user_id = \?/);
+  });
 });
