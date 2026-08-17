@@ -4,6 +4,7 @@ import { Home, Compass, Heart, User, LogIn, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
+import { APP_VERSION_LABEL } from '@/lib/version';
 
 const getNavItems = () => [
   { icon: Home, label: t('navFeed'), path: '/' },
@@ -40,7 +41,7 @@ export default function Sidebar() {
         </div>
         <div className="flex items-baseline gap-1.5">
           <span className="text-2xl font-grotesk font-bold text-gradient">Voxyl</span>
-          <span className="text-[10px] text-muted-foreground/50 font-mono leading-none">v2.5</span>
+          <span className="text-[10px] text-muted-foreground/50 font-mono leading-none">{APP_VERSION_LABEL}</span>
         </div>
       </div>
 

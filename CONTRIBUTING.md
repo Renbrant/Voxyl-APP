@@ -1,4 +1,4 @@
-﻿# Contributing to Voxyl
+# Contributing to Voxyl
 
 Thank you for contributing to Voxyl.
 
@@ -339,7 +339,7 @@ Example:
 ```json
 {
   "app": "voxyl",
-  "version": "3.0.0",
+  "version": "0.3.0",
   "git_commit": "baaad333",
   "git_commit_full": "baaad33332c4ed88905757a225e5918bbdf67ce7",
   "branch": "main",
@@ -359,51 +359,38 @@ The reported commit must match the intended commit from `main`.
 
 ## Versioning
 
-Voxyl follows Semantic Versioning:
+Voxyl follows Semantic Versioning.
 
-```text
-MAJOR.MINOR.PATCH
-```
+Voxyl is currently in beta / pre-release development. Until the first stable public release, versions use the `0.MINOR.PATCH` range.
 
 Examples:
 
-```text
-3.0.0
-3.1.0
-3.1.1
-```
+    0.3.0
+    0.3.1
+    0.4.0
 
-### MAJOR
+### Before 1.0.0
 
-Use for incompatible or major architectural changes.
+While Voxyl remains in beta:
 
-Examples:
-
-- Authentication platform migration
-- Database migration
-- Backend architecture replacement
-- Breaking API changes
-
-### MINOR
-
-Use for backward-compatible features.
+- increment MINOR for meaningful new functionality, architectural changes, or breaking changes;
+- increment PATCH for backward-compatible fixes and small improvements;
+- reserve 1.0.0 for the first stable public release.
 
 Examples:
 
-- New player functionality
-- New playlist options
-- New discovery capabilities
+    0.3.0 -> current beta line
+    0.3.1 -> bug-fix release
+    0.4.0 -> next significant beta milestone
+    1.0.0 -> first stable release
 
-### PATCH
+### After 1.0.0
 
-Use for backward-compatible fixes.
+Standard Semantic Versioning applies:
 
-Examples:
-
-- Android session fixes
-- UI corrections
-- Cache fixes
-- Deployment corrections
+- MAJOR for incompatible changes;
+- MINOR for backward-compatible functionality;
+- PATCH for backward-compatible fixes.
 
 ---
 

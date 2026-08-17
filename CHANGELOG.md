@@ -1,5 +1,11 @@
 # Changelog - Voxyl
 
+## Versioning Note - August 2026
+
+Voxyl is still in beta / pre-release development. The active product version was reset from the previous internal 3.x numbering to 0.3.0 so the version more accurately represents the product's maturity before the first stable public release.
+
+Historical entries below retain their original version labels for traceability.
+
 ## v3.0 - July 2026
 
 ### 🚀 Major Platform Migration
