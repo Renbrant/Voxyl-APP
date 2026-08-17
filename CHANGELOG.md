@@ -6,6 +6,52 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.3.0 - August 2026
+
+### Beta Versioning
+
+- Reset the active pre-release product version from the previous internal `3.0.0` numbering to `0.3.0`.
+- Preserved historical version labels for traceability.
+- Centralized visible application version reporting from `package.json`.
+- Kept Android `versionCode` monotonic while changing `versionName` to `0.3.0`.
+
+### Profile and Social Repair
+
+- Completed the production repair tracked by Issues #63 and #35.
+- Fixed user-search rendering after the Base44-to-Cloudflare migration.
+- Restored follower and following identity display.
+- Restored follow-request create, accept, reject, cancel, unfollow, and follow-back flows.
+- Removed the Follow SQL regression caused by references to nonexistent columns.
+- Validated social state between separate authenticated accounts.
+- Validated profile-photo upload and persistence through Cloudflare R2.
+
+### Clerk / Provider Avatar Model
+
+- Added `users.clerk_profile_picture` through migration `0004_clerk_profile_picture.sql`.
+- Kept custom Voxyl/R2 images separate from authentication-provider images.
+- Established avatar precedence:
+  1. custom Voxyl profile photo
+  2. Clerk/provider profile photo
+  3. initials fallback
+- Prevented provider synchronization from overwriting a custom photo.
+- Restored the provider image automatically when the custom image is removed.
+- Added shared `UserAvatar` rendering and broken-image fallback.
+- Applied resolved-avatar behavior across Profile, public profiles, Explore/search, and follow surfaces.
+- Moved playlist `creator_picture` propagation to the Worker.
+
+### Production Validation
+
+- PR #64 validated the social/profile regression repair.
+- PR #65 delivered the final Clerk/provider avatar architecture.
+- Production frontend validated at version `0.3.0`.
+- Production merge commit validated at `dfdd5654`.
+- D1 user count remained unchanged.
+- All 8 owned playlists tested matched the final custom avatar.
+- Full automated suite passed with 329 tests and 0 failures.
+- Issues #35 and #63 were closed as completed.
+
+---
+
 ## v3.0 - July 2026
 
 ### 🚀 Major Platform Migration

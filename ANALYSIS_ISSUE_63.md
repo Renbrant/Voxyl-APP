@@ -1,4 +1,11 @@
-# Analysis for Issue #63: User Profile and Social Features
+# Analysis for Issue #63: User Profile and Social Features (Historical)
+
+> **Status: Resolved — August 2026**
+>
+> This file is preserved as the original investigation record. The findings below describe the application before the repair was completed.
+>
+> PR #64 repaired and production-validated the social/profile regressions. PR #65 completed the related provider-avatar work tracked by Issue #35. Issues #63 and #35 are closed as completed.
+
 
 Branch: `fix/issue-63-user-profile-social`
 
@@ -383,3 +390,34 @@ curl -X POST http://localhost:8787/api/entities/follow \
 1. What public URL should be returned for R2 uploads? The Worker has `VOXYL_MEDIA`, but no obvious media public base URL env var was found in `index.ts`.
 2. Should follow requests always be `pending`, or should public profiles auto-accept? Current UI labels imply pending request flow.
 3. Should public profiles show follower names/lists, or only follower counts? A public list needs privacy design.
+
+---
+
+## Final Resolution — August 2026
+
+PR #64 and PR #65 completed the repair work identified by this investigation.
+
+Production validation confirmed:
+
+- user search and social identity rendering;
+- follower/following and follow-request flows;
+- follow-back, cancellation, and unfollow behavior;
+- removal of the Follow SQL HTTP 500 regression;
+- profile-photo upload and persistence;
+- separate custom and Clerk/provider avatars;
+- custom-photo precedence;
+- restoration of the provider image after custom-image removal;
+- server-side playlist creator-picture synchronization.
+
+Final validation:
+
+- frontend version: `0.3.0`
+- merge commit: `dfdd5654`
+- migration `0004_clerk_profile_picture.sql` applied
+- D1 user count preserved
+- 8 of 8 owned playlists matched the final custom avatar
+- automated suite: 329 passed, 0 failed
+- Issue #35: completed
+- Issue #63: completed
+
+Current architecture is documented in `ARCHITECTURE.md`, `workers/api/README.md`, and `docs/profile-avatar-model.md`.

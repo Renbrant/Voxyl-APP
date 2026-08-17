@@ -29,6 +29,7 @@ Production deployment metadata is available at:
 - **Smart RSS Aggregation:** Combine up to 5 RSS feeds into a single playlist.
 - **Custom Podcast Playlists:** Create personalized collections from multiple podcast sources.
 - **Social Discovery:** Follow users and discover playlists curated by the community.
+- **Profile Identity:** Use a Clerk/provider profile image by default, optionally override it with a custom Voxyl/R2 photo, and fall back to user initials when no usable image is available.
 - **Guest Mode:** Explore public playlists and trending content without creating an account.
 - **Flexible Visibility:** Set playlists as public, followers-only, or private.
 - **Advanced Playback:** Resume episodes, track progress, autoplay the next episode, and continue listening across navigation.
@@ -59,9 +60,9 @@ Production deployment metadata is available at:
 
 ---
 
-## Voxyl 3.0
+## Voxyl 0.3.0 Beta
 
-Voxyl 3.0 introduced the largest architectural change in the project so far.
+The Voxyl 0.3.x beta line represents the largest architectural change in the project so far.
 
 The application was migrated away from Base44 and now runs on an independent infrastructure built with Cloudflare and Clerk.
 
@@ -77,6 +78,8 @@ Major changes include:
 - Automated production version tracking
 - Migration tools for legacy Base44 data and media
 - Improved Android authentication and session handling
+- Repaired and production-validated user search, follows, follow requests, profile photos, and social identity flows
+- Added separate custom and Clerk/provider avatar storage with deterministic avatar precedence
 
 For the full release history, see the [Changelog](CHANGELOG.md).
 
@@ -293,7 +296,7 @@ Use this endpoint to confirm exactly which commit is running in production.
 
 ## Data Migration
 
-Voxyl 3.0 includes tools for migrating legacy Base44 data.
+The Voxyl 0.3.x repository retains tools for validating and reconciling legacy Base44 migration data.
 
 ### D1 Import
 
@@ -321,12 +324,13 @@ These tools were created to support the transition from Base44 to Cloudflare inf
 
 - [Changelog](CHANGELOG.md)
 - [Architecture](ARCHITECTURE.md)
+- [Profile Avatar Model](docs/profile-avatar-model.md)
 - [Contributing Guide](CONTRIBUTING.md)
 - [Documentation Index](docs/README.md)
 - [Android OAuth Setup](docs/android-auth-setup.md)
 - [Android Manual Auth Callback Test](docs/android-auth-manual-test.md)
 - [iOS Native Setup](docs/ios-setup.md)
-- [Cloudflare and Clerk Migration Plan](docs/cloudflare-clerk-migration-plan.md)
+- [Cloudflare and Clerk Migration Plan — Historical](docs/cloudflare-clerk-migration-plan.md)
 
 ---
 
@@ -339,7 +343,7 @@ Example:
 ```text
 feat(player): add playback speed control
 fix(auth): restore Clerk token during startup
-docs(readme): update Voxyl 3.0 documentation
+docs(readme): update Voxyl 0.3.x documentation
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete guide.
@@ -412,6 +416,6 @@ Voxyl combines a background in technology with a desire to create a more organiz
 
 **Voxyl 0.3.0 — Beta**
 
-The Voxyl 0.3.x beta line includes the new Cloudflare and Clerk architecture, improved Android authentication, automated deployments, and complete production version traceability.
+The Voxyl 0.3.x beta line includes the Cloudflare and Clerk architecture, improved Android authentication, production-validated profile and social flows, automated deployments, and complete production version traceability.
 
 Thank you for helping shape the future of social podcasting.
