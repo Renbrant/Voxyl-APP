@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { asArray } from '@/lib/arrayUtils';
-import { X, UserCheck, UserX, UserCircle2, Loader2, Ban, ChevronDown, ChevronUp, ListMusic } from 'lucide-react';
+import { X, UserCheck, UserX, Loader2, Ban, ChevronDown, ChevronUp, ListMusic } from 'lucide-react';
+import UserAvatar from '@/components/common/UserAvatar';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import Portal from '@/components/common/Portal';
@@ -44,14 +45,7 @@ function RequesterPlaylists({ userId }) {
 
 function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) {
   const [expanded, setExpanded] = useState(false);
-  const [profilePicture, setProfilePicture] = useState(null);
   const displayName = req.follower_username ? `@${req.follower_username}` : (req.follower_name || 'Usuário');
-
-  useEffect(() => {
-    voxylApi.functions.invoke('getPublicUserProfile', { userId: req.follower_id })
-      .then(res => setProfilePicture(res.data?.profile_picture))
-      .catch(error => console.error('[FollowRequestsModal] Failed to load requester profile picture', { userId: req.follower_id, error }));
-  }, [req.follower_id]);
 
   return (
     <motion.div
@@ -62,12 +56,14 @@ function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) 
       className="rounded-2xl bg-secondary border border-border overflow-hidden"
     >
       <div className="flex items-center gap-3 p-3">
-        <Link to={`/user/${req.follower_id}`} className="w-10 h-10 rounded-full gradient-primary flex items-center justify-center flex-shrink-0 overflow-hidden">
-          {profilePicture ? (
-            <img src={profilePicture} alt={displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-          ) : (
-            <UserCircle2 size={20} className="text-white" />
-          )}
+        <Link to={`/user/${req.follower_id}`} className="flex-shrink-0">
+          <UserAvatar
+            src={req.follower_profile_picture}
+            name={req.follower_name}
+            username={req.follower_username}
+            alt={displayName}
+            className="w-10 h-10"
+          />
         </Link>
         <div className="flex-1 min-w-0">
           <Link to={`/user/${req.follower_id}`} className="font-semibold text-sm truncate block hover:text-primary transition-colors">

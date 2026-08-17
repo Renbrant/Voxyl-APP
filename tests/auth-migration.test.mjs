@@ -41,17 +41,52 @@ function createJwt({ sub = 'clerk-prod-user', email = 'real@example.com', name =
   };
 }
 
-function installJwksMock(jwk) {
+function installJwksMock(jwk, clerkProfile = undefined) {
   mock.method(globalThis, 'fetch', async (url) => {
-    assert.equal(String(url), `${issuer}/.well-known/jwks.json`);
-    return Response.json({ keys: [jwk] });
+    const requestedUrl = String(url);
+
+    if (requestedUrl === `${issuer}/.well-known/jwks.json`) {
+      return Response.json({ keys: [jwk] });
+    }
+
+    if (requestedUrl.startsWith('https://api.clerk.com/v1/users/')) {
+      // Existing auth-migration tests historically did not provide a Clerk
+      // Backend API response. Preserve that behavior unless a profile is
+      // explicitly supplied by an avatar-specific test.
+      if (clerkProfile === undefined) {
+        return new Response(null, { status: 503 });
+      }
+
+      return Response.json({
+        first_name: null,
+        last_name: null,
+        full_name: null,
+        primary_email_address_id: null,
+        email_addresses: [],
+        image_url: null,
+        has_image: false,
+        ...clerkProfile,
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${requestedUrl}`);
   });
 }
 
-function request(path, { token } = {}) {
+function request(path, { token, method = 'GET', payload } = {}) {
   const headers = { 'content-type': 'application/json' };
   if (token) headers.authorization = `Bearer ${token}`;
-  return new Request(`https://api.voxyl.test${path}`, { headers });
+
+  const options = {
+    method,
+    headers,
+  };
+
+  if (payload !== undefined) {
+    options.body = JSON.stringify(payload);
+  }
+
+  return new Request(`https://api.voxyl.test${path}`, options);
 }
 
 async function body(response) {
@@ -294,6 +329,9 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
               if (/FROM users\s+WHERE clerk_user_id = \?/s.test(sql)) {
                 return state.users.find((user) => user.clerk_user_id === params[0]) || null;
               }
+              if (/FROM users\s+WHERE id = \?\s+LIMIT 1/s.test(sql)) {
+                return state.users.find((user) => user.id === params[0]) || null;
+              }
               if (/FROM users\s+WHERE lower\((?:TRIM\()?email/s.test(sql)) {
                 return emailUser(params[0], /legacy_base44_user_id IS NOT NULL/s.test(sql));
               }
@@ -319,6 +357,30 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                 }
                 return { meta: { changes: 0 } };
               }
+              if (/UPDATE users\s+SET clerk_profile_picture = \?/s.test(sql)) {
+                const [profilePicture, userId] = params;
+                const user = state.users.find((item) => item.id === userId);
+
+                if (!user) {
+                  return { meta: { changes: 0 } };
+                }
+
+                user.clerk_profile_picture = profilePicture;
+                return { meta: { changes: 1 } };
+              }
+
+              if (/UPDATE users\s+SET profile_picture = \?/s.test(sql)) {
+                const [profilePicture, userId] = params;
+                const user = state.users.find((item) => item.id === userId);
+
+                if (!user) {
+                  return { meta: { changes: 0 } };
+                }
+
+                user.profile_picture = profilePicture;
+                return { meta: { changes: 1 } };
+              }
+
               if (/DELETE FROM users/s.test(sql)) {
                 if (/AND clerk_user_id IS NULL/s.test(sql)) {
                   const [
@@ -383,6 +445,24 @@ function createAuthMigrationDb({ users, beforeBatch } = {}) {
                 user.email ||= email;
                 user.name ||= name;
                 return { meta: { changes: 1 } };
+              }
+              if (/UPDATE playlists\s+SET creator_picture = \?/s.test(sql)) {
+                const [profilePicture, ...identityValues] = params;
+                const identities = new Set(identityValues.filter(Boolean));
+                let changes = 0;
+
+                for (const playlist of state.playlists) {
+                  if (
+                    identities.has(playlist.creator_id) ||
+                    identities.has(playlist.creator_clerk_user_id) ||
+                    identities.has(playlist.creator_legacy_base44_user_id)
+                  ) {
+                    playlist.creator_picture = profilePicture;
+                    changes += 1;
+                  }
+                }
+
+                return { meta: { changes } };
               }
               if (/UPDATE playlists/s.test(sql)) return { meta: { changes: updateRows(state.playlists, params, 'creator_clerk_user_id', 'creator_id', 'creator_legacy_base44_user_id', 'creator_clerk_user_id') } };
               if (/UPDATE playlist_likes/s.test(sql)) return { meta: { changes: updateRows(state.playlistLikes, params, 'clerk_user_id', 'user_id', 'legacy_base44_user_id', 'clerk_user_id') } };
@@ -946,5 +1026,249 @@ describe('Clerk production identity migration', () => {
     assert.equal(data.user.id, 'clerk-new-user');
     assert.equal(data.user.clerk_user_id, 'clerk-new-user');
     assert.equal(db.state.users.length, 1);
+  });
+});
+
+
+describe('Issue #35 Clerk/Google avatar behavior', () => {
+  const googlePicture = 'https://lh3.googleusercontent.com/avatar-google';
+  const customPicture = 'https://voxyl-media.renbrant.com/profiles/avatar-custom.jpg';
+
+  function responseUser(data) {
+    return data?.user || data;
+  }
+
+  it('initializes the Clerk/Google avatar for a brand-new user on first /me bootstrap', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-new-avatar-user',
+      email: 'new-avatar@example.com',
+      name: 'New Avatar User',
+    });
+
+    installJwksMock(jwk, {
+      image_url: googlePicture,
+      has_image: true,
+    });
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          id: 'unrelated-user',
+          clerk_user_id: 'clerk-unrelated',
+          legacy_base44_user_id: null,
+          email: 'unrelated@example.com',
+          username: 'unrelated',
+          imported_at: null,
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/me', { token }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+    const persisted = db.state.users.find(
+      (item) => item.clerk_user_id === 'clerk-new-avatar-user',
+    );
+
+    assert.equal(response.status, 200);
+    assert.ok(persisted);
+    assert.equal(persisted.clerk_profile_picture, googlePicture);
+    assert.equal(persisted.profile_picture, null);
+    assert.equal(user.clerk_profile_picture, googlePicture);
+    assert.equal(user.custom_profile_picture, null);
+    assert.equal(user.profile_picture, googlePicture);
+    assert.equal(user.picture, googlePicture);
+  });
+
+  it('syncs a new Clerk image without overwriting an existing custom Voxyl avatar', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-dev-user',
+    });
+
+    installJwksMock(jwk, {
+      image_url: googlePicture,
+      has_image: true,
+    });
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          profile_picture: customPicture,
+          clerk_profile_picture: 'https://old.example.com/provider-avatar.jpg',
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/me', { token }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+    const persisted = db.state.users.find(
+      (item) => item.id === 'd1-real-user',
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(persisted.profile_picture, customPicture);
+    assert.equal(persisted.clerk_profile_picture, googlePicture);
+
+    // Custom Voxyl picture must continue to win.
+    assert.equal(user.custom_profile_picture, customPicture);
+    assert.equal(user.clerk_profile_picture, googlePicture);
+    assert.equal(user.profile_picture, customPicture);
+    assert.equal(user.picture, customPicture);
+    assert.equal(db.state.playlists[0].creator_picture, customPicture);
+  });
+
+  it('restores the Clerk/Google avatar when the custom picture is removed', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-dev-user',
+    });
+
+    installJwksMock(jwk);
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          profile_picture: customPicture,
+          clerk_profile_picture: googlePicture,
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/api/me', {
+        token,
+        method: 'PATCH',
+        payload: {
+          profile_picture: null,
+        },
+      }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+    const persisted = db.state.users.find(
+      (item) => item.id === 'd1-real-user',
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(persisted.profile_picture, null);
+    assert.equal(persisted.clerk_profile_picture, googlePicture);
+    assert.equal(user.custom_profile_picture, null);
+    assert.equal(user.clerk_profile_picture, googlePicture);
+    assert.equal(user.profile_picture, googlePicture);
+    assert.equal(user.picture, googlePicture);
+    assert.equal(db.state.playlists[0].creator_picture, googlePicture);
+  });
+
+  it('updates existing playlist creator pictures when a new custom avatar is saved', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-dev-user',
+    });
+
+    installJwksMock(jwk);
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          profile_picture: null,
+          clerk_profile_picture: googlePicture,
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/api/me', {
+        token,
+        method: 'PATCH',
+        payload: {
+          profile_picture: customPicture,
+        },
+      }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+
+    assert.equal(response.status, 200);
+    assert.equal(user.custom_profile_picture, customPicture);
+    assert.equal(user.profile_picture, customPicture);
+    assert.equal(db.state.playlists[0].creator_picture, customPicture);
+  });
+
+  it('does not treat the generated Clerk avatar as a real provider photo when has_image is false', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-dev-user',
+    });
+
+    installJwksMock(jwk, {
+      image_url: 'https://img.clerk.com/generated-default-avatar',
+      has_image: false,
+    });
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          profile_picture: null,
+          clerk_profile_picture: null,
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/me', { token }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+
+    assert.equal(response.status, 200);
+    assert.equal(user.custom_profile_picture, null);
+    assert.equal(user.clerk_profile_picture, null);
+    assert.equal(user.profile_picture, null);
+    assert.equal(user.picture, null);
+  });
+
+  it('preserves an existing provider avatar when the Clerk Backend API is temporarily unavailable', async () => {
+    const { token, jwk } = createJwt({
+      sub: 'clerk-dev-user',
+    });
+
+    // No profile argument means the Clerk user endpoint returns 503.
+    installJwksMock(jwk);
+
+    const db = createAuthMigrationDb({
+      users: [
+        baseUser({
+          profile_picture: null,
+          clerk_profile_picture: googlePicture,
+        }),
+      ],
+    });
+
+    const response = await worker.fetch(
+      request('/me', { token }),
+      { ...baseEnv, DB: db },
+    );
+
+    const data = await body(response);
+    const user = responseUser(data);
+    const persisted = db.state.users.find(
+      (item) => item.id === 'd1-real-user',
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(persisted.clerk_profile_picture, googlePicture);
+    assert.equal(user.profile_picture, googlePicture);
   });
 });

@@ -2126,6 +2126,8 @@ type ClerkClaims = {
 type ClerkProfile = {
   email: string | null;
   name: string | null;
+  imageUrl: string | null;
+  fetched: boolean;
 };
 
 async function getVerifiedClerkClaims(request: Request, env: Env): Promise<ClerkClaims | null> {
@@ -2204,7 +2206,7 @@ async function getClerkProfile(env: Env, clerkUserId: string): Promise<ClerkProf
     });
 
     if (!response.ok) {
-      return { email: null, name: null };
+      return { email: null, name: null, imageUrl: null, fetched: false };
     }
 
     const data = (await response.json()) as {
@@ -2213,19 +2215,26 @@ async function getClerkProfile(env: Env, clerkUserId: string): Promise<ClerkProf
       full_name?: string | null;
       primary_email_address_id?: string | null;
       email_addresses?: Array<{ id?: string | null; email_address?: string | null }>;
+      image_url?: string | null;
+      has_image?: boolean;
     };
     const primaryEmail =
       data.email_addresses?.find((email) => email.id === data.primary_email_address_id)?.email_address ||
       data.email_addresses?.[0]?.email_address ||
       null;
     const name = data.full_name || [data.first_name, data.last_name].filter(Boolean).join(" ").trim() || null;
+    const imageUrl = data.has_image === false
+      ? null
+      : data.image_url?.trim() || null;
 
     return {
       email: normalizeEmail(primaryEmail),
       name,
+      imageUrl,
+      fetched: true,
     };
   } catch {
-    return { email: null, name: null };
+    return { email: null, name: null, imageUrl: null, fetched: false };
   }
 }
 
@@ -2238,6 +2247,7 @@ type D1User = {
   username: string | null;
   role: string;
   profile_picture: string | null;
+  clerk_profile_picture: string | null;
   profile_hidden: number;
   imported_at: string | null;
   created_at: string;
@@ -2247,12 +2257,14 @@ type D1User = {
 type PublicUserSearchResult = {
   id: string;
   username: string;
+  profile_picture: string | null;
   profile_hidden: boolean;
 };
 
 type D1UserSearchRow = {
   id: string;
   username: string;
+  profile_picture: string | null;
   profile_hidden: number | string | boolean | null;
 };
 
@@ -2301,6 +2313,7 @@ function toPublicUserSearchResult(row: D1UserSearchRow): PublicUserSearchResult 
   return {
     id: row.id,
     username: row.username,
+    profile_picture: row.profile_picture,
     profile_hidden: isTruthyD1Flag(row.profile_hidden),
   };
 }
@@ -2308,7 +2321,7 @@ function toPublicUserSearchResult(row: D1UserSearchRow): PublicUserSearchResult 
 async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1User | null> {
   return env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE clerk_user_id = ?`,
   )
@@ -2319,7 +2332,7 @@ async function getUserByClerkUserId(env: Env, clerkUserId: string): Promise<D1Us
 async function getUsersByEmail(env: Env, email: string): Promise<D1User[]> {
   const { results } = await env.DB.prepare(
      `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE lower(TRIM(email)) = lower(TRIM(?))
      ORDER BY imported_at IS NULL, created_at ASC`,
@@ -2330,14 +2343,78 @@ async function getUsersByEmail(env: Env, email: string): Promise<D1User[]> {
   return results || [];
 }
 
-async function createUserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<void> {
+async function createUserFromClerkClaims(
+  env: Env,
+  claims: ClerkClaims,
+  clerkProfilePicture: string | null,
+): Promise<void> {
   await env.DB.prepare(
-     `INSERT INTO users (id, clerk_user_id, email, name)
-     VALUES (?, ?, ?, ?)
+     `INSERT INTO users (id, clerk_user_id, email, name, clerk_profile_picture)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(clerk_user_id) DO NOTHING`,
   )
-    .bind(claims.userId, claims.userId, normalizeEmail(claims.email), claims.name)
+    .bind(
+      claims.userId,
+      claims.userId,
+      normalizeEmail(claims.email),
+      claims.name,
+      clerkProfilePicture,
+    )
     .run();
+}
+
+function preparePlaylistCreatorPictureSync(
+  env: Env,
+  user: D1User,
+  resolvedPicture: string | null,
+): D1PreparedStatement {
+  const predicates = ["creator_id = ?"];
+  const params: string[] = [user.id];
+
+  if (user.clerk_user_id) {
+    predicates.push("creator_clerk_user_id = ?");
+    params.push(user.clerk_user_id);
+  }
+
+  const legacyUserId = normalizeLegacyBase44UserId(
+    user.legacy_base44_user_id,
+  );
+
+  if (legacyUserId) {
+    predicates.push("creator_legacy_base44_user_id = ?");
+    params.push(legacyUserId);
+  }
+
+  return env.DB.prepare(
+    `UPDATE playlists
+     SET creator_picture = ?
+     WHERE ${predicates.join(" OR ")}`,
+  ).bind(resolvedPicture, ...params);
+}
+
+async function syncClerkProfilePicture(
+  env: Env,
+  user: D1User,
+  clerkProfilePicture: string | null,
+): Promise<void> {
+  const resolvedPicture =
+    user.profile_picture?.trim() ||
+    clerkProfilePicture?.trim() ||
+    null;
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users
+       SET clerk_profile_picture = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).bind(clerkProfilePicture, user.id),
+    preparePlaylistCreatorPictureSync(
+      env,
+      user,
+      resolvedPicture,
+    ),
+  ]);
 }
 
 type CountRow = {
@@ -2849,8 +2926,24 @@ async function linkClerkUserToLegacyData(
   }
 }
 
-async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Promise<D1User | null> {
-  const profile = !claims.email || !claims.name ? await getClerkProfile(env, claims.userId) : { email: null, name: null };
+type ResolveD1UserOptions = {
+  syncClerkProfile?: boolean;
+};
+
+async function resolveD1UserFromClerkClaims(
+  env: Env,
+  claims: ClerkClaims,
+  options: ResolveD1UserOptions = {},
+): Promise<D1User | null> {
+  const shouldFetchClerkProfile =
+    Boolean(options.syncClerkProfile) ||
+    !claims.email ||
+    !claims.name;
+
+  const profile = shouldFetchClerkProfile
+    ? await getClerkProfile(env, claims.userId)
+    : { email: null, name: null, imageUrl: null, fetched: false };
+
   const enrichedClaims = {
     ...claims,
     email: normalizeEmail(claims.email || profile.email),
@@ -2882,18 +2975,44 @@ async function resolveD1UserFromClerkClaims(env: Env, claims: ClerkClaims): Prom
   }
 
   if (!user) {
-    await createUserFromClerkClaims(env, enrichedClaims);
+    await createUserFromClerkClaims(env, enrichedClaims, profile.imageUrl);
+    user = await getUserByClerkUserId(env, enrichedClaims.userId);
+  }
+
+  if (
+    user &&
+    options.syncClerkProfile &&
+    profile.fetched &&
+    user.clerk_profile_picture !== profile.imageUrl
+  ) {
+    await syncClerkProfilePicture(env, user, profile.imageUrl);
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
   }
 
   return user;
 }
 
-function toClientUser(user: D1User): D1User & { full_name: string | null; picture: string | null } {
+function resolveProfilePicture(user: D1User): string | null {
+  return user.profile_picture?.trim() ||
+    user.clerk_profile_picture?.trim() ||
+    null;
+}
+
+function toClientUser(
+  user: D1User,
+): D1User & {
+  full_name: string | null;
+  picture: string | null;
+  custom_profile_picture: string | null;
+} {
+  const resolvedPicture = resolveProfilePicture(user);
+
   return {
     ...user,
+    custom_profile_picture: user.profile_picture,
+    profile_picture: resolvedPicture,
     full_name: user.name,
-    picture: user.profile_picture,
+    picture: resolvedPicture,
   };
 }
 
@@ -2905,7 +3024,11 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
   }
 
-  const user = await resolveD1UserFromClerkClaims(env, claims);
+  const user = await resolveD1UserFromClerkClaims(
+    env,
+    claims,
+    { syncClerkProfile: true },
+  );
 
   if (!user) {
     return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
@@ -2943,11 +3066,16 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
   const payload = body as Record<string, unknown>;
   const updates: string[] = [];
   const params: unknown[] = [];
+  let profilePictureUpdate: string | null | undefined;
 
   if (Object.prototype.hasOwnProperty.call(payload, "profile_picture")) {
-    const profilePicture = validateBoundedString(payload.profile_picture, "profile_picture", 2048);
+    profilePictureUpdate = validateBoundedString(
+      payload.profile_picture,
+      "profile_picture",
+      2048,
+    );
     updates.push("profile_picture = ?");
-    params.push(profilePicture);
+    params.push(profilePictureUpdate);
   }
 
   if (Object.prototype.hasOwnProperty.call(payload, "profile_hidden")) {
@@ -2957,18 +3085,35 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
 
   if (updates.length > 0) {
     updates.push("updated_at = CURRENT_TIMESTAMP");
-    await env.DB.prepare(
+
+    const userUpdateStatement = env.DB.prepare(
       `UPDATE users
        SET ${updates.join(", ")}
        WHERE id = ?`,
-    )
-      .bind(...params, user.id)
-      .run();
+    ).bind(...params, user.id);
+
+    if (profilePictureUpdate !== undefined) {
+      const resolvedPicture =
+        profilePictureUpdate?.trim() ||
+        user.clerk_profile_picture?.trim() ||
+        null;
+
+      await env.DB.batch([
+        userUpdateStatement,
+        preparePlaylistCreatorPictureSync(
+          env,
+          user,
+          resolvedPicture,
+        ),
+      ]);
+    } else {
+      await userUpdateStatement.run();
+    }
   }
 
   const updated = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -3016,7 +3161,12 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
 
   if (!normalizedQuery) {
     const response = await env.DB.prepare(
-      `SELECT id, username, profile_hidden
+      `SELECT id, username,
+       COALESCE(
+         NULLIF(TRIM(profile_picture), ''),
+         NULLIF(TRIM(clerk_profile_picture), '')
+       ) AS profile_picture,
+       profile_hidden
        FROM users
        WHERE username IS NOT NULL
          AND TRIM(username) <> ''
@@ -3028,7 +3178,12 @@ async function handleSearchUsers(request: Request, env: Env): Promise<Response> 
     results = response.results || [];
   } else {
     const response = await env.DB.prepare(
-      `SELECT id, username, profile_hidden
+      `SELECT id, username,
+       COALESCE(
+         NULLIF(TRIM(profile_picture), ''),
+         NULLIF(TRIM(clerk_profile_picture), '')
+       ) AS profile_picture,
+       profile_hidden
        FROM users
        WHERE username IS NOT NULL
          AND TRIM(username) <> ''
@@ -3079,7 +3234,7 @@ function toPublicUserProfile(user: D1User): PublicUserProfile {
     id: user.id,
     username: user.username,
     full_name: user.name,
-    profile_picture: user.profile_picture,
+    profile_picture: resolveProfilePicture(user),
     created_at: user.created_at,
   };
 }
@@ -3089,7 +3244,7 @@ async function handleGetPublicUserProfile(request: Request, env: Env): Promise<R
   const { userId } = await parseUserIdPayload(request);
   const user = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -3488,8 +3643,10 @@ type D1Follow = {
 };
 
 type PublicFollow = D1Follow & {
+  follower_profile_picture?: string | null;
   following_name?: string | null;
   following_username?: string | null;
+  following_profile_picture?: string | null;
   created_date: string;
   updated_date: string;
 };
@@ -3516,9 +3673,17 @@ const followListSelect = `SELECT
   f.follower_email,
   COALESCE(fu.name, f.follower_name) AS follower_name,
   COALESCE(fu.username, f.follower_username) AS follower_username,
+  COALESCE(
+    NULLIF(TRIM(fu.profile_picture), ''),
+    NULLIF(TRIM(fu.clerk_profile_picture), '')
+  ) AS follower_profile_picture,
   f.following_email,
   tu.name AS following_name,
   tu.username AS following_username,
+  COALESCE(
+    NULLIF(TRIM(tu.profile_picture), ''),
+    NULLIF(TRIM(tu.clerk_profile_picture), '')
+  ) AS following_profile_picture,
   f.base44_created_date,
   f.base44_updated_date
  FROM follows f
@@ -3554,7 +3719,7 @@ async function parseTargetUserPayload(request: Request): Promise<{ targetUserId:
 async function getUserById(env: Env, userId: string): Promise<D1User | null> {
   return env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -3593,7 +3758,11 @@ type BlockIdentityScope = {
 
 const blockListSelect = `SELECT b.id, b.blocked_id, b.created_at, b.base44_created_date,
   b.blocked_name AS imported_blocked_name,
-  u.name AS blocked_name, u.username AS blocked_username, u.profile_picture AS blocked_profile_picture
+  u.name AS blocked_name, u.username AS blocked_username,
+       COALESCE(
+         NULLIF(TRIM(u.profile_picture), ''),
+         NULLIF(TRIM(u.clerk_profile_picture), '')
+       ) AS blocked_profile_picture
  FROM blocks b
  LEFT JOIN users u ON u.id = b.blocked_id`;
 
@@ -4862,7 +5031,7 @@ async function createBlockResponse(request: Request, env: Env): Promise<Response
   const payload = await parseBlockPayload(request);
   const targetUser = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -4999,7 +5168,7 @@ async function blockStatusResponse(request: Request, env: Env, targetUserId: str
 
   const targetUser = await env.DB.prepare(
     `SELECT id, clerk_user_id, legacy_base44_user_id, email, name, username, role,
-      profile_picture, profile_hidden, imported_at, created_at, updated_at
+      profile_picture, clerk_profile_picture, profile_hidden, imported_at, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -5314,8 +5483,10 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(sql)
     .bind(...params, limit)
     .all<D1Follow & {
+      follower_profile_picture: string | null;
       following_name: string | null;
       following_username: string | null;
+      following_profile_picture: string | null;
     }>();
   const follows = (results || []).map(toPublicFollow);
 
@@ -5554,8 +5725,10 @@ async function updateFollowResponse(
   )
     .bind(followId)
     .first<D1Follow & {
+      follower_profile_picture: string | null;
       following_name: string | null;
       following_username: string | null;
+      following_profile_picture: string | null;
     }>();
 
   if (!follow) {

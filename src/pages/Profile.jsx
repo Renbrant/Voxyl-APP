@@ -5,7 +5,8 @@ import PlaylistCard from '@/components/playlist/PlaylistCard';
 import InviteFriendModal from '@/components/profile/InviteFriendModal';
 import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import ShareAppModal from '@/components/profile/ShareAppModal';
-import { UserCircle2, Users, ListMusic, Share2, Bell, EyeOff, Eye, Pencil, Settings, Camera, RefreshCw, Loader2, LogIn } from 'lucide-react';
+import { Users, ListMusic, Share2, Bell, EyeOff, Eye, Pencil, Settings, Camera, RefreshCw, Loader2, LogIn } from 'lucide-react';
+import UserAvatar from '@/components/common/UserAvatar';
 import { voxylApi } from '@/api/voxylApiClient';
 import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -77,18 +78,18 @@ export default function Profile() {
     setEggProgress(0);
   };
 
-  const syncPictureToPlaylists = async (pictureUrl) => {
-    const myPlaylists = await voxylApi.entities.Playlist.filter({ creator_id: user.id }).catch(() => []);
-    await Promise.all(myPlaylists.map(p => voxylApi.entities.Playlist.update(p.id, { creator_picture: pictureUrl })));
-  };
 
   const handleUseLoginPhoto = async () => {
-    const loginPhoto = user.picture || user.avatar_url || user.photo_url;
-    if (!loginPhoto) return;
-    await voxylApi.auth.updateMe({ profile_picture: loginPhoto });
-    setLocalUser(prev => ({ ...(prev || user), profile_picture: loginPhoto }));
+    if (!user.clerk_profile_picture) return;
+
+    const updatedUser = await voxylApi.auth.updateMe({
+      profile_picture: null,
+    });
+
+    setLocalUser(updatedUser);
     setShowAvatarSheet(false);
-    syncPictureToPlaylists(loginPhoto);
+
+
   };
 
   const handleUploadPhoto = async (e) => {
@@ -98,9 +99,12 @@ export default function Profile() {
     setShowAvatarSheet(false);
     const res = await voxylApi.integrations.Core.UploadFile({ file }).catch(() => null);
     if (res?.file_url) {
-      await voxylApi.auth.updateMe({ profile_picture: res.file_url });
-      setLocalUser(prev => ({ ...(prev || user), profile_picture: res.file_url }));
-      syncPictureToPlaylists(res.file_url);
+      const updatedUser = await voxylApi.auth.updateMe({
+        profile_picture: res.file_url,
+      });
+
+      setLocalUser(updatedUser);
+
     }
     setUploadingPhoto(false);
   };
@@ -212,17 +216,17 @@ export default function Profile() {
         {/* Avatar & Info */}
         <div className="flex flex-col items-center py-6 mb-4">
           <div className="relative w-20 h-20 mb-3 flex-shrink-0">
-            {user.profile_picture || user.picture || user.avatar_url || user.photo_url ?
-            <img
+            <UserAvatar
               src={user.profile_picture || user.picture || user.avatar_url || user.photo_url}
-              alt={user.full_name}
-              className="w-20 h-20 rounded-full object-cover glow-primary"
-              referrerPolicy="no-referrer" /> :
-            <div className="w-20 h-20 rounded-full gradient-primary flex items-center justify-center glow-primary">
-              {uploadingPhoto
-                ? <Loader2 size={28} className="text-white animate-spin" />
-                : <UserCircle2 size={40} className="text-white" />}
-            </div>}
+              name={user.full_name || user.name}
+              username={user.username}
+              className="w-20 h-20 glow-primary"
+              fallbackContent={
+                uploadingPhoto
+                  ? <Loader2 size={28} className="text-white animate-spin" />
+                  : undefined
+              }
+            />
             <button
               onClick={() => setShowAvatarSheet(true)}
               className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-primary flex items-center justify-center border-2 border-background"
@@ -403,7 +407,7 @@ export default function Profile() {
             >
               <p className="text-base font-grotesk font-bold mb-4">{t('profilePhoto')}</p>
               <div className="space-y-2">
-                {(user.picture || user.avatar_url || user.photo_url) && (
+                {user.clerk_profile_picture && user.custom_profile_picture && (
                   <button
                     onClick={handleUseLoginPhoto}
                     className="w-full flex items-center gap-3 p-4 rounded-2xl bg-secondary border border-border text-sm font-medium"
