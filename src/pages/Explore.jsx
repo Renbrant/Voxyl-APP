@@ -346,9 +346,8 @@ export default function Explore() {
     const q = debouncedUserSearch.trim().toLowerCase();
 
     if (q) {
-      // Exact username match only
       return canRenderSocialContent
-        ? searchedUsers.filter(u => u.username && u.username.toLowerCase() === q && !blockedIds.includes(u.id))
+        ? searchedUsers.filter(u => !blockedIds.includes(u.id))
         : [];
     }
 
@@ -574,8 +573,28 @@ export default function Explore() {
                 <div className="text-center py-16 text-muted-foreground">
                   <p className="text-4xl mb-3">👤</p>
                   <p className="text-sm">
-                    {userFilter === 'connections' ? t('exploreNoConnections') : t('exploreNoPending')}
+                    {debouncedUserSearch.trim()
+                      ? t('noResults')
+                      : userFilter === 'connections'
+                        ? t('exploreNoConnections')
+                        : t('exploreNoPending')}
                   </p>
+                </div>
+              ) : debouncedUserSearch.trim() ? (
+                <div className="space-y-2">
+                  {filteredUsers.map((searchedUser, i) => (
+                    <UserSearchCard
+                      key={searchedUser.id}
+                      user={searchedUser}
+                      index={i}
+                      currentUser={user}
+                      followStatus={followStatuses[searchedUser.id] || null}
+                      theyFollowMe={theyFollowMeIds.has(searchedUser.id)}
+                      onStatusChange={(status) =>
+                        setFollowStatuses(prev => ({ ...prev, [searchedUser.id]: status }))
+                      }
+                    />
+                  ))}
                 </div>
               ) : userFilter === 'connections' ? (
                 <>

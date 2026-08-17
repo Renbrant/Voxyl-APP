@@ -361,6 +361,30 @@ function isEntityFollowRoute(pathname: string): boolean {
   return pathname === "/entities/follow" || pathname === "/api/entities/follow";
 }
 
+function getFollowId(pathname: string): string | null {
+  const prefixes = ["/api/entities/follow/", "/entities/follow/"];
+
+  for (const prefix of prefixes) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+
+    const encodedId = pathname.slice(prefix.length);
+
+    if (!encodedId || encodedId.includes("/")) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(encodedId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function isBlocksRoute(pathname: string): boolean {
   return pathname === "/api/blocks";
 }
@@ -3181,7 +3205,7 @@ async function handleFileUpload(request: Request, env: Env): Promise<Response> {
 
   return jsonResponse(
     {
-      file_url: `https://media.renbrant.com/${objectKey}`,
+      file_url: `https://voxyl-media.renbrant.com/${objectKey}`,
     },
     200,
     corsHeaders,
@@ -3464,6 +3488,8 @@ type D1Follow = {
 };
 
 type PublicFollow = D1Follow & {
+  following_name?: string | null;
+  following_username?: string | null;
   created_date: string;
   updated_date: string;
 };
@@ -3474,6 +3500,30 @@ const followSelect = `SELECT id, legacy_base44_follow_id, follower_id, follower_
   follower_name, follower_username, following_email,
   base44_created_date, base44_updated_date
  FROM follows`;
+
+const followListSelect = `SELECT
+  f.id,
+  f.legacy_base44_follow_id,
+  f.follower_id,
+  f.follower_clerk_user_id,
+  f.follower_legacy_base44_user_id,
+  f.following_id,
+  f.following_clerk_user_id,
+  f.following_legacy_base44_user_id,
+  f.status,
+  f.created_at,
+  f.updated_at,
+  f.follower_email,
+  COALESCE(fu.name, f.follower_name) AS follower_name,
+  COALESCE(fu.username, f.follower_username) AS follower_username,
+  f.following_email,
+  tu.name AS following_name,
+  tu.username AS following_username,
+  f.base44_created_date,
+  f.base44_updated_date
+ FROM follows f
+ LEFT JOIN users fu ON fu.id = f.follower_id
+ LEFT JOIN users tu ON tu.id = f.following_id`;
 
 function toPublicFollow(follow: D1Follow): PublicFollow {
   return {
@@ -5244,26 +5294,29 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
   const params: string[] = [];
 
   if (followerId) {
-    where.push("follower_id = ?");
+    where.push("f.follower_id = ?");
     params.push(followerId);
   }
 
   if (followingId) {
-    where.push("following_id = ?");
+    where.push("f.following_id = ?");
     params.push(followingId);
   }
 
   if (status) {
-    where.push("status = ?");
+    where.push("f.status = ?");
     params.push(status);
   }
 
-  const sql = `${followSelect}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
-    ORDER BY created_at DESC
+  const sql = `${followListSelect}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY f.created_at DESC
     LIMIT ?`;
   const { results } = await env.DB.prepare(sql)
     .bind(...params, limit)
-    .all<D1Follow>();
+    .all<D1Follow & {
+      following_name: string | null;
+      following_username: string | null;
+    }>();
   const follows = (results || []).map(toPublicFollow);
 
   return jsonResponse(
@@ -5377,6 +5430,202 @@ async function handleCancelFollowRequest(request: Request, env: Env): Promise<Re
       data: {
         deleted: changes > 0,
       },
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function parseFollowUpdatePayload(request: Request): Promise<{ status: "accepted" }> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  const status = validateBoundedString(
+    (body as Record<string, unknown>).status,
+    "status",
+    32,
+    true,
+  );
+
+  if (status !== "accepted") {
+    throw new PodcastPlayError(
+      400,
+      "invalid-request",
+      "Follow status can only be changed to accepted",
+    );
+  }
+
+  return { status };
+}
+
+function followFollowingMatchesUser(
+  follow: D1Follow,
+  user: D1User,
+  claims: ClerkClaims,
+): boolean {
+  const legacyUserId = user.legacy_base44_user_id?.trim() || null;
+
+  return follow.following_id === user.id ||
+    follow.following_clerk_user_id === claims.userId ||
+    Boolean(user.clerk_user_id && follow.following_clerk_user_id === user.clerk_user_id) ||
+    Boolean(
+      legacyUserId &&
+      follow.following_legacy_base44_user_id === legacyUserId
+    );
+}
+
+async function updateFollowResponse(
+  request: Request,
+  env: Env,
+  followId: string,
+): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const payload = await parseFollowUpdatePayload(request);
+  const user = auth.user!;
+  const claims = auth.claims!;
+  const legacyUserId = user.legacy_base44_user_id?.trim() || null;
+
+  const result = await env.DB.prepare(
+    `UPDATE follows
+     SET status = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND status = 'pending'
+       AND (
+         following_id = ?
+         OR following_clerk_user_id = ?
+         OR following_legacy_base44_user_id = ?
+       )`,
+  )
+    .bind(
+      payload.status,
+      followId,
+      user.id,
+      claims.userId,
+      legacyUserId,
+    )
+    .run();
+
+  const changes = Number(
+    (result as { meta?: { changes?: number } }).meta?.changes ?? 0
+  );
+
+  if (changes === 0) {
+    const existing = await env.DB.prepare(
+      `${followSelect}
+       WHERE id = ?
+       LIMIT 1`,
+    )
+      .bind(followId)
+      .first<D1Follow>();
+
+    if (!existing || !followFollowingMatchesUser(existing, user, claims)) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
+
+    if (existing.status !== "accepted") {
+      return jsonResponse(
+        { ok: false, error: "Follow request is not pending" },
+        409,
+        corsHeaders,
+      );
+    }
+  }
+
+  const follow = await env.DB.prepare(
+    `${followListSelect}
+     WHERE f.id = ?
+     LIMIT 1`,
+  )
+    .bind(followId)
+    .first<D1Follow & {
+      following_name: string | null;
+      following_username: string | null;
+    }>();
+
+  if (!follow) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  const publicFollow = toPublicFollow(follow);
+
+  return jsonResponse(
+    {
+      ok: true,
+      data: publicFollow,
+      item: publicFollow,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function deleteFollowResponse(
+  request: Request,
+  env: Env,
+  followId: string,
+): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const user = auth.user!;
+  const claims = auth.claims!;
+  const legacyUserId = user.legacy_base44_user_id?.trim() || null;
+
+  const result = await env.DB.prepare(
+    `DELETE FROM follows
+     WHERE id = ?
+       AND (
+         follower_id = ?
+         OR follower_clerk_user_id = ?
+         OR follower_legacy_base44_user_id = ?
+         OR following_id = ?
+         OR following_clerk_user_id = ?
+         OR following_legacy_base44_user_id = ?
+       )`,
+  )
+    .bind(
+      followId,
+      user.id,
+      claims.userId,
+      legacyUserId,
+      user.id,
+      claims.userId,
+      legacyUserId,
+    )
+    .run();
+
+  const changes = Number(
+    (result as { meta?: { changes?: number } }).meta?.changes ?? 0
+  );
+
+  if (changes === 0) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      deleted: true,
     },
     200,
     corsHeaders,
@@ -5971,6 +6220,24 @@ export default {
 
       if (request.method === "POST" && isEpisodeProgressRoute(pathname)) {
         return withCors(await createEpisodeProgressResponse(request, env), request, env);
+      }
+
+      const followId = getFollowId(pathname);
+
+      if (request.method === "PATCH" && followId) {
+        return withCors(
+          await updateFollowResponse(request, env, followId),
+          request,
+          env,
+        );
+      }
+
+      if (request.method === "DELETE" && followId) {
+        return withCors(
+          await deleteFollowResponse(request, env, followId),
+          request,
+          env,
+        );
       }
 
       const podcastLikeId = getPodcastLikeId(pathname);
