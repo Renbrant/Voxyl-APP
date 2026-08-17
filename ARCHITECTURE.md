@@ -1,6 +1,6 @@
-﻿# Voxyl Architecture
+# Voxyl Architecture
 
-This document describes the high-level architecture of Voxyl 3.0 and the responsibilities of its main components.
+This document describes the high-level architecture of the Voxyl 0.3.x beta line and the responsibilities of its main components.
 
 ---
 
@@ -180,6 +180,74 @@ Authenticated identity must come from the validated Clerk token.
 
 ---
 
+## Profile and Avatar Architecture
+
+Voxyl stores user-selected profile photos separately from authentication-provider photos.
+
+### D1 fields
+
+`users.profile_picture`
+
+Stores the raw custom Voxyl profile picture.
+
+`users.clerk_profile_picture`
+
+Stores the current Clerk/provider picture synchronized from the authenticated identity.
+
+The provider image must never overwrite a valid custom Voxyl profile picture.
+
+### Avatar precedence
+
+    custom Voxyl/R2 image
+        > Clerk/provider image
+        > initials fallback
+
+### `/api/me` synchronization
+
+Authenticated `GET /api/me` may synchronize the current provider image into `users.clerk_profile_picture`.
+
+Important invariants:
+
+- provider synchronization does not modify `users.profile_picture`;
+- a failed Clerk Backend API request preserves the existing provider image;
+- a successful response indicating no real provider image may clear a stale provider image;
+- custom and provider values remain independently recoverable.
+
+Profile updates are owner-scoped from the validated Clerk identity.
+
+### API representation
+
+    custom_profile_picture = raw custom image
+    clerk_profile_picture  = raw provider image
+    profile_picture        = resolved custom-or-provider image
+    picture                = resolved custom-or-provider image
+
+### Frontend rendering
+
+Shared avatar rendering lives in:
+
+    src/components/common/UserAvatar.jsx
+
+It provides initials and broken-image fallback consistently across user surfaces.
+
+### Removing a custom image
+
+The **Use login photo** action clears:
+
+    users.profile_picture = NULL
+
+The resolver then falls through to `users.clerk_profile_picture`.
+
+### Playlist synchronization
+
+`playlists.creator_picture` is a denormalized presentation field.
+
+When the resolved avatar changes, the Worker synchronizes owned playlists server-side.
+
+For additional detail, see `docs/profile-avatar-model.md`.
+
+---
+
 ## API Client
 
 The frontend communicates with the Voxyl backend through:
@@ -188,7 +256,7 @@ The frontend communicates with the Voxyl backend through:
 src/api/voxylApiClient.js
 ```
 
-The previous Base44 API client was removed in Voxyl 3.0.
+The previous Base44 API client was removed during the Cloudflare/Clerk migration and is no longer used by the production application.
 
 The API client is responsible for:
 
@@ -255,11 +323,13 @@ Schema and migrations are located in:
 workers/api/migrations/
 ```
 
-Current migration foundation:
+Current migration sequence:
 
 ```text
 0001_initial_schema.sql
 0002_base44_compat_schema.sql
+0003_podcast_play_idempotency.sql
+0004_clerk_profile_picture.sql
 ```
 
 ### Stored Data
@@ -279,7 +349,7 @@ D1 is intended to store data such as:
 
 ### Compatibility Fields
 
-Voxyl 3.0 preserves selected legacy Base44 identifiers to support:
+Voxyl 0.3.x preserves selected legacy Base44 identifiers to support:
 
 - Data reconciliation
 - Migration validation
@@ -315,7 +385,7 @@ R2 URLs should be stored in D1 or returned by the API rather than constructed in
 
 ## Data Migration
 
-Voxyl 3.0 includes temporary and permanent migration tools.
+The Voxyl 0.3.x repository retains migration tooling for reconciliation, validation, and historical support.
 
 ### Base44 Export
 

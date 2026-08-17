@@ -1,5 +1,14 @@
 # Voxyl Cloudflare + Clerk Migration Plan
 
+> **Status: Completed — historical document**
+>
+> The Base44-to-Cloudflare/Clerk migration described here has been completed. Production now runs on Cloudflare Pages, Workers, D1, R2, KV, and Clerk.
+>
+> The sections below preserve the original migration plan and pre-migration dependency inventory. Statements written in present or future tense describe the system at the time the migration was designed.
+>
+> For current behavior, use `README.md`, `ARCHITECTURE.md`, `workers/api/README.md`, and `docs/README.md`.
+
+
 ## 1. Current Base44 dependency inventory
 
 Voxyl currently depends on Base44 for frontend SDK access, authentication, database-like entities, server functions, file upload, image generation, invite flow, RSS caching, playlist episode caching, and Android/Capacitor token restoration.
