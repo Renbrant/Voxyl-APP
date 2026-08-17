@@ -356,12 +356,14 @@ export default function Explore() {
         id: f.follower_id,
         username: f.follower_username,
         full_name: f.follower_name,
+        profile_picture: f.follower_profile_picture,
         type: 'follower',
       }));
       const following = followingList.map(f => ({
         id: f.following_id,
         username: f.following_username,
         full_name: f.following_name,
+        profile_picture: f.following_profile_picture,
         type: 'following',
       }));
       return canRenderSocialContent ? [...followers, ...following].filter(item => !blockedIds.includes(item.id)) : [];
@@ -371,6 +373,7 @@ export default function Explore() {
         id: f.following_id,
         username: f.following_username,
         full_name: f.following_name,
+        profile_picture: f.following_profile_picture,
         type: 'pending',
       })).filter(item => !blockedIds.includes(item.id)) : [];
     }
@@ -605,11 +608,7 @@ export default function Explore() {
                         {visibleFollowers.map((f, i) => (
                           <UserSearchCard
                             key={f.id}
-                            user={{
-                              id: f.id,
-                              username: f.username,
-                              full_name: f.full_name,
-                            }}
+                            user={f}
                             index={i}
                             currentUser={user}
                             followStatus={followStatuses[f.id] || null}
@@ -629,11 +628,7 @@ export default function Explore() {
                         {visibleFollowing.map((f, i) => (
                           <UserSearchCard
                             key={f.id}
-                            user={{
-                               id: f.id,
-                               username: f.username,
-                               full_name: f.full_name,
-                             }}
+                            user={f}
                             index={i}
                             currentUser={user}
                             followStatus={followStatuses[f.id] || null}
@@ -652,11 +647,7 @@ export default function Explore() {
                   {visiblePending.map((f, i) => (
                     <UserSearchCard
                       key={f.id}
-                      user={{
-                         id: f.id,
-                         username: f.username,
-                         full_name: f.full_name,
-                       }}
+                      user={f}
                       index={i}
                       currentUser={user}
                       followStatus={followStatuses[f.id] || null}

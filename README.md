@@ -410,8 +410,8 @@ Voxyl combines a background in technology with a desire to create a more organiz
 
 ## Current Version
 
-**Voxyl 3.0.0 — Beta**
+**Voxyl 0.3.0 — Beta**
 
-Voxyl 3.0 introduced the new Cloudflare and Clerk architecture, improved Android authentication, automated deployments, and complete production version traceability.
+The Voxyl 0.3.x beta line includes the new Cloudflare and Clerk architecture, improved Android authentication, automated deployments, and complete production version traceability.
 
 Thank you for helping shape the future of social podcasting.

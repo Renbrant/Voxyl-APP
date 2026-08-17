@@ -48,3 +48,6 @@ workers/**/.wrangler/
 
 # Generated Base44 CSV migration artifacts
 migration-output/
+
+# Production database backups
+/backups/

@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
 import FollowButton from '@/components/profile/FollowButton';
-import { ArrowLeft, UserCircle2, Ban } from 'lucide-react';
+import { ArrowLeft, Ban } from 'lucide-react';
+import UserAvatar from '@/components/common/UserAvatar';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageTransition from '@/components/common/PageTransition';
 import { t } from '@/lib/i18n';
@@ -188,15 +189,13 @@ export default function UserProfile() {
       </div>
 
       <div className="flex flex-col items-center py-4 px-4 mb-4">
-        <div className="w-16 h-16 rounded-full mb-2 overflow-hidden flex-shrink-0">
-          {profileUser?.profile_picture ? (
-            <img src={profileUser.profile_picture} alt={displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-          ) : (
-            <div className="w-full h-full gradient-primary flex items-center justify-center">
-              <UserCircle2 size={32} className="text-white" />
-            </div>
-          )}
-        </div>
+        <UserAvatar
+          src={profileUser?.profile_picture}
+          name={profileUser?.full_name}
+          username={profileUser?.username}
+          alt={displayName}
+          className="w-16 h-16 mb-2 flex-shrink-0"
+        />
         <h2 className="text-lg font-grotesk font-bold">{displayName}</h2>
         <p className="text-sm text-muted-foreground mb-3">{followersCount} seguidores · {playlists.length} playlists</p>
 
