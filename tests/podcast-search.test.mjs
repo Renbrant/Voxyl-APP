@@ -7,7 +7,7 @@ import { getPodcastSearchErrorMessage } from '../src/lib/podcastSearchErrors.js'
 const env = {
   PODCAST_INDEX_API_KEY: 'test-key',
   PODCAST_INDEX_API_SECRET: 'test-secret',
-  CLERK_AUTHORIZED_PARTIES: 'https://v.renbrant.com,http://localhost:5173',
+  CLERK_AUTHORIZED_PARTIES: 'https://v.renbrant.com,http://localhost:5173,https://localhost,capacitor://localhost',
 };
 
 function jsonRequest(path, body, headers = {}) {
@@ -290,7 +290,27 @@ describe('podcast search Worker route', () => {
     assert.equal(calls, 2);
   });
 
-  it('handles CORS preflight from the production and local origins', async () => {
+  it('handles CORS preflight from the actual Android WebView origin', async () => {
+    const response = await worker.fetch(new Request('https://api.voxyl.test/api/me', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://localhost',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization',
+      },
+    }), env);
+
+    assert.equal(response.status, 204);
+    assert.equal(
+      response.headers.get('access-control-allow-origin'),
+      'https://localhost',
+    );
+    assert.match(
+      response.headers.get('access-control-allow-headers') || '',
+      /Authorization/i,
+    );
+  });
+  it('handles CORS preflight from production, local web, and Capacitor Android origins', async () => {
     const productionResponse = await worker.fetch(new Request('https://api.voxyl.test/api/podcasts/search', {
       method: 'OPTIONS',
       headers: { origin: 'https://v.renbrant.com' },
@@ -299,11 +319,23 @@ describe('podcast search Worker route', () => {
       method: 'OPTIONS',
       headers: { origin: 'http://localhost:5173' },
     }), env);
+    const capacitorResponse = await worker.fetch(new Request('https://api.voxyl.test/api/podcasts/search', {
+      method: 'OPTIONS',
+      headers: { origin: 'capacitor://localhost' },
+    }), env);
 
     assert.equal(productionResponse.status, 204);
     assert.equal(productionResponse.headers.get('access-control-allow-origin'), 'https://v.renbrant.com');
+
     assert.equal(localResponse.status, 204);
     assert.equal(localResponse.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+
+    assert.equal(capacitorResponse.status, 204);
+    assert.equal(capacitorResponse.headers.get('access-control-allow-origin'), 'capacitor://localhost');
+    assert.match(
+      capacitorResponse.headers.get('access-control-allow-headers') || '',
+      /Authorization/i,
+    );
   });
 });
 

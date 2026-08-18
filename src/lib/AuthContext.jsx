@@ -4,6 +4,13 @@ import { voxylApi, setAuthTokenGetter } from '@/api/voxylApiClient';
 import { redirectToLogin } from '@/lib/authRedirect';
 import { isClerkConfigured } from '@/lib/clerkConfig';
 import { clearStoredNativeToken, getStoredNativeToken, isNativePlatform, restoreNativeAuthSession } from '@/lib/nativeAuthSession';
+import {
+  getNativeClerkToken,
+  isAndroidNative,
+  signInWithNativeClerk,
+  signOutNativeClerk,
+  waitForNativeClerkReady,
+} from '@/lib/nativeClerk';
 import { toast } from '@/components/ui/use-toast';
 
 const AuthContext = createContext();
@@ -199,6 +206,278 @@ const FallbackAuthProvider = ({ children }) => {
   );
 };
 
+const NativeClerkAuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [nativeLoaded, setNativeLoaded] = useState(false);
+  const [nativeSignedIn, setNativeSignedIn] = useState(false);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [appPublicSettings] = useState({ public_settings: {} });
+
+  const processReferral = useCallback(async (currentUser) => {
+    const params = new URLSearchParams(window.location.search);
+    const referrerId = params.get('ref');
+
+    if (!referrerId || referrerId === currentUser.id) {
+      return;
+    }
+
+    const storageKey = `voxyl_ref_processed_${currentUser.id}`;
+
+    if (localStorage.getItem(storageKey)) {
+      return;
+    }
+
+    localStorage.setItem(storageKey, '1');
+
+    await voxylApi.functions
+      .invoke('requestFollow', { targetUserId: referrerId })
+      .catch(() => {});
+
+    const referrals = await voxylApi.entities.Referral
+      .filter({
+        inviter_id: referrerId,
+        invitee_email: currentUser.email,
+      })
+      .catch(() => []);
+
+    if (referrals[0]) {
+      await voxylApi.entities.Referral
+        .update(referrals[0].id, { status: 'joined' })
+        .catch(() => {});
+    }
+
+    params.delete('ref');
+
+    const newUrl =
+      `${window.location.pathname}` +
+      `${params.toString() ? '?' + params.toString() : ''}`;
+
+    window.history.replaceState({}, '', newUrl);
+  }, []);
+
+  const checkUserAuth = useCallback(async () => {
+    let clerkInitialized = false;
+    let clerkSignedIn = false;
+
+    try {
+      setIsLoadingAuth(true);
+      setAuthError(null);
+
+      const state = await waitForNativeClerkReady();
+
+      clerkInitialized = Boolean(state.initialized);
+      clerkSignedIn = Boolean(state.signedIn);
+
+      setNativeLoaded(clerkInitialized);
+      setNativeSignedIn(clerkSignedIn);
+
+      devAuthLog('native clerk state', {
+        initialized: clerkInitialized,
+        signedIn: clerkSignedIn,
+        sessionId: state.sessionId || null,
+      });
+
+      if (!clerkInitialized) {
+        setUser(null);
+        setIsLoadingAuth(false);
+        setAuthChecked(true);
+        sessionStorage.setItem('voxyl_authed', 'false');
+
+        setAuthError({
+          type: 'clerk_initialization_failed',
+          code: 'CLERK_NOT_READY',
+          message: 'Clerk Android did not finish initializing.',
+        });
+
+        return null;
+      }
+
+      if (!clerkSignedIn) {
+        setUser(null);
+        setIsLoadingAuth(false);
+        setAuthChecked(true);
+        sessionStorage.setItem('voxyl_authed', 'false');
+        return null;
+      }
+
+      /*
+       * Ensure every Worker request obtains its JWT from Clerk Android.
+       * No native JWT is persisted in localStorage or Preferences.
+       */
+      setAuthTokenGetter(getNativeClerkToken);
+
+      const currentUser = await voxylApi.auth.me();
+
+      setUser(currentUser);
+      setIsLoadingAuth(false);
+      setAuthChecked(true);
+      sessionStorage.setItem('voxyl_authed', 'true');
+
+      processReferral(currentUser).catch(() => {});
+
+      return currentUser;
+    } catch (error) {
+      console.error('Native Clerk auth check failed:', error);
+
+      setUser(null);
+      setNativeLoaded(clerkInitialized);
+      setNativeSignedIn(clerkSignedIn);
+      setIsLoadingAuth(false);
+      setAuthChecked(true);
+
+      sessionStorage.setItem(
+        'voxyl_authed',
+        clerkSignedIn ? 'true' : 'false'
+      );
+
+      const status = error?.status || error?.response?.status;
+
+      setAuthError({
+        type: clerkSignedIn
+          ? 'account_sync_failed'
+          : 'native_auth_failed',
+        status,
+        code: error?.code || null,
+        message: clerkSignedIn
+          ? (
+              status === 401 || status === 403
+                ? 'Your Clerk session is active, but Voxyl could not verify it with the API.'
+                : (
+                    error?.message ||
+                    'Your Clerk session is active, but Voxyl could not load your account profile.'
+                  )
+            )
+          : (
+              error?.message ||
+              'Unable to restore the native Clerk session.'
+            ),
+      });
+
+      return null;
+    }
+  }, [processReferral]);
+
+  useEffect(() => {
+    /*
+     * Keep the API client permanently wired to Clerk Android while this
+     * provider is mounted. getNativeClerkToken() returns null while signed out.
+     */
+    setAuthTokenGetter(getNativeClerkToken);
+
+    checkUserAuth();
+
+    return () => {
+      setAuthTokenGetter(null);
+    };
+  }, [checkUserAuth]);
+
+  const checkAppState = useCallback(async () => {
+    return checkUserAuth();
+  }, [checkUserAuth]);
+
+  const navigateToLogin = async () => {
+    setAuthError(null);
+
+    try {
+      const result = await signInWithNativeClerk();
+
+      if (!result?.signedIn) {
+        throw Object.assign(
+          new Error('Clerk Android did not activate a session.'),
+          { code: 'CLERK_SESSION_NOT_ACTIVE' }
+        );
+      }
+
+      setNativeLoaded(true);
+      setNativeSignedIn(true);
+      sessionStorage.setItem('voxyl_authed', 'true');
+
+      await checkUserAuth();
+
+      return true;
+    } catch (error) {
+      notifyLoginRedirectFailed(error);
+
+      setAuthError({
+        type: 'login_unavailable',
+        code: error?.code || 'NATIVE_CLERK_SIGN_IN_FAILED',
+        message: LOGIN_UNAVAILABLE_MESSAGE,
+      });
+
+      return false;
+    }
+  };
+
+  const logout = async () => {
+    setAuthError(null);
+
+    try {
+      const result = await signOutNativeClerk();
+
+      setUser(null);
+      setNativeLoaded(true);
+      setNativeSignedIn(Boolean(result?.signedIn));
+      setAuthChecked(true);
+
+      sessionStorage.setItem(
+        'voxyl_authed',
+        result?.signedIn ? 'true' : 'false'
+      );
+
+      if (result?.warning) {
+        console.warn(
+          '[VOXYL AUTH] Native Clerk sign-out warning:',
+          result.warning
+        );
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Native Clerk sign-out failed:', error);
+
+      setAuthError({
+        type: 'logout_failed',
+        code: error?.code || 'NATIVE_CLERK_SIGN_OUT_FAILED',
+        message: error?.message || 'Unable to sign out.',
+      });
+
+      return null;
+    }
+  };
+
+  const clerkLoaded = nativeLoaded;
+  const clerkSignedIn = nativeSignedIn;
+  const isAuthenticated = nativeSignedIn;
+
+  return (
+    <AuthContext.Provider value={{
+      user,
+      apiUser: user,
+      clerkUser: null,
+      clerkLoaded,
+      clerkSignedIn,
+      isAuthenticated,
+      isLoadingAuth,
+      authLoading: isLoadingAuth,
+      isLoadingPublicSettings: false,
+      authError,
+      accountSyncError:
+        authError?.type === 'account_sync_failed'
+          ? authError
+          : null,
+      appPublicSettings,
+      authChecked,
+      logout,
+      navigateToLogin,
+      checkUserAuth,
+      checkAppState,
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
 const ClerkAuthProvider = ({ children }) => {
   const { isLoaded, isSignedIn, getToken, signOut } = useClerkAuth();
   const { user: clerkUser } = useClerkUser();
@@ -389,6 +668,14 @@ const ClerkAuthProvider = ({ children }) => {
 };
 
 export const AuthProvider = ({ children }) => {
+  if (isAndroidNative()) {
+    return (
+      <NativeClerkAuthProvider>
+        {children}
+      </NativeClerkAuthProvider>
+    );
+  }
+
   if (!isClerkConfigured) {
     return <FallbackAuthProvider>{children}</FallbackAuthProvider>;
   }
