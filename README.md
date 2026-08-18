@@ -60,7 +60,7 @@ Production deployment metadata is available at:
 
 ---
 
-## Voxyl 0.3.0 Beta
+## Voxyl 0.3.1 Beta
 
 The Voxyl 0.3.x beta line represents the largest architectural change in the project so far.
 
@@ -77,7 +77,11 @@ Major changes include:
 - Automated deployments from the GitHub `main` branch
 - Automated production version tracking
 - Migration tools for legacy Base44 data and media
-- Improved Android authentication and session handling
+- Native Android authentication through the Clerk Android SDK
+- Clerk hosted authentication through the system browser
+- Native Android callback through `clerk://com.renbrant.voxyl.callback`
+- Clerk-managed Android session restoration without persisting JWTs in the web layer
+- Production Android builds protected against accidentally using Clerk Development configuration
 - Repaired and production-validated user search, follows, follow requests, profile photos, and social identity flows
 - Added separate custom and Clerk/provider avatar storage with deterministic avatar precedence
 
@@ -125,12 +129,15 @@ Web Browser / Android App
 
 ### Authentication
 
-- Clerk
+- Clerk React SDK for the web application
+- Clerk Android SDK for native Android authentication
+- Cloudflare Worker JWT validation
 
 ### Mobile
 
 - Capacitor
 - Native Android project
+- Native Clerk authentication bridge
 - Native background audio integration
 
 For a detailed technical overview, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -256,11 +263,12 @@ Then open the Android project in Android Studio or build it using Gradle.
 
 Native Android changes should be tested on a real device, especially when they affect:
 
-- Authentication callbacks
+- Clerk hosted authentication
+- Native Clerk callbacks
 - Session restoration
+- Logout and signed-out cold starts
 - Background audio
 - Automatic next-episode playback
-- App Links
 - Browser-to-app redirects
 
 ---
@@ -414,8 +422,8 @@ Voxyl combines a background in technology with a desire to create a more organiz
 
 ## Current Version
 
-**Voxyl 0.3.0 — Beta**
+**Voxyl 0.3.1 — Beta**
 
-The Voxyl 0.3.x beta line includes the Cloudflare and Clerk architecture, improved Android authentication, production-validated profile and social flows, automated deployments, and complete production version traceability.
+Voxyl 0.3.1 includes the Cloudflare and Clerk architecture, production-validated profile and social flows, native Clerk Android authentication, authenticated and signed-out session restoration, automated deployments, and complete production version traceability.
 
 Thank you for helping shape the future of social podcasting.
