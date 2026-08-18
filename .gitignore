@@ -51,3 +51,6 @@ migration-output/
 
 # Production database backups
 /backups/
+
+# Locally generated Android release artifacts
+/release/

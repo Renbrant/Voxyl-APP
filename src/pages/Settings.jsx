@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { t, setLanguage, lang } from '@/lib/i18n';
 import { voxylApi } from '@/api/voxylApiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Moon, Sun, Globe, Eye, Ban, LogOut, Trash2, Shield, Monitor } from 'lucide-react';
 import VoxylHeader from '@/components/common/VoxylHeader';
@@ -33,6 +34,7 @@ function applyTheme(theme) {
 
 export default function Settings() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [user, setUser] = useState(null);
   const [theme, setTheme] = useState('dark');
   const [showDelete, setShowDelete] = useState(false);
@@ -60,8 +62,9 @@ export default function Settings() {
     setShowThemePicker(false);
   };
 
-  const handleLogout = () => {
-    voxylApi.auth.logout('/');
+  const handleLogout = async () => {
+    await logout();
+    navigate('/', { replace: true });
   };
 
   const themeOptions = THEME_OPTIONS();

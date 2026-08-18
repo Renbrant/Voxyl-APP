@@ -7,6 +7,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BackgroundAudioServicePlugin.class);
+        registerPlugin(ClerkNativePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -6,6 +6,41 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.3.1 - August 2026
+
+### Android Clerk Authentication
+
+- Fixed Issue #67, where Android authentication could return the external browser to localhost instead of Voxyl.
+- Added Clerk Android SDK hosted authentication.
+- Added a Capacitor native Clerk bridge for sign-in, token retrieval, session state, and logout.
+- Separated Android native Clerk authentication from the Clerk React web provider.
+- Production Android builds now require a Clerk Production publishable key.
+- Added the native callback clerk://com.renbrant.voxyl.callback.
+- Preserved the existing Android package identity and release signing certificate.
+
+### Android API and CORS
+
+- Added the actual Android WebView origin, https://localhost, to Worker authorized parties and CORS handling.
+- Retained capacitor://localhost as an allowed Capacitor origin.
+- Added regression coverage for Android WebView CORS preflight requests.
+
+### Session and Logout
+
+- Restored authenticated Clerk sessions across Android cold starts.
+- Routed Settings logout through the active AuthContext.
+- Native logout now clears the Clerk Android session.
+- Logout returns the user to Home instead of leaving protected Settings visible.
+- Signed-out state remains signed out after an Android cold start.
+
+### Validation
+
+- Full automated suite passed with 330 tests and 0 failures.
+- Production frontend build completed successfully.
+- Signed Android release APK built as version 0.3.1 / versionCode 301.
+- Release APK signature validated against the existing Voxyl production signing certificate.
+- Physical Android validation confirmed fresh login, automatic callback, /api/me profile loading, authenticated cold-start restore, logout, Home navigation, and signed-out cold start.
+
+---
 ## v0.3.0 - August 2026
 
 ### Beta Versioning

@@ -1,4 +1,65 @@
 apply plugin: 'com.android.application'
+def readVoxylEnvValue = { List<String> fileNames, String key ->
+    def processValue = System.getenv(key)
+    if (processValue) {
+        return processValue.trim()
+    }
+
+    def repoRoot = rootProject.projectDir.parentFile
+
+    for (String fileName : fileNames) {
+        def envFile = new File(repoRoot, fileName)
+        if (!envFile.exists()) {
+            continue
+        }
+
+        def matchingLine = envFile.readLines('UTF-8').find { rawLine ->
+            rawLine.trim().startsWith("${key}=")
+        }
+
+        if (matchingLine != null) {
+            def value = matchingLine.substring(matchingLine.indexOf('=') + 1).trim()
+
+            if (
+                value.length() >= 2 &&
+                (
+                    (value.startsWith('"') && value.endsWith('"')) ||
+                    (value.startsWith("'") && value.endsWith("'"))
+                )
+            ) {
+                value = value.substring(1, value.length() - 1)
+            }
+
+            return value
+        }
+    }
+
+    return ""
+}
+
+def clerkDebugPublishableKey = readVoxylEnvValue(
+    ['.env.local'],
+    'VITE_CLERK_PUBLISHABLE_KEY'
+)
+
+def clerkReleasePublishableKey = readVoxylEnvValue(
+    ['.env.production.local', '.env.production'],
+    'VITE_CLERK_PUBLISHABLE_KEY'
+)
+
+def requestedReleaseBuild = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains('release')
+}
+
+if (
+    requestedReleaseBuild &&
+    !clerkReleasePublishableKey.startsWith('pk_live_')
+) {
+    throw new GradleException(
+        'Release build blocked: Clerk Production publishable key (pk_live_) is required.'
+    )
+}
+
 
 android {
     namespace = "com.renbrant.voxyl"
@@ -7,8 +68,8 @@ android {
         applicationId "com.renbrant.voxyl"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 300
-        versionName "0.3.0"
+        versionCode 301
+        versionName "0.3.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -17,7 +78,12 @@ android {
         }
     }
     buildTypes {
+        debug {
+            resValue "string", "clerk_publishable_key", clerkDebugPublishableKey
+        }
+
         release {
+            resValue "string", "clerk_publishable_key", clerkReleasePublishableKey
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -37,6 +103,9 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+
+    // Clerk native Android authentication/session SDK.
+    implementation 'com.clerk:clerk-android-api:1.0.37'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

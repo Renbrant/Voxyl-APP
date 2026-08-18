@@ -146,20 +146,43 @@ Typical Android flow:
 Android app
   |
   v
-System browser authentication
+Clerk Android SDK hosted authentication
   |
   v
-App Link or custom callback
+System browser
   |
   v
-Native callback handler
+Clerk / Google authentication
   |
   v
-Persistent token/session storage
+clerk://com.renbrant.voxyl.callback
   |
   v
-Frontend authentication hydration
+Clerk SDK SSOReceiverActivity
+  |
+  v
+Active native Clerk session
+  |
+  v
+Capacitor ClerkNative bridge
+  |
+  v
+NativeClerkAuthProvider
+  |
+  v
+Authorization: Bearer <JWT>
+  |
+  v
+Cloudflare Workers API
 ```
+
+The Android production flow does not persist Clerk JWTs in localStorage or
+Capacitor Preferences. Session lifecycle and credential persistence are owned
+by the Clerk Android SDK. The Capacitor bridge requests a token only when the
+frontend needs to call the Voxyl API.
+
+The web application continues to use Clerk React. Android intentionally does
+not mount Clerk React and instead uses the native Clerk provider.
 
 ### Public and Protected Access
 
@@ -501,11 +524,18 @@ Relevant files and directories:
 ```text
 android/
 capacitor.config.ts
+android/app/src/main/java/com/renbrant/voxyl/VoxylApplication.java
+android/app/src/main/java/com/renbrant/voxyl/ClerkNativePlugin.java
+android/app/src/main/java/com/renbrant/voxyl/MainActivity.java
+src/lib/nativeClerk.js
+src/lib/AuthContext.jsx
+src/lib/OptionalClerkProvider.jsx
 src/lib/nativeAudioPlayer.js
-src/lib/nativeAuthCallback.js
-src/lib/nativeAuthSession.js
-src/lib/nativeTokenStorage.js
 ```
+
+Legacy Base44-era native authentication helpers may remain temporarily in the
+repository for compatibility during migration cleanup, but they are not the
+active Clerk Android authentication path.
 
 ### Android Responsibilities
 
@@ -525,15 +555,46 @@ The native layer supports:
 com.renbrant.voxyl
 ```
 
-### Authentication Callback
+### Android Clerk Authentication
 
-Production App Link:
+Production Android authentication uses Clerk hosted auth through the Clerk
+Android SDK.
+
+Package:
 
 ```text
-https://voxyl.renbrant.com/auth/callback
+com.renbrant.voxyl
 ```
 
-A custom scheme may remain available as a fallback where configured.
+Native Clerk callback:
+
+```text
+clerk://com.renbrant.voxyl.callback
+```
+
+The Clerk SDK registers and handles this callback through its
+SSOReceiverActivity; Voxyl does not manually forward this callback through
+MainActivity.
+
+The Android WebView uses this origin:
+
+```text
+https://localhost
+```
+
+The Worker authorized-party/CORS configuration must therefore include
+https://localhost. capacitor://localhost remains allowed for Capacitor
+compatibility but is not the origin observed from the production Android
+WebView during physical-device testing.
+
+Release builds require a Clerk Production publishable key (pk_live_...).
+Debug and release Clerk configuration are separated in the Android Gradle
+configuration so a release build cannot silently ship with a Development
+publishable key.
+
+Authentication state is exposed to React through ClerkNativePlugin and
+src/lib/nativeClerk.js. Login, token retrieval, logout, and session restore
+all pass through the active AuthContext provider.
 
 ---
 
