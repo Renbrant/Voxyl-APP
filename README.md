@@ -14,9 +14,17 @@ By combining traditional RSS technology with social curation, Voxyl allows users
 
 Voxyl is currently in beta.
 
-You can access the production web application here:
+### 🌐 Web
 
 **[Open Voxyl Web App](https://v.renbrant.com/)**
+
+### 🤖 Android
+
+**[Download Voxyl for Android](https://github.com/Renbrant/Voxyl-APP/releases/latest)**
+
+Download the latest APK directly from the GitHub Release assets.
+
+> Android may ask you to allow installation from unknown sources because the app is currently distributed directly through GitHub rather than Google Play.
 
 Production deployment metadata is available at:
 
