@@ -37,7 +37,11 @@ export default function Sidebar() {
     >
       <div className="flex items-center gap-2.5 px-6 pt-8 pb-6 select-none">
         <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0">
-          <div className="flex h-full w-full items-center justify-center bg-primary text-sm font-bold text-primary-foreground">V</div>
+          <img
+            src="/branding/voxyl-icon-192.png"
+            alt="Voxyl"
+            className="h-full w-full object-cover"
+          />
         </div>
         <div className="flex items-baseline gap-1.5">
           <span className="text-2xl font-grotesk font-bold text-gradient">Voxyl</span>

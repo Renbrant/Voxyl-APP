@@ -42,7 +42,7 @@ export default function PlaylistPreview() {
             el.setAttribute('content', content);
           };
           const ogImage = pl.cover_image ||
-            `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(pl.name)}&size=1200&backgroundColor=7c3aed,3b82f6`;
+            `${window.location.origin}/branding/voxyl-logo.png`;
           const title = `${pl.name} — playlist por ${pl.creator_name} | Voxyl`;
           const desc = pl.description || `${pl.rss_feeds?.length || 0} feeds de podcast curados por ${pl.creator_name}`;
           const url = `${window.location.origin}/share/${id}`;

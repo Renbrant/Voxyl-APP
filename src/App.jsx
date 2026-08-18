@@ -88,7 +88,11 @@ const AuthenticatedApp = () => {
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-2xl overflow-hidden">
-            <div className="flex h-full w-full items-center justify-center bg-primary text-lg font-bold text-primary-foreground">V</div>
+            <img
+              src="/branding/voxyl-icon-192.png"
+              alt="Voxyl"
+              className="h-full w-full object-cover"
+            />
           </div>
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
