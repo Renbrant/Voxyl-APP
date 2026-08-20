@@ -660,6 +660,85 @@ export function PlayerProvider({ children }) {
     }
   }, []);
 
+  const reconcileNativePlaybackState = useCallback((state = {}) => {
+    const nativeQueue = Array.isArray(state.queue)
+      ? state.queue.filter(item => item?.audioUrl)
+      : [];
+
+    const nativeCurrentTrack = state.currentTrack?.audioUrl
+      ? state.currentTrack
+      : null;
+
+    if (nativeQueue.length === 0 && !nativeCurrentTrack) return;
+
+    let restoredQueue = nativeQueue;
+    let restoredIndex = Number.isInteger(state.index)
+      ? state.index
+      : -1;
+
+    if (
+      nativeCurrentTrack &&
+      (restoredIndex < 0 || restoredIndex >= restoredQueue.length)
+    ) {
+      restoredIndex = restoredQueue.findIndex(
+        item => item.audioUrl === nativeCurrentTrack.audioUrl
+      );
+    }
+
+    let restoredEpisode =
+      restoredIndex >= 0 && restoredIndex < restoredQueue.length
+        ? restoredQueue[restoredIndex]
+        : nativeCurrentTrack;
+
+    if (!restoredEpisode?.audioUrl) return;
+
+    if (restoredQueue.length === 0) {
+      restoredQueue = [restoredEpisode];
+      restoredIndex = 0;
+    } else if (restoredIndex < 0) {
+      const existingIndex = restoredQueue.findIndex(
+        item => item.audioUrl === restoredEpisode.audioUrl
+      );
+
+      if (existingIndex >= 0) {
+        restoredIndex = existingIndex;
+        restoredEpisode = restoredQueue[existingIndex];
+      } else {
+        restoredQueue = [...restoredQueue, restoredEpisode];
+        restoredIndex = restoredQueue.length - 1;
+      }
+    }
+
+    const restoredPosition = Math.max(
+      0,
+      Number(state.position) || 0
+    );
+
+    const restoredDuration = Math.max(
+      0,
+      Number(state.duration) || 0
+    );
+
+    queueRef.current = restoredQueue;
+    currentIndexRef.current = restoredIndex;
+    currentEpisodeRef.current = restoredEpisode;
+    nativeCurrentTimeRef.current = restoredPosition;
+    nativeDurationRef.current = restoredDuration;
+    transitioningRef.current = false;
+
+    if (typeof state.autoplay === 'boolean') {
+      autoplayRef.current = state.autoplay;
+      setAutoplay(state.autoplay);
+    }
+
+    setQueue(restoredQueue);
+    setCurrentEpisode(restoredEpisode);
+    setCurrentTime(restoredPosition);
+    setDuration(restoredDuration);
+    setIsPlaying(!!state.isPlaying);
+    clearLoadingState();
+  }, [clearLoadingState]);
+
   // =========================================================================
   // ── NATIVE PLAYER SETUP ───────────────────────────────────────────────────
   // =========================================================================
@@ -668,6 +747,7 @@ export function PlayerProvider({ children }) {
     if (!isNative) return;
 
     nativeAudioPlayer.initialize({
+      onRestoredState: reconcileNativePlaybackState,
       onTimeUpdate: (posSec, durSec) => {
         nativeCurrentTimeRef.current = posSec;
         if (durSec > 0) nativeDurationRef.current = durSec;
@@ -1098,11 +1178,11 @@ export function PlayerProvider({ children }) {
     // Keep native foreground-service queue in sync with autoplay preference so it
     // only auto-advances natively when autoplay is on.
     if (isNative && nativeAudioPlayer.isReady()) {
-      if (autoplay) {
-        nativeAudioPlayer.setNativeQueue(queueRef.current, Math.max(0, currentIndexRef.current), true).catch(() => {});
-      } else {
-        nativeAudioPlayer.clearNativeQueue().catch(() => {});
-      }
+      nativeAudioPlayer.setNativeQueue(
+        queueRef.current,
+        Math.max(0, currentIndexRef.current),
+        autoplay
+      ).catch(() => {});
     }
     if (!isNative && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({

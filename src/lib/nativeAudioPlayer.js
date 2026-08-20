@@ -4,9 +4,11 @@ const getNativeAudio = () => window?.Capacitor?.Plugins?.NativeAudio ?? null;
 const getApp = () => window?.Capacitor?.Plugins?.App ?? null;
 
 export const isNative = Capacitor.isNativePlatform();
+const isAndroidNative = isNative && Capacitor.getPlatform() === 'android';
 
 const ASSET_ID = 'voxyl_current';
 const BackgroundAudioService = registerPlugin('BackgroundAudioService');
+const VoxylPlayback = registerPlugin('VoxylPlayback');
 
 class NativeAudioPlayer {
   constructor() {
@@ -21,6 +23,7 @@ class NativeAudioPlayer {
     this._onNativeTrackChanged = null;
     this._onPlaybackError = null;
     this._onQueueCompleted = null;
+    this._onRestoredState = null;
     this._timeListener = null;
     this._stateListener = null;
     this._completeListener = null;
@@ -29,9 +32,11 @@ class NativeAudioPlayer {
     this._queueCompletedListener = null;
     this._appStateListener = null;
     this._trackChangeListener = null;
+    this._positionPoll = null;
+    this._pollInFlight = false;
   }
 
-  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged, onPlaybackError, onQueueCompleted }) {
+  async initialize({ onTimeUpdate, onEnded, onStateChange, onNativeTrackChanged, onPlaybackError, onQueueCompleted, onRestoredState }) {
     if (!isNative) return;
     if (this._ready) return;
 
@@ -41,6 +46,12 @@ class NativeAudioPlayer {
     this._onNativeTrackChanged = onNativeTrackChanged;
     this._onPlaybackError = onPlaybackError;
     this._onQueueCompleted = onQueueCompleted;
+    this._onRestoredState = onRestoredState;
+
+    if (isAndroidNative) {
+      await this._initializeVoxylPlayback();
+      return;
+    }
 
     console.log('[NativeAudioPlayer] initialize() - isNative:', isNative);
     try {
@@ -147,6 +158,158 @@ class NativeAudioPlayer {
     }
   }
 
+  _applyVoxylPlaybackState(state, emitState = false) {
+    if (!state) return;
+
+    const previousPlaying = this._isPlaying;
+
+    this._currentUrl =
+      state.audioUrl ||
+      state.currentTrack?.audioUrl ||
+      this._currentUrl;
+
+    const duration = Number(state.duration);
+    if (Number.isFinite(duration) && duration >= 0) {
+      this._duration = duration;
+    }
+
+    this._isPlaying = !!state.isPlaying;
+
+    if (emitState || previousPlaying !== this._isPlaying) {
+      this._onStateChange?.(this._isPlaying);
+    }
+  }
+
+  async _getVoxylPlaybackState(emitState = false) {
+    const state = await VoxylPlayback.getState();
+    this._applyVoxylPlaybackState(state, emitState);
+    return state;
+  }
+  async _pollVoxylPlaybackState() {
+    if (!this._ready || this._pollInFlight) return;
+
+    this._pollInFlight = true;
+
+    try {
+      const state = await this._plugin.getPlaybackSnapshot();
+      const position = Math.max(0, Number(state?.position) || 0);
+      const duration = Math.max(0, Number(state?.duration) || 0);
+
+      if (duration > 0) this._duration = duration;
+
+      this._onTimeUpdate?.(
+        position,
+        duration || this._duration
+      );
+    } catch (_) {
+      // Temporary controller reconnection must not affect playback ownership.
+    } finally {
+      this._pollInFlight = false;
+    }
+  }
+
+  async _initializeVoxylPlayback() {
+    console.log('[NativeAudioPlayer] connecting to VoxylPlayback');
+
+    try {
+      this._plugin = VoxylPlayback;
+
+      this._stateListener = await this._plugin.addListener(
+        'playbackState',
+        (state) => {
+          this._applyVoxylPlaybackState(state, true);
+        }
+      );
+
+      this._nativeTrackChangedListener = await this._plugin.addListener(
+        'nativeTrackChanged',
+        (data) => {
+          this._currentUrl =
+            data?.audioUrl ||
+            data?.url ||
+            this._currentUrl;
+
+          this._duration = 0;
+
+          this._onNativeTrackChanged?.(data);
+        }
+      );
+
+      this._playbackErrorListener = await this._plugin.addListener(
+        'playbackError',
+        (data) => {
+          this._isPlaying = false;
+          this._onPlaybackError?.(data);
+          this._onStateChange?.(false);
+        }
+      );
+
+      this._queueCompletedListener = await this._plugin.addListener(
+        'queueCompleted',
+        (data) => {
+          this._isPlaying = false;
+          this._onQueueCompleted?.(data);
+          this._onStateChange?.(false);
+        }
+      );
+
+      const App = getApp();
+
+      if (App) {
+        this._appStateListener = await App.addListener(
+          'appStateChange',
+          async (state) => {
+            if (!state.isActive) return;
+
+            try {
+              const restored = await this._getVoxylPlaybackState(true);
+              this._onRestoredState?.(restored);
+              const position = Math.max(0, Number(restored?.position) || 0);
+              const duration = Math.max(0, Number(restored?.duration) || 0);
+
+              this._onTimeUpdate?.(position, duration);
+            } catch (_) {
+              // The MediaController connection may still be settling.
+            }
+          }
+        ).catch(() => null);
+      }
+
+      const initialState = await this._getVoxylPlaybackState(true);
+
+      this._ready = true;
+      this._onRestoredState?.(initialState);
+
+      this._positionPoll = setInterval(
+        () => {
+          void this._pollVoxylPlaybackState();
+        },
+        500
+      );
+
+      this._onTimeUpdate?.(
+        Math.max(0, Number(initialState?.position) || 0),
+        Math.max(0, Number(initialState?.duration) || 0)
+      );
+
+      console.log('[NativeAudioPlayer] VoxylPlayback connected', {
+        hasMedia: !!initialState?.hasMedia,
+        isPlaying: !!initialState?.isPlaying,
+        audioUrl: initialState?.audioUrl || null,
+        queueSize: initialState?.queueSize || 0,
+      });
+    } catch (error) {
+      this._plugin = null;
+      this._ready = false;
+
+      console.error(
+        '[NativeAudioPlayer] VoxylPlayback connection FAILED:',
+        error?.message,
+        error
+      );
+    }
+  }
+
   async play(episode, resumeAt = 0) {
     console.log('[NativeAudioPlayer] play() called - isNative:', isNative, '_ready:', this._ready, 'url:', episode?.audioUrl);
     if (!isNative || !this._ready) {
@@ -162,6 +325,32 @@ class NativeAudioPlayer {
     }
 
     console.log('[NativeAudioPlayer] loading URL:', url, '| resumeAt:', resumeAt);
+    if (isAndroidNative) {
+      try {
+        const state = await this._plugin.playMedia({
+          audioUrl: url,
+          title: episode.title || '',
+          artist:
+            episode.podcastTitle ||
+            episode.feedTitle ||
+            episode.showTitle ||
+            'Voxyl',
+          artworkUrl:
+            episode.artworkUrl ||
+            episode.image ||
+            episode.podcastImage ||
+            '',
+          resumeAt,
+        });
+
+        this._applyVoxylPlaybackState(state, true);
+        return;
+      } catch (error) {
+        this._isPlaying = false;
+        this._onStateChange?.(false);
+        throw error;
+      }
+    }
 
     try {
       await BackgroundAudioService.start().catch((error) => {
@@ -234,8 +423,11 @@ class NativeAudioPlayer {
       title: episode?.title || '',
       podcastTitle: episode?.podcastTitle || episode?.feedTitle || episode?.showTitle || '',
       feedTitle: episode?.feedTitle || episode?.podcastTitle || episode?.showTitle || '',
+      feedUrl: episode?.feedUrl || episode?.feed_url || '',
       audioUrl: episode?.audioUrl || episode?.url || '',
       url: episode?.audioUrl || episode?.url || '',
+      skip_start_seconds: Number.isFinite(Number(episode?.skip_start_seconds)) ? Math.max(0, Number(episode.skip_start_seconds)) : 0,
+      skip_end_seconds: Number.isFinite(Number(episode?.skip_end_seconds)) ? Math.max(0, Number(episode.skip_end_seconds)) : 0,
       artworkUrl: episode?.artworkUrl || episode?.image || episode?.podcastImage || '',
       image: episode?.image || episode?.artworkUrl || episode?.podcastImage || '',
       playlistId: episode?.playlistId || episode?.playlist_id || '',
@@ -316,19 +508,49 @@ class NativeAudioPlayer {
 
   async pause() {
     if (!isNative || !this._ready) return;
+
+    if (isAndroidNative) {
+      const state = await this._plugin.pause().catch(() => null);
+      if (state) this._applyVoxylPlaybackState(state, true);
+      return;
+    }
+
     await this._plugin.pause({ assetId: ASSET_ID }).catch(() => {});
     this._isPlaying = false;
   }
-
   async resume() {
     if (!isNative || !this._ready) return;
+
+    if (isAndroidNative) {
+      const state = await this._plugin.resume().catch(() => null);
+      if (state) this._applyVoxylPlaybackState(state, true);
+      return;
+    }
+
     await this._plugin.resume({ assetId: ASSET_ID }).catch(() => {});
     this._isPlaying = true;
   }
-
   seek(seconds) {
     if (!isNative || !this._ready) return;
+
     clearTimeout(this._seekTimer);
+
+    if (isAndroidNative) {
+      this._seekTimer = setTimeout(() => {
+        this._plugin.seek({ seconds })
+          .then((state) => {
+            this._applyVoxylPlaybackState(state, false);
+            this._onTimeUpdate?.(
+              Math.max(0, Number(state?.position) || 0),
+              Math.max(0, Number(state?.duration) || this._duration || 0)
+            );
+          })
+          .catch(() => {});
+      }, 80);
+
+      return;
+    }
+
     this._seekTimer = setTimeout(() => {
       this._plugin.setCurrentTime({
         assetId: ASSET_ID,
@@ -336,22 +558,40 @@ class NativeAudioPlayer {
       }).catch(() => {});
     }, 80);
   }
-
   isCurrentlyPlaying() {
     return this._isPlaying;
   }
 
   async stop() {
     if (!isNative || !this._ready) return;
+
+    if (isAndroidNative) {
+      await this._plugin.stop().catch(() => null);
+      this._currentUrl = null;
+      this._duration = 0;
+      this._isPlaying = false;
+      this._onStateChange?.(false);
+      return;
+    }
+
     await this._plugin.stop({ assetId: ASSET_ID }).catch(() => {});
     await this._plugin.unload({ assetId: ASSET_ID }).catch(() => {});
     await BackgroundAudioService.stop().catch(() => {});
     this._currentUrl = null;
     this._duration = 0;
   }
-
   async getCurrentTime() {
     if (!isNative || !this._ready) return 0;
+
+    if (isAndroidNative) {
+      try {
+        const state = await this._getVoxylPlaybackState(false);
+        return Math.max(0, Number(state?.position) || 0);
+      } catch (_) {
+        return 0;
+      }
+    }
+
     try {
       const { currentTime } = await this._plugin.getCurrentTime({ assetId: ASSET_ID });
       return currentTime ?? 0;
@@ -359,7 +599,6 @@ class NativeAudioPlayer {
       return 0;
     }
   }
-
   getDuration() {
     return this._duration;
   }
@@ -378,6 +617,12 @@ class NativeAudioPlayer {
 
   async destroy() {
     clearTimeout(this._seekTimer);
+
+    if (this._positionPoll) {
+      clearInterval(this._positionPoll);
+      this._positionPoll = null;
+    }
+
     await this._timeListener?.remove?.();
     await this._completeListener?.remove?.();
     await this._stateListener?.remove?.();
@@ -386,7 +631,20 @@ class NativeAudioPlayer {
     await this._queueCompletedListener?.remove?.();
     await this._appStateListener?.remove?.();
     await this._trackChangeListener?.remove?.();
+
+    this._pollInFlight = false;
+
+    if (isAndroidNative) {
+      this._ready = false;
+      this._plugin = null;
+
+      // Activity/WebView teardown must never stop process-owned playback.
+      return;
+    }
+
     await this.stop();
+    this._ready = false;
+    this._plugin = null;
   }
 }
 

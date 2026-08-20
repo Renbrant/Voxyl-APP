@@ -68,8 +68,8 @@ android {
         applicationId "com.renbrant.voxyl"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 301
-        versionName "0.3.1"
+        versionCode 302
+        versionName "0.3.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -103,6 +103,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+
+    // Issue #81: Voxyl-owned process-level playback authority.
+    // Keep Media3 aligned with @capgo/capacitor-native-audio 8.4.7.
+    implementation 'androidx.media3:media3-common:1.10.1'
+    implementation 'androidx.media3:media3-exoplayer:1.10.0'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.10.0'
+    implementation 'androidx.media3:media3-session:1.10.0'
 
     // Clerk native Android authentication/session SDK.
     implementation 'com.clerk:clerk-android-api:1.0.37'

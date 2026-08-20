@@ -63,6 +63,16 @@
             android:name=".BackgroundAudioService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+        <!-- Issue #81: persistent process-owned playback authority. -->
+        <service
+            android:name=".VoxylPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
     </application>
 
     <!-- Permissions -->
