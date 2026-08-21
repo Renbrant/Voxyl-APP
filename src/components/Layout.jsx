@@ -8,7 +8,7 @@ import Sidebar from '@/components/common/Sidebar';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
-import { LEGACY_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
+import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 
 const NAV_ICONS = Object.freeze({
   home: Home,
@@ -17,7 +17,7 @@ const NAV_ICONS = Object.freeze({
   profile: User,
 });
 
-const getNavItems = () => LEGACY_PRIMARY_NAVIGATION.map(item => ({
+const getNavItems = () => ACTIVE_PRIMARY_NAVIGATION.map(item => ({
   ...item,
   icon: NAV_ICONS[item.icon],
   label: t(item.labelKey),
@@ -85,7 +85,7 @@ export default function Layout() {
         <div className="h-16 flex items-center justify-around px-2">
           {getNavItems().map(({ icon: Icon, label, path }) => {
             // For protected tabs, redirect to login if not authed
-            const isProtected = path === '/playlists' || path === '/profile';
+            const isProtected = path === '/library' || path === '/profile';
             const active = location.pathname === path ||
               (path !== '/' && location.pathname.startsWith(path));
 

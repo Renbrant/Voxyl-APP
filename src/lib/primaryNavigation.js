@@ -81,3 +81,12 @@ export const LEGACY_PRIMARY_NAVIGATION = Object.freeze(
     });
   }),
 );
+
+export const ACTIVE_PRIMARY_NAVIGATION = Object.freeze(
+  PRIMARY_NAVIGATION.filter(item => item.id !== 'people'),
+);
+
+export const LEGACY_PRIMARY_ROUTE_REDIRECTS = Object.freeze({
+  '/explore': '/discover',
+  '/playlists': '/library',
+});

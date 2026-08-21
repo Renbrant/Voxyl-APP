@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Component, useEffect } from 'react';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -79,6 +79,17 @@ const BackButtonHandler = () => {
   return null;
 };
 
+const LegacyRouteRedirect = ({ to }) => {
+  const location = useLocation();
+
+  return (
+    <Navigate
+      to={`${to}${location.search}${location.hash}`}
+      replace
+    />
+  );
+};
+
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
   const location = useLocation();
@@ -113,8 +124,10 @@ const AuthenticatedApp = () => {
     <Routes location={location}>
       <Route element={<Layout />}>
         <Route path="/" element={<Feed />} />
-        <Route path="/explore" element={<Explore />} />
-        <Route path="/playlists" element={<Playlists />} />
+        <Route path="/discover" element={<Explore />} />
+        <Route path="/explore" element={<LegacyRouteRedirect to="/discover" />} />
+        <Route path="/library" element={<Playlists />} />
+        <Route path="/playlists" element={<LegacyRouteRedirect to="/library" />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

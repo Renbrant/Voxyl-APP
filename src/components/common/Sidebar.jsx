@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 import { APP_VERSION_LABEL } from '@/lib/version';
-import { LEGACY_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
+import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 
 const NAV_ICONS = Object.freeze({
   home: Home,
@@ -14,7 +14,7 @@ const NAV_ICONS = Object.freeze({
   profile: User,
 });
 
-const getNavItems = () => LEGACY_PRIMARY_NAVIGATION.map(item => ({
+const getNavItems = () => ACTIVE_PRIMARY_NAVIGATION.map(item => ({
   ...item,
   icon: NAV_ICONS[item.icon],
   label: t(item.labelKey),
@@ -58,7 +58,7 @@ export default function Sidebar() {
 
       <nav className="flex flex-col gap-1 px-3 mt-2">
         {getNavItems().map(({ icon: Icon, label, path }) => {
-          const isProtected = path === '/playlists' || path === '/profile';
+          const isProtected = path === '/library' || path === '/profile';
           const active = location.pathname === path ||
             (path !== '/' && location.pathname.startsWith(path));
 

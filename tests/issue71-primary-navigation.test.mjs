@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 import {
+  ACTIVE_PRIMARY_NAVIGATION,
   LEGACY_PRIMARY_NAVIGATION,
+  LEGACY_PRIMARY_ROUTE_REDIRECTS,
   PRIMARY_NAVIGATION,
   PRIMARY_NAVIGATION_IDS,
   PRIMARY_NAVIGATION_PATHS,
@@ -121,7 +123,7 @@ test('Issue #71 primary navigation architecture', async t => {
 
       assert.match(
         source,
-        /LEGACY_PRIMARY_NAVIGATION/,
+        /ACTIVE_PRIMARY_NAVIGATION/,
         `${relativePath} must consume the shared navigation source`,
       );
 
@@ -131,5 +133,95 @@ test('Issue #71 primary navigation architecture', async t => {
         `${relativePath} must not define its own navigation array`,
       );
     }
+  });
+
+  await t.test('activates canonical Discover and Library destinations before People migration', () => {
+    assert.deepEqual(
+      ACTIVE_PRIMARY_NAVIGATION.map(item => item.id),
+      [
+        'home',
+        'discover',
+        'library',
+        'profile',
+      ],
+    );
+
+    assert.deepEqual(
+      ACTIVE_PRIMARY_NAVIGATION.map(item => item.path),
+      [
+        '/',
+        '/discover',
+        '/library',
+        '/profile',
+      ],
+    );
+
+    assert.deepEqual(
+      ACTIVE_PRIMARY_NAVIGATION.map(item => item.labelKey),
+      [
+        'navHome',
+        'navDiscover',
+        'navLibrary',
+        'navProfile',
+      ],
+    );
+  });
+
+  await t.test('preserves legacy primary routes through canonical redirects', () => {
+    assert.deepEqual(
+      LEGACY_PRIMARY_ROUTE_REDIRECTS,
+      {
+        '/explore': '/discover',
+        '/playlists': '/library',
+      },
+    );
+
+    const appSource = fs.readFileSync(
+      new URL('../src/App.jsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(
+      appSource,
+      /path="\/discover" element=\{<Explore \/>}/,
+    );
+
+    assert.match(
+      appSource,
+      /path="\/library" element=\{<Playlists \/>}/,
+    );
+
+    assert.match(
+      appSource,
+      /path="\/explore" element=\{<LegacyRouteRedirect to="\/discover" \/>}/,
+    );
+
+    assert.match(
+      appSource,
+      /path="\/playlists" element=\{<LegacyRouteRedirect to="\/library" \/>}/,
+    );
+  });
+
+  await t.test('keeps canonical navigation paths inside source behavior', () => {
+    const exploreSource = fs.readFileSync(
+      new URL('../src/pages/Explore.jsx', import.meta.url),
+      'utf8',
+    );
+
+    const createPlaylistSource = fs.readFileSync(
+      new URL('../src/components/playlist/CreatePlaylistModal.jsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(exploreSource, /\/discover/);
+    assert.doesNotMatch(
+      exploreSource,
+      /const newUrl = qs \? `\/explore/,
+    );
+
+    assert.match(
+      createPlaylistSource,
+      /navigate\('\/discover'\)/,
+    );
   });
 });

@@ -160,7 +160,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
     });
     setSaving(false);
     onCreated();
-    if (andExplore) navigate('/explore');
+    if (andExplore) navigate('/discover');
   };
 
   return (

@@ -3,7 +3,7 @@ import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
-import { LEGACY_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
+import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 
 const NAV_ICONS = Object.freeze({
   home: Home,
@@ -12,7 +12,7 @@ const NAV_ICONS = Object.freeze({
   profile: User,
 });
 
-const getNavItems = () => LEGACY_PRIMARY_NAVIGATION.map(item => ({
+const getNavItems = () => ACTIVE_PRIMARY_NAVIGATION.map(item => ({
   ...item,
   icon: NAV_ICONS[item.icon],
   label: t(item.labelKey),
@@ -37,7 +37,7 @@ export default function BottomNav() {
     >
       <div className="h-16 flex items-center justify-around px-2">
         {getNavItems().map(({ icon: Icon, label, path }) => {
-          const isProtected = path === '/playlists' || path === '/profile';
+          const isProtected = path === '/library' || path === '/profile';
           const active = location.pathname === path ||
             (path !== '/' && location.pathname.startsWith(path));
 

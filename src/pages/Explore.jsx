@@ -68,7 +68,7 @@ export default function Explore() {
     if (podcastLanguage) p.set('lang', podcastLanguage);
     if (podcastCategory) p.set('cat', podcastCategory);
     const qs = p.toString();
-    const newUrl = qs ? `/explore?${qs}` : '/explore';
+    const newUrl = qs ? `/discover?${qs}` : '/discover';
     // Replace state to keep back button pointing to previous page (not previous search state)
     window.history.replaceState(null, '', newUrl);
     console.log('[Explore] Current tab:', tab);
