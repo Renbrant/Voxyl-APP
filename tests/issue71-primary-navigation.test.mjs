@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import {
+  LEGACY_PRIMARY_NAVIGATION,
   PRIMARY_NAVIGATION,
   PRIMARY_NAVIGATION_IDS,
   PRIMARY_NAVIGATION_PATHS,
@@ -69,6 +71,65 @@ test('Issue #71 primary navigation architecture', async t => {
 
     for (const item of PRIMARY_NAVIGATION) {
       assert.equal(Object.isFrozen(item), true);
+    }
+  });
+
+  await t.test('derives the pre-migration runtime navigation from the canonical contract', () => {
+    assert.deepEqual(
+      LEGACY_PRIMARY_NAVIGATION.map(item => item.id),
+      [
+        'home',
+        'discover',
+        'library',
+        'profile',
+      ],
+    );
+
+    assert.deepEqual(
+      LEGACY_PRIMARY_NAVIGATION.map(item => item.path),
+      [
+        '/',
+        '/explore',
+        '/playlists',
+        '/profile',
+      ],
+    );
+
+    assert.deepEqual(
+      LEGACY_PRIMARY_NAVIGATION.map(item => item.labelKey),
+      [
+        'navFeed',
+        'navExplore',
+        'navPlaylists',
+        'navProfile',
+      ],
+    );
+  });
+
+  await t.test('removes duplicated navigation arrays from every UI renderer', () => {
+    const files = [
+      '../src/components/Layout.jsx',
+      '../src/components/common/Sidebar.jsx',
+      '../src/components/common/BottomNav.jsx',
+    ];
+
+    for (const relativePath of files) {
+      const source = fs.readFileSync(
+        new URL(relativePath, import.meta.url),
+        'utf8',
+      );
+
+      assert.match(
+        source,
+        /LEGACY_PRIMARY_NAVIGATION/,
+        `${relativePath} must consume the shared navigation source`,
+      );
+
+      assert.doesNotMatch(
+        source,
+        /const getNavItems = \(\) => \[/,
+        `${relativePath} must not define its own navigation array`,
+      );
     }
   });
 });

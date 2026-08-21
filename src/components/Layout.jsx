@@ -8,13 +8,20 @@ import Sidebar from '@/components/common/Sidebar';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
+import { LEGACY_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 
-const getNavItems = () => [
-  { icon: Home, label: t('navFeed'), path: '/' },
-  { icon: Compass, label: t('navExplore'), path: '/explore' },
-  { icon: Heart, label: t('navPlaylists'), path: '/playlists' },
-  { icon: User, label: t('navProfile'), path: '/profile' },
-];
+const NAV_ICONS = Object.freeze({
+  home: Home,
+  discover: Compass,
+  library: Heart,
+  profile: User,
+});
+
+const getNavItems = () => LEGACY_PRIMARY_NAVIGATION.map(item => ({
+  ...item,
+  icon: NAV_ICONS[item.icon],
+  label: t(item.labelKey),
+}));
 
 export default function Layout() {
   const location = useLocation();

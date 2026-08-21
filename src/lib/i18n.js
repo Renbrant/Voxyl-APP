@@ -27,10 +27,16 @@ const translations = {
   search: { pt: 'Buscar', en: 'Search' },
 
   // Navigation
+  navHome: { pt: 'Início', en: 'Home' },
+  navDiscover: { pt: 'Descobrir', en: 'Discover' },
+  navPeople: { pt: 'Pessoas', en: 'People' },
+  navLibrary: { pt: 'Biblioteca', en: 'Library' },
+  navProfile: { pt: 'Perfil', en: 'Profile' },
+
+  // Legacy navigation aliases kept during the v0.4 route migration
   navFeed: { pt: 'Início', en: 'Home' },
   navExplore: { pt: 'Explorar', en: 'Explore' },
   navPlaylists: { pt: 'Curtidas', en: 'Saved' },
-  navProfile: { pt: 'Perfil', en: 'Profile' },
 
   // Feed
   feedSubtitle: { pt: 'Descubra', en: 'Discover' },

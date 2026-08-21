@@ -38,3 +38,46 @@ export const PRIMARY_NAVIGATION_IDS = Object.freeze(
 export const PRIMARY_NAVIGATION_PATHS = Object.freeze(
   PRIMARY_NAVIGATION.map(item => item.path),
 );
+
+const LEGACY_RUNTIME = Object.freeze({
+  home: Object.freeze({
+    path: '/',
+    labelKey: 'navFeed',
+  }),
+  discover: Object.freeze({
+    path: '/explore',
+    labelKey: 'navExplore',
+  }),
+  library: Object.freeze({
+    path: '/playlists',
+    labelKey: 'navPlaylists',
+  }),
+  profile: Object.freeze({
+    path: '/profile',
+    labelKey: 'navProfile',
+  }),
+});
+
+const LEGACY_RUNTIME_IDS = Object.freeze([
+  'home',
+  'discover',
+  'library',
+  'profile',
+]);
+
+export const LEGACY_PRIMARY_NAVIGATION = Object.freeze(
+  LEGACY_RUNTIME_IDS.map(id => {
+    const canonical = PRIMARY_NAVIGATION.find(item => item.id === id);
+    const legacy = LEGACY_RUNTIME[id];
+
+    if (!canonical || !legacy) {
+      throw new Error(`Missing primary navigation compatibility item: ${id}`);
+    }
+
+    return Object.freeze({
+      ...canonical,
+      path: legacy.path,
+      labelKey: legacy.labelKey,
+    });
+  }),
+);
