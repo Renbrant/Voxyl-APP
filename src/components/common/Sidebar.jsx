@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
-import { Home, Compass, Heart, User, LogIn, LogOut } from 'lucide-react';
+import { Home, Compass, Users, Heart, User, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
@@ -10,6 +10,7 @@ import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 const NAV_ICONS = Object.freeze({
   home: Home,
   discover: Compass,
+  people: Users,
   library: Heart,
   profile: User,
 });
@@ -62,9 +63,6 @@ export default function Sidebar() {
           const active = location.pathname === path ||
             (path !== '/' && location.pathname.startsWith(path));
 
-          const showLogin = path === '/profile' && authReady && !isAuthenticated;
-          const DisplayIcon = showLogin ? LogIn : Icon;
-          const displayLabel = showLogin ? t('loginWithGoogle').split(' ')[0] : label;
 
           const handleClick = () => {
             if (isProtected && authReady && !isAuthenticated) {
@@ -85,8 +83,8 @@ export default function Sidebar() {
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
               )}
             >
-              <DisplayIcon size={20} strokeWidth={active ? 2.5 : 1.8} />
-              <span>{displayLabel}</span>
+              <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
+              <span>{label}</span>
             </button>
           );
         })}

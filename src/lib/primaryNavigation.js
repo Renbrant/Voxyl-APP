@@ -82,9 +82,7 @@ export const LEGACY_PRIMARY_NAVIGATION = Object.freeze(
   }),
 );
 
-export const ACTIVE_PRIMARY_NAVIGATION = Object.freeze(
-  PRIMARY_NAVIGATION.filter(item => item.id !== 'people'),
-);
+export const ACTIVE_PRIMARY_NAVIGATION = PRIMARY_NAVIGATION;
 
 export const LEGACY_PRIMARY_ROUTE_REDIRECTS = Object.freeze({
   '/explore': '/discover',

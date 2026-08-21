@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Home, Compass, Heart, User, LogIn } from 'lucide-react';
+import { Home, Compass, Users, Heart, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
@@ -8,6 +8,7 @@ import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
 const NAV_ICONS = Object.freeze({
   home: Home,
   discover: Compass,
+  people: Users,
   library: Heart,
   profile: User,
 });
@@ -49,9 +50,6 @@ export default function BottomNav() {
             navigate(path);
           };
 
-          const showLogin = path === '/profile' && authReady && !isAuthenticated;
-          const DisplayIcon = showLogin ? LogIn : Icon;
-          const displayLabel = showLogin ? t('loginWithGoogle').split(' ')[0] : label;
 
           return (
             <button
@@ -67,9 +65,9 @@ export default function BottomNav() {
                 "relative",
                 active && "after:absolute after:-bottom-0.5 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:rounded-full after:bg-primary"
               )}>
-                <DisplayIcon size={22} strokeWidth={active ? 2.5 : 1.8} />
+                <Icon size={22} strokeWidth={active ? 2.5 : 1.8} />
               </div>
-              <span className="text-xs font-medium">{displayLabel}</span>
+              <span className="text-xs font-medium">{label}</span>
             </button>
           );
         })}

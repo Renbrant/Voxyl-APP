@@ -135,12 +135,13 @@ test('Issue #71 primary navigation architecture', async t => {
     }
   });
 
-  await t.test('activates canonical Discover and Library destinations before People migration', () => {
+  await t.test('activates all five canonical primary destinations', () => {
     assert.deepEqual(
       ACTIVE_PRIMARY_NAVIGATION.map(item => item.id),
       [
         'home',
         'discover',
+        'people',
         'library',
         'profile',
       ],
@@ -151,6 +152,7 @@ test('Issue #71 primary navigation architecture', async t => {
       [
         '/',
         '/discover',
+        '/people',
         '/library',
         '/profile',
       ],
@@ -161,12 +163,12 @@ test('Issue #71 primary navigation architecture', async t => {
       [
         'navHome',
         'navDiscover',
+        'navPeople',
         'navLibrary',
         'navProfile',
       ],
     );
   });
-
   await t.test('preserves legacy primary routes through canonical redirects', () => {
     assert.deepEqual(
       LEGACY_PRIMARY_ROUTE_REDIRECTS,
@@ -224,4 +226,76 @@ test('Issue #71 primary navigation architecture', async t => {
       /navigate\('\/discover'\)/,
     );
   });
+
+  await t.test('exposes People as a stable primary root without duplicating social implementation', () => {
+    const appSource = fs.readFileSync(
+      new URL('../src/App.jsx', import.meta.url),
+      'utf8',
+    );
+
+    const peopleSource = fs.readFileSync(
+      new URL('../src/pages/People.jsx', import.meta.url),
+      'utf8',
+    );
+
+    const exploreSource = fs.readFileSync(
+      new URL('../src/pages/Explore.jsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(
+      appSource,
+      /path="\/people" element=\{<People \/>}/,
+    );
+
+    assert.match(
+      peopleSource,
+      /<Explore[\s\S]*lockedTab="users"[\s\S]*routeBase="\/people"/,
+    );
+
+    assert.match(
+      exploreSource,
+      /lockedTab = null, routeBase = '\/discover'/,
+    );
+
+    assert.match(
+      exploreSource,
+      /const newUrl = qs \? `\$\{routeBase\}\?\$\{qs\}` : routeBase;/,
+    );
+
+    assert.match(
+      exploreSource,
+      /!lockedTab && tab !== 'playlists'/,
+    );
+
+    assert.match(
+      exploreSource,
+      /\{!lockedTab && \(/,
+    );
+  });
+});
+test('Issue #71 keeps canonical Profile identity while preserving auth gating', () => {
+  const rendererPaths = [
+    '../src/components/Layout.jsx',
+    '../src/components/common/BottomNav.jsx',
+    '../src/components/common/Sidebar.jsx',
+  ];
+
+  for (const rendererPath of rendererPaths) {
+    const source = fs.readFileSync(
+      new URL(rendererPath, import.meta.url),
+      'utf8',
+    );
+
+    assert.match(source, /ACTIVE_PRIMARY_NAVIGATION/);
+    assert.match(source, /path === '\/profile'/);
+    assert.match(source, /navigateToLogin\(\)/);
+
+    assert.doesNotMatch(source, /const showLogin =/);
+    assert.doesNotMatch(source, /const DisplayIcon =/);
+    assert.doesNotMatch(source, /const displayLabel =/);
+    assert.doesNotMatch(source, /loginWithGoogle/);
+    assert.doesNotMatch(source, /<DisplayIcon/);
+    assert.doesNotMatch(source, /\{displayLabel\}/);
+  }
 });

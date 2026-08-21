@@ -31,13 +31,13 @@ import {
   togglePlaylistLikeOptimistically,
 } from '@/lib/savedContentQueries';
 
-export default function Explore() {
+export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   const location = useLocation();
   const navigate = useNavigate();
 
   // Read initial state from URL query params (restored when navigating back)
   const params = new URLSearchParams(location.search);
-  const [tab, setTab] = useState(params.get('tab') || 'playlists');
+  const [tab, setTab] = useState(lockedTab || params.get('tab') || 'playlists');
   const [user, setUser] = useState(null);
   const [search, setSearch] = useState(params.get('q') || '');
   const [podcastResults, setPodcastResults] = useState([]);
@@ -61,18 +61,18 @@ export default function Explore() {
   // Sync state to URL so it survives navigation
   useEffect(() => {
     const p = new URLSearchParams();
-    if (tab !== 'playlists') p.set('tab', tab);
+    if (!lockedTab && tab !== 'playlists') p.set('tab', tab);
     if (search) p.set('q', search);
     if (voxylSearch) p.set('vq', voxylSearch);
     if (podcastSortBy !== 'relevance') p.set('sort', podcastSortBy);
     if (podcastLanguage) p.set('lang', podcastLanguage);
     if (podcastCategory) p.set('cat', podcastCategory);
     const qs = p.toString();
-    const newUrl = qs ? `/discover?${qs}` : '/discover';
+    const newUrl = qs ? `${routeBase}?${qs}` : routeBase;
     // Replace state to keep back button pointing to previous page (not previous search state)
     window.history.replaceState(null, '', newUrl);
     console.log('[Explore] Current tab:', tab);
-  }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory]);
+  }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory, lockedTab, routeBase]);
 
   const debouncedQuery = useDebounce(search, 600);
   const debouncedUserSearch = useDebounce(userSearch, 400);
@@ -428,10 +428,12 @@ export default function Explore() {
   return (
     <div ref={containerRef} className="bg-background pb-24 relative">
       <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
-      <VoxylHeader title={t('exploreTitle')} subtitle={t('exploreSubtitle')} right={null} />
+      <VoxylHeader title={lockedTab === 'users' ? t('navPeople') : t('exploreTitle')} subtitle={lockedTab === 'users' ? t('exploreUsers') : t('exploreSubtitle')} right={null} />
 
-      {/* Tabs */}
-      <div className="flex gap-2 px-4 justify-center">
+      {!lockedTab && (
+        <>
+          {/* Tabs */}
+          <div className="flex gap-2 px-4 justify-center">
         {TABS.map(({ key, label, icon: TabIcon }) => (
           <button
             key={key}
@@ -447,7 +449,9 @@ export default function Explore() {
             {label}
           </button>
         ))}
-      </div>
+          </div>
+        </>
+      )}
 
       {/* Search bar and filters */}
       <div className="px-4 mb-4 mt-3">

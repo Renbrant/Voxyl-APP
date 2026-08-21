@@ -11,6 +11,7 @@ import Layout from '@/components/Layout';
 // Add page imports here
 import Feed from '@/pages/Feed';
 import Explore from '@/pages/Explore';
+import People from '@/pages/People';
 import Playlists from '@/pages/Playlists.jsx';
 import Profile from '@/pages/Profile';
 import Settings from '@/pages/Settings';
@@ -126,6 +127,7 @@ const AuthenticatedApp = () => {
         <Route path="/" element={<Feed />} />
         <Route path="/discover" element={<Explore />} />
         <Route path="/explore" element={<LegacyRouteRedirect to="/discover" />} />
+        <Route path="/people" element={<People />} />
         <Route path="/library" element={<Playlists />} />
         <Route path="/playlists" element={<LegacyRouteRedirect to="/library" />} />
         <Route path="/profile" element={<Profile />} />
