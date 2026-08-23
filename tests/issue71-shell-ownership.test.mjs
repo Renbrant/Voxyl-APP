@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-test('Issue #71 keeps child pages from owning primary navigation', () => {
-  const layoutSource = fs.readFileSync(
-    new URL('../src/components/Layout.jsx', import.meta.url),
+test('Issue #71 keeps primary navigation available on standalone playlist detail', () => {
+  const appSource = fs.readFileSync(
+    new URL('../src/App.jsx', import.meta.url),
     'utf8',
   );
 
@@ -13,21 +13,32 @@ test('Issue #71 keeps child pages from owning primary navigation', () => {
     'utf8',
   );
 
+  const playlistRoute =
+    '<Route path="/playlist/:id" element={<PlaylistDetail />} />';
+
   assert.match(
-    layoutSource,
-    /ACTIVE_PRIMARY_NAVIGATION/,
-    'Layout must consume the shared primary-navigation contract',
+    appSource,
+    /<Route element={<Layout \/>}>/,
+    'Primary landing routes must use the shared Layout shell',
+  );
+
+  assert.ok(
+    appSource.includes(playlistRoute),
+    'Playlist detail must remain an explicit standalone route',
   );
 
   assert.match(
-    layoutSource,
-    /md:hidden/,
-    'Layout must own the mobile primary-navigation renderer',
-  );
-
-  assert.doesNotMatch(
     playlistDetailSource,
-    /BottomNav/,
-    'PlaylistDetail must not render or import its own primary navigation',
+    /import BottomNav from '@\/components\/common\/BottomNav';/,
+    'Standalone playlist detail must import the canonical mobile navigation',
+  );
+
+  const bottomNavRenderCount =
+    playlistDetailSource.split('<BottomNav />').length - 1;
+
+  assert.equal(
+    bottomNavRenderCount,
+    1,
+    'Standalone playlist detail must render exactly one primary bottom navigation',
   );
 });

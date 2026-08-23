@@ -30,6 +30,7 @@ import {
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import BottomNav from '@/components/common/BottomNav';
 import {
   loadPlaylistLikeRecords,
   playlistLikeIds,
@@ -766,6 +767,7 @@ export default function PlaylistDetail() {
         onSaved={() => refetchPlaylist()}
       />
     )}
+    <BottomNav />
     </>
   );
 }
