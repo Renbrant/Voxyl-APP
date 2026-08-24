@@ -97,8 +97,8 @@ Major changes include:
 
 - Five canonical primary destinations: **Home · Discover · People · Library · Profile**.
 - Shared navigation contracts for desktop and mobile.
-- Canonical /discover, /people, /library, and /profile routes.
-- Compatibility redirects for legacy /explore and /playlists routes.
+- Canonical `/discover`, `/people`, `/library`, and `/profile` routes.
+- Compatibility redirects for legacy `/explore` and `/playlists` routes.
 - Primary navigation preserved on standalone playlist-detail screens.
 - Transparent in-app Voxyl branding in the sidebar and loading state.
 - Persistent Android playback foundation introduced in v0.3.2 to prevent duplicate or orphaned audio sessions.
