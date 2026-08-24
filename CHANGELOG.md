@@ -6,6 +6,56 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.0 - August 2026
+
+### UX Phase 1 - Primary Navigation
+
+- Completed Issue #71, establishing the new primary navigation shell.
+- Defined five canonical destinations: **Home · Discover · People · Library · Profile**.
+- Added canonical `/discover`, `/people`, `/library`, and `/profile` routes.
+- Preserved legacy `/explore` and `/playlists` URLs through compatibility redirects.
+- Centralized navigation metadata so desktop and mobile renderers use one shared contract.
+- Preserved primary navigation while viewing standalone playlist details.
+
+### Branding
+
+- Applied the transparent Voxyl symbol to the in-app sidebar and loading state.
+- Preserved the installed Android and PWA application icons.
+
+### Production Reconciliation
+
+- Reconciled the validated v0.4.0 navigation line with the transparent-logo fix.
+- Restored `main` as the authoritative v0.4.0 source at `d39c00df6e2a5613723d7669b69c4f5f64dedd57`.
+- Rebuilt and explicitly deployed that exact artifact after an older v0.3.2 artifact temporarily returned to production.
+- Verified production metadata against version `0.4.0`, the full Git SHA, and branch `main`.
+
+### Validation
+
+- Full automated suite passed with 378 tests and 0 failures.
+- ESLint validation passed.
+- Production build completed with exact artifact provenance.
+- Real production smoke testing confirmed v0.4.0 and Home · Discover · People · Library · Profile.
+
+---
+
+## v0.3.2 - August 2026
+
+### Persistent Android Playback
+
+- Fixed Issue #81, where Android UI recreation could leave an orphaned audio session playing in the background.
+- Replaced Activity-owned playback with a single process-owned Media3 `MediaSessionService`.
+- Added a reconnectable Capacitor controller bridge instead of creating a second player after Activity recreation.
+- Preserved queue identity, autoplay policy, current item, and playback state across UI recreation.
+- Added native next/previous queue navigation and persistent state restoration.
+- Prevented duplicate parallel audio sessions when Voxyl is reopened.
+- Added lightweight native position/duration polling while retaining full state restoration during reconnection.
+
+### Versioning
+
+- Advanced the beta line to v0.3.2 before the v0.4 UX milestone.
+
+---
+
 ## v0.3.1 - August 2026
 
 ### Android Clerk Authentication

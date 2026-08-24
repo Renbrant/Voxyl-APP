@@ -312,21 +312,13 @@ When native behavior changes, build and test the Android application on a real d
 
 ## Production Deployment
 
-Cloudflare Pages automatically deploys changes pushed to the `main` branch.
+The `main` branch is the authoritative source for the production web application.
 
-The production application is available at:
+Cloudflare Pages normally publishes from `main`, but Git state and deployment state must be treated as separate systems. A merge, push, or branch/ref reconciliation is not sufficient evidence that the intended artifact is live.
 
-```text
-https://v.renbrant.com
-```
+The production application is available at `https://v.renbrant.com`.
 
-Every production build generates:
-
-```text
-/version.json
-```
-
-The endpoint reports:
+Every production build generates `/version.json`, which reports:
 
 - Application version
 - Short Git commit
@@ -334,29 +326,44 @@ The endpoint reports:
 - Deployment branch
 - Build timestamp
 
-Example:
+### Production release invariant
 
-```json
-{
-  "app": "voxyl",
-  "version": "0.3.0",
-  "git_commit": "baaad333",
-  "git_commit_full": "baaad33332c4ed88905757a225e5918bbdf67ce7",
-  "branch": "main",
-  "built_at": "2026-07-10T13:19:24.469Z"
-}
-```
+A production web release is complete only when all of the following refer to the same intended source:
 
-Verify production after deployment:
+1. `origin/main` resolves to the intended full Git SHA.
+2. The production artifact is built from that exact SHA.
+3. `dist/version.json` reports the intended version, full SHA, and `main` branch before publication.
+4. The artifact is published to the Cloudflare Pages production branch.
+5. `https://v.renbrant.com/version.json` reports the same intended version, full SHA, and `main` branch after publication.
+6. A real production smoke test confirms the expected user-visible behavior.
 
-```powershell
-curl.exe -s https://v.renbrant.com/version.json
-```
+Do not infer deployment success only from a successful merge, push, or the existence of a newer commit on `main`.
 
-The reported commit must match the intended commit from `main`.
+### Git-integrated deployment
+
+Normal `main` changes may be published through the Cloudflare Pages Git integration.
+
+After that deployment completes, verify the custom production domain with:
+
+    Invoke-RestMethod "https://v.renbrant.com/version.json"
+
+The reported full commit must match the intended `origin/main` commit.
+
+### Controlled explicit deployment
+
+A direct Git ref reconciliation or another nonstandard source update may not trigger the Git-integrated deployment path.
+
+When explicit deployment is required, build and validate the artifact from an isolated clean worktree pinned to the intended immutable SHA.
+
+The controlled Pages publication command is:
+
+    npx wrangler pages deploy dist --project-name=voxyl-app --branch=main --commit-hash=<FULL_GIT_SHA>
+
+After publication, `/version.json` on the custom production domain remains the final provenance gate.
+
+If the custom domain does not advance to the expected artifact, do not repeatedly redeploy blindly. Diagnose the Cloudflare Pages deployment and production-branch state first.
 
 ---
-
 ## Versioning
 
 Voxyl follows Semantic Versioning.
