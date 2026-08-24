@@ -99,11 +99,11 @@ const AuthenticatedApp = () => {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl overflow-hidden">
+          <div className="w-10 h-10 flex items-center justify-center">
             <img
-              src="/branding/voxyl-icon-192.png"
+              src="/branding/voxyl-symbol-transparent.png"
               alt="Voxyl"
-              className="h-full w-full object-cover"
+              className="h-full w-full object-contain"
             />
           </div>
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
