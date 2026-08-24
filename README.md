@@ -41,7 +41,7 @@ Production deployment metadata is available at:
 - **Guest Mode:** Explore public playlists and trending content without creating an account.
 - **Flexible Visibility:** Set playlists as public, followers-only, or private.
 - **Advanced Playback:** Resume episodes, track progress, autoplay the next episode, and continue listening across navigation.
-- **Native Android Playback:** Background audio support through Capacitor and native audio integration.
+- **Native Android Playback:** Process-owned Media3 playback with persistent queue and state restoration across Android Activity and WebView recreation.
 - **Episode Filtering:** Filter episodes by publication date and maximum duration.
 - **Feed-Level Controls:** Configure intro and outro skip values for individual feeds.
 - **Responsive Interface:** Optimized layouts for mobile, tablet, and desktop.
@@ -68,9 +68,9 @@ Production deployment metadata is available at:
 
 ---
 
-## Voxyl 0.3.1 Beta
+## Voxyl 0.4.0 Beta
 
-The Voxyl 0.3.x beta line represents the largest architectural change in the project so far.
+Voxyl 0.4.0 begins the UX-focused beta line while preserving the independent Cloudflare and Clerk foundation delivered during the 0.3.x releases.
 
 The application was migrated away from Base44 and now runs on an independent infrastructure built with Cloudflare and Clerk.
 
@@ -92,6 +92,16 @@ Major changes include:
 - Production Android builds protected against accidentally using Clerk Development configuration
 - Repaired and production-validated user search, follows, follow requests, profile photos, and social identity flows
 - Added separate custom and Clerk/provider avatar storage with deterministic avatar precedence
+
+### v0.4.0 milestone
+
+- Five canonical primary destinations: **Home · Discover · People · Library · Profile**.
+- Shared navigation contracts for desktop and mobile.
+- Canonical /discover, /people, /library, and /profile routes.
+- Compatibility redirects for legacy /explore and /playlists routes.
+- Primary navigation preserved on standalone playlist-detail screens.
+- Transparent in-app Voxyl branding in the sidebar and loading state.
+- Persistent Android playback foundation introduced in v0.3.2 to prevent duplicate or orphaned audio sessions.
 
 For the full release history, see the [Changelog](CHANGELOG.md).
 
@@ -359,7 +369,7 @@ Example:
 ```text
 feat(player): add playback speed control
 fix(auth): restore Clerk token during startup
-docs(readme): update Voxyl 0.3.x documentation
+docs(readme): update Voxyl 0.4.0 documentation
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete guide.
@@ -430,8 +440,8 @@ Voxyl combines a background in technology with a desire to create a more organiz
 
 ## Current Version
 
-**Voxyl 0.3.1 — Beta**
+**Voxyl 0.4.0 — Beta**
 
-Voxyl 0.3.1 includes the Cloudflare and Clerk architecture, production-validated profile and social flows, native Clerk Android authentication, authenticated and signed-out session restoration, automated deployments, and complete production version traceability.
+Voxyl 0.4.0 establishes the five-destination primary navigation architecture — **Home · Discover · People · Library · Profile** — on top of the production-validated Cloudflare, Clerk, social, progress-sync, and persistent Android playback foundations.
 
 Thank you for helping shape the future of social podcasting.
