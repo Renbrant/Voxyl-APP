@@ -565,11 +565,15 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
               {playlistLikesLoading && (
                 <div className="mb-3 h-10 rounded-2xl bg-secondary animate-pulse" />
               )}
-              {filteredPlaylists.map((pl, i) => (
+              {filteredPlaylists.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                  {filteredPlaylists.map((pl, i) => (
                 <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                  <PlaylistCard playlist={pl} compact liked={!playlistLikesError && !playlistLikesLoading && likedPlaylistIds.includes(pl.id)} onLike={playlistLikesLoading || playlistLikesFetching || playlistLikesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
+                  <PlaylistCard playlist={pl} discovery liked={!playlistLikesError && !playlistLikesLoading && likedPlaylistIds.includes(pl.id)} onLike={playlistLikesLoading || playlistLikesFetching || playlistLikesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
                 </motion.div>
-              ))}
+                  ))}
+                </div>
+              )}
               {filteredPlaylists.length === 0 && (
                 <div className="text-center py-16 text-muted-foreground">
                   <p className="text-4xl mb-3">{voxylSearch.trim() ? '🔍' : '🎧'}</p>
@@ -742,7 +746,9 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
                 </button>
               </div>
             )}
-            {!podcastLoading && !podcastError && podcastResults.map((podcast, i) => (
+            {!podcastLoading && !podcastError && podcastResults.length > 0 && (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {podcastResults.map((podcast, i) => (
               <PodcastResultCard
                 key={podcast.id}
                 podcast={podcast}
@@ -751,7 +757,9 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
                 onLike={podcastLikesLoading || podcastLikesFetching || podcastLikesError ? undefined : handleLikePodcast}
                 liked={!podcastLikesError && !podcastLikesLoading && likedFeedUrls.has(normalizePodcastFeedUrl(podcast.feedUrl))}
               />
-            ))}
+                ))}
+              </div>
+            )}
             {!podcastLoading && !podcastError && search.trim() && podcastResults.length === 0 && (
               <div className="text-center py-16 text-muted-foreground">
                 <p className="text-4xl mb-3">🔍</p>

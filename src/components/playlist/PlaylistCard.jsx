@@ -15,7 +15,7 @@ const GRADIENT_COLORS = [
   'from-green-500 to-cyan-400',
 ];
 
-export default function PlaylistCard({ playlist, onLike = null, liked = false, compact = false, currentUser = null, onBlocked = null, onEdited = null }) {
+export default function PlaylistCard({ playlist, onLike = null, liked = false, compact = false, discovery = false, currentUser = null, onBlocked = null, onEdited = null }) {
   const [editingPlaylist, setEditingPlaylist] = useState(false);
   const [coverImage, setCoverImage] = useState(null);
   const gradient = GRADIENT_COLORS[playlist.id?.charCodeAt(0) % GRADIENT_COLORS.length] || GRADIENT_COLORS[0];
@@ -96,9 +96,11 @@ export default function PlaylistCard({ playlist, onLike = null, liked = false, c
                 <img src={coverImage} alt="" className="absolute inset-0 w-full h-full object-cover" />
               )}
               <div className="absolute inset-0 bg-black/10" />
-              <div className="absolute top-2 right-2">
-                <VisibilityBadge visibility={playlist.visibility || 'public'} />
-              </div>
+              {!discovery && (
+                <div className="absolute top-2 right-2">
+                  <VisibilityBadge visibility={playlist.visibility || 'public'} />
+                </div>
+              )}
             </div>
             <div className="p-3">
               <p className="font-semibold text-sm line-clamp-1 mb-0.5">{playlist.name}</p>
@@ -114,12 +116,16 @@ export default function PlaylistCard({ playlist, onLike = null, liked = false, c
                   <span>{playlist.plays_count || 0} ▶</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <div className="w-7 h-7 rounded-full gradient-primary flex items-center justify-center">
-                    <Play size={13} fill="white" className="text-white ml-0.5" />
-                  </div>
-                  <button onClick={handleShare} className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
-                    <Share2 size={13} />
-                  </button>
+                  {!discovery && (
+                    <>
+                      <div className="w-7 h-7 rounded-full gradient-primary flex items-center justify-center">
+                        <Play size={13} fill="white" className="text-white ml-0.5" />
+                      </div>
+                      <button onClick={handleShare} className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
+                        <Share2 size={13} />
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
                     onTouchEnd={e => { e.preventDefault(); e.stopPropagation(); onLike?.(playlist); }}
@@ -127,6 +133,26 @@ export default function PlaylistCard({ playlist, onLike = null, liked = false, c
                   >
                     <Heart size={13} fill={liked ? "currentColor" : "none"} />
                   </button>
+                  {discovery && (
+                    isOwner ? (
+                      <button
+                        onClick={e => { e.preventDefault(); e.stopPropagation(); setEditingPlaylist(true); }}
+                        onTouchEnd={e => { e.preventDefault(); e.stopPropagation(); setEditingPlaylist(true); }}
+                        className="p-1.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+                    ) : (
+                      <ReportBlockMenu
+                        currentUser={currentUser}
+                        targetUser={{ id: playlist.creator_id, name: playlist.creator_name }}
+                        contentType="playlist"
+                        contentId={playlist.id}
+                        contentTitle={playlist.name}
+                        onBlocked={onBlocked}
+                      />
+                    )
+                  )}
                 </div>
               </div>
             </div>
