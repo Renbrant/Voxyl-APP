@@ -463,3 +463,184 @@ describe('Home popularity ranking Worker route', () => {
     );
   });
 });
+
+describe('Issue #72 Home UI source contract', () => {
+  const feedSource = fs.readFileSync(
+    new URL('../src/pages/Feed.jsx', import.meta.url),
+    'utf8',
+  );
+
+  const i18nSource = fs.readFileSync(
+    new URL('../src/lib/i18n.js', import.meta.url),
+    'utf8',
+  );
+
+  it('uses For You as the stable default Home tab', () => {
+    assert.match(
+      feedSource,
+      /useState\('for-you'\)/,
+    );
+
+    assert.doesNotMatch(
+      feedSource,
+      /setTab\('my-playlists'\)/,
+    );
+
+    assert.match(
+      feedSource,
+      /tab === 'for-you' && authResolved && !user/,
+    );
+
+    assert.match(
+      feedSource,
+      /tab === 'for-you' && user && hiddenUsersReady/,
+    );
+
+    assert.match(
+      feedSource,
+      /onClick=\{redirectToLogin\}/,
+    );
+  });
+
+  it('exposes For You, Trending, and Last Week in the approved order', () => {
+    const forYou = feedSource.indexOf("key: 'for-you'");
+    const trending = feedSource.indexOf("key: 'trending'");
+    const lastWeek = feedSource.indexOf("key: 'last-week'");
+
+    assert.ok(forYou >= 0);
+    assert.ok(trending > forYou);
+    assert.ok(lastWeek > trending);
+
+    assert.doesNotMatch(
+      feedSource,
+      /key: 'recent'/,
+    );
+
+    assert.doesNotMatch(
+      feedSource,
+      /key: 'my-playlists'/,
+    );
+  });
+
+  it('maps Trending to 90 days and Last Week to 7 days', () => {
+    assert.match(
+      feedSource,
+      /const rankingDays = tab === 'last-week' \? 7 : 90;/,
+    );
+
+    assert.match(
+      feedSource,
+      /queryKey: \['home-rankings', rankingDays\]/,
+    );
+
+    assert.match(
+      feedSource,
+      /queryFn: \(\) => voxylApi\.home\.rankings\(rankingDays\)/,
+    );
+
+    assert.match(
+      feedSource,
+      /enabled: tab === 'trending' \|\| tab === 'last-week'/,
+    );
+  });
+
+  it('removes legacy lifetime and creation-date ranking sources from Home', () => {
+    const forbiddenMarkers = [
+      "queryKey: ['feed-playlists']",
+      "queryKey: ['top-podcasts']",
+      'getTopPodcastsByPlayback',
+      'const sortedPlaylists',
+      'const recentPlaylists',
+      "useState('trending')",
+    ];
+
+    for (const marker of forbiddenMarkers) {
+      assert.equal(
+        feedSource.includes(marker),
+        false,
+        'Legacy Home marker survived: ' + marker,
+      );
+    }
+  });
+
+  it('renders playlists and podcasts from rolling-window metrics', () => {
+    assert.match(
+      feedSource,
+      /plays_count: playlist\.window_plays_count/,
+    );
+
+    assert.match(
+      feedSource,
+      /podcast\.playCount/,
+    );
+
+    const playlistSection = feedSource.indexOf("t('feedTopPlaylists')");
+    const podcastSection = feedSource.indexOf("t('feedTopPodcasts')");
+
+    assert.ok(playlistSection >= 0);
+    assert.ok(podcastSection > playlistSection);
+  });
+
+  it('provides explicit loading, error, retry, and empty states', () => {
+    assert.match(
+      feedSource,
+      /if \(isLoading\)/,
+    );
+
+    assert.match(
+      feedSource,
+      /if \(isError\)/,
+    );
+
+    assert.match(
+      feedSource,
+      /if \(!playlists\.length && !podcasts\.length\)/,
+    );
+
+    assert.match(
+      feedSource,
+      /onClick=\{onRetry\}/,
+    );
+  });
+
+  it('labels backend windows exactly as 90 days and 7 days', () => {
+    assert.match(
+      i18nSource,
+      /feedTrendingWindow: \{ pt: 'Últimos 90 dias', en: 'Last 90 days' \}/,
+    );
+
+    assert.match(
+      i18nSource,
+      /feedLastWeekWindow: \{ pt: 'Últimos 7 dias', en: 'Last 7 days' \}/,
+    );
+
+    assert.match(
+      i18nSource,
+      /feedForYou: \{ pt: 'Para Você', en: 'For You' \}/,
+    );
+
+    assert.match(
+      i18nSource,
+      /feedLastWeek: \{ pt: 'Última Semana', en: 'Last Week' \}/,
+    );
+  });
+});
+
+describe('Issue #72 Home header source contract', () => {
+  const homeHeaderSource = fs.readFileSync(
+    new URL('../src/pages/Feed.jsx', import.meta.url),
+    'utf8',
+  );
+
+  it('does not present Discover as a Home subtitle', () => {
+    assert.doesNotMatch(
+      homeHeaderSource,
+      /subtitle=\{t\('feedSubtitle'\)\}/,
+    );
+
+    assert.match(
+      homeHeaderSource,
+      /subtitle=\{null\}/,
+    );
+  });
+});

@@ -620,7 +620,8 @@ describe('Block Worker routes', () => {
     const exploreSource = fs.readFileSync(new URL('../src/pages/Explore.jsx', import.meta.url), 'utf8');
 
     assert.match(feedSource, /canRenderSocialContent = !user \|\| hiddenUsersReady/);
-    assert.match(feedSource, /tab !== 'my-playlists' && canRenderSocialContent/);
+    assert.match(feedSource, /tab === 'for-you' && user && hiddenUsersReady/);
+    assert.match(feedSource, /\(tab === 'trending' \|\| tab === 'last-week'\) &&\s+canRenderSocialContent && \(/);
     assert.match(exploreSource, /showHiddenUsersGate/);
     assert.match(exploreSource, /tab === 'playlists' && !showHiddenUsersGate/);
     assert.match(exploreSource, /tab === 'users' && !showHiddenUsersGate/);

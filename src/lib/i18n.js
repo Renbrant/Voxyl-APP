@@ -40,7 +40,18 @@ const translations = {
 
   // Feed
   feedSubtitle: { pt: 'Descubra', en: 'Discover' },
+  feedForYou: { pt: 'Para Você', en: 'For You' },
   feedTrending: { pt: 'Em Alta', en: 'Trending' },
+  feedLastWeek: { pt: 'Última Semana', en: 'Last Week' },
+  feedTrendingWindow: { pt: 'Últimos 90 dias', en: 'Last 90 days' },
+  feedLastWeekWindow: { pt: 'Últimos 7 dias', en: 'Last 7 days' },
+  feedTopPlaylists: { pt: 'Top Playlists', en: 'Top Playlists' },
+  feedTopPodcasts: { pt: 'Top Podcasts', en: 'Top Podcasts' },
+  feedRankingsError: { pt: 'Não foi possível carregar este ranking.', en: 'Could not load this ranking.' },
+  feedRankingsEmpty: { pt: 'Ainda não há reproduções suficientes neste período.', en: 'There is not enough listening activity in this period yet.' },
+  feedSignInForYouTitle: { pt: 'Sua Home, do seu jeito', en: 'Your Home, your way' },
+  feedSignInForYouHint: { pt: 'Entre para continuar ouvindo e ver seu histórico recente.', en: 'Sign in to continue listening and see your recent history.' },
+  feedSignInForYouAction: { pt: 'Entrar', en: 'Sign in' },
   feedRecent: { pt: 'Recentes', en: 'Recent' },
   feedPlaylistsHot: { pt: 'Playlists em Alta', en: 'Trending Playlists' },
   feedPodcastsHot: { pt: 'Podcasts em Alta', en: 'Trending Podcasts' },
