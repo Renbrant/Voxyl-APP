@@ -117,6 +117,75 @@ describe('voxyl API entity client', () => {
   });
 });
 
+describe('voxyl Home ranking client', () => {
+  it('requests the 90-day and 7-day Home ranking windows through GET query parameters', async () => {
+    const { voxylApi, setAuthTokenGetter } = await loadClient();
+    setAuthTokenGetter(() => null);
+
+    const requests = [];
+
+    mock.method(globalThis, 'fetch', async (url, options = {}) => {
+      const requestUrl = new URL(url);
+      requests.push({
+        pathname: requestUrl.pathname,
+        days: requestUrl.searchParams.get("days"),
+        method: options.method,
+        body: options.body,
+      });
+
+      return Response.json({
+        ok: true,
+        window_days: Number(requestUrl.searchParams.get("days")),
+        playlists: [],
+        podcasts: [],
+      });
+    });
+
+    const trending = await voxylApi.home.rankings(90);
+    const lastWeek = await voxylApi.home.rankings(7);
+
+    assert.deepEqual(requests, [
+      {
+        pathname: '/api/home/rankings',
+        days: '90',
+        method: 'GET',
+        body: undefined,
+      },
+      {
+        pathname: '/api/home/rankings',
+        days: '7',
+        method: 'GET',
+        body: undefined,
+      },
+    ]);
+
+    assert.equal(trending.window_days, 90);
+    assert.equal(lastWeek.window_days, 7);
+  });
+
+  it('defaults the Home ranking client to the 90-day Trending window', async () => {
+    const { voxylApi, setAuthTokenGetter } = await loadClient();
+    setAuthTokenGetter(() => null);
+
+    let requestUrl;
+
+    mock.method(globalThis, 'fetch', async (url) => {
+      requestUrl = new URL(url);
+      return Response.json({
+        ok: true,
+        window_days: 90,
+        playlists: [],
+        podcasts: [],
+      });
+    });
+
+    await voxylApi.home.rankings();
+
+    assert.equal(requestUrl.pathname, '/api/home/rankings');
+    assert.equal(requestUrl.searchParams.get('days'), '90');
+  });
+});
+
 describe('voxyl API auth redirect', () => {
   it('starts Clerk sign-in when redirectToSignIn is available', async () => {
     const { voxylApi } = await loadClient();

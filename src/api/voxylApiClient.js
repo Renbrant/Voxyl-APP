@@ -225,6 +225,11 @@ export const voxylApi = {
       return apiFetch("/blocks/hidden-users").then((data) => data?.user_ids || []);
     },
   },
+  home: {
+    rankings(days = 90) {
+      return apiFetch("/home/rankings", { params: { days } });
+    },
+  },
   functions: {
     invoke(name, payload = {}) {
       return apiFetch(`/functions/${name}`, { method: "POST", body: payload }).then(withDataEnvelope);

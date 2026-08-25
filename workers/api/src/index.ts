@@ -433,6 +433,10 @@ function getBlockId(pathname: string): string | null {
   }
 }
 
+function isHomeRankingsRoute(pathname: string): boolean {
+  return pathname === "/api/home/rankings" || pathname === "/home/rankings";
+}
+
 function isTopPodcastsRoute(pathname: string): boolean {
   return pathname === "/functions/getTopPodcastsByPlayback" || pathname === "/api/functions/getTopPodcastsByPlayback";
 }
@@ -5875,6 +5879,11 @@ type PublicPodcastPlay = {
 
 function parsePodcastPlayHistoryLimit(request: Request): number {
   const value = new URL(request.url).searchParams.get("limit");
+
+  if (value === "all") {
+    return -1;
+  }
+
   const parsed = Number(value);
 
   if (!value || !Number.isFinite(parsed)) {
@@ -6172,6 +6181,102 @@ function toTopPodcast(feed: unknown, playCount: number): TopPodcast | null {
   };
 }
 
+type HomePodcastRankingRow = {
+  feed_url: string;
+  podcast_title: string | null;
+  podcast_image: string | null;
+  play_count: number;
+};
+
+function getHomeRankingWindowDays(request: Request): 7 | 90 | null {
+  const value = new URL(request.url).searchParams.get("days");
+
+  if (value === null || value === "" || value === "90") {
+    return 90;
+  }
+
+  if (value === "7") {
+    return 7;
+  }
+
+  return null;
+}
+
+async function homeRankingsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const windowDays = getHomeRankingWindowDays(request);
+
+  if (windowDays === null) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "days must be 7 or 90",
+      },
+      400,
+      corsHeaders,
+    );
+  }
+
+  const windowModifier = `-${windowDays} days`;
+
+  const playlistRows = await env.DB.prepare(
+    `${rankedPlaylistSelect},
+       COUNT(pp.id) AS window_plays_count
+     FROM playlists p
+     INNER JOIN podcast_plays pp
+       ON pp.playlist_id = p.id
+      AND datetime(COALESCE(NULLIF(TRIM(pp.played_at), ''), pp.created_at)) >= datetime('now', ?)
+     WHERE p.visibility = 'public'
+     GROUP BY p.id, p.legacy_base44_playlist_id, p.creator_id, p.creator_clerk_user_id,
+       p.creator_legacy_base44_user_id, p.title, p.description, p.cover_image, p.visibility,
+       p.rss_feeds, p.max_duration, p.time_filter_hours, p.episodes_sort_order, p.likes_count,
+       p.plays_count, p.creator_username, p.creator_picture, p.creator_hidden, p.created_at, p.updated_at
+     HAVING COUNT(pp.id) > 0
+     ORDER BY window_plays_count DESC, p.id ASC
+     LIMIT 50`,
+  )
+    .bind(windowModifier)
+    .all<D1Playlist & { window_plays_count: number }>();
+
+  const podcastRows = await env.DB.prepare(
+    `SELECT pp.feed_url AS feed_url,
+       MAX(NULLIF(TRIM(pp.podcast_title), '')) AS podcast_title,
+       MAX(NULLIF(TRIM(pp.podcast_image), '')) AS podcast_image,
+       COUNT(*) AS play_count
+     FROM podcast_plays pp
+     WHERE pp.feed_url IS NOT NULL
+       AND TRIM(pp.feed_url) <> ''
+       AND datetime(COALESCE(NULLIF(TRIM(pp.played_at), ''), pp.created_at)) >= datetime('now', ?)
+     GROUP BY pp.feed_url
+     HAVING COUNT(*) > 0
+     ORDER BY play_count DESC, pp.feed_url ASC
+     LIMIT 50`,
+  )
+    .bind(windowModifier)
+    .all<HomePodcastRankingRow>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      window_days: windowDays,
+      playlists: (playlistRows.results || []).map((row) => ({
+        ...toPublicPlaylist(row),
+        window_plays_count: Number(row.window_plays_count) || 0,
+      })),
+      podcasts: (podcastRows.results || []).map((row) => ({
+        feedUrl: row.feed_url,
+        title: row.podcast_title,
+        author: null,
+        image: row.podcast_image,
+        description: null,
+        playCount: Number(row.play_count) || 0,
+      })),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function topPodcastsByPlaybackResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const playlistRows = await env.DB.prepare(
@@ -6320,6 +6425,10 @@ export default {
 
       if (request.method === "GET" && blockStatusTargetId) {
         return withCors(await blockStatusResponse(request, env, blockStatusTargetId), request, env);
+      }
+
+      if (request.method === "GET" && isHomeRankingsRoute(pathname)) {
+        return withCors(await homeRankingsResponse(request, env), request, env);
       }
 
       if ((request.method === "GET" || request.method === "POST") && isTopPodcastsRoute(pathname)) {

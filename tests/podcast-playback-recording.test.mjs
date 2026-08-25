@@ -155,7 +155,7 @@ function createPlaybackDb() {
                   row.clerk_user_id === clerk_user_id ||
                   (hasLegacyPredicate && row.legacy_base44_user_id === legacy_base44_user_id)
                 ))
-                  .slice(0, limit)
+                  .slice(0, limit < 0 ? state.plays.length : limit)
                   .map(({
                     id,
                     playlist_id,
@@ -521,7 +521,7 @@ describe('podcast playback recording Worker route', () => {
     assert.deepEqual(historyCall.params, ['d1-real-user', 'clerk-user-1', 'legacy-real-user', 100]);
   });
 
-  it('orders playback history newest first and bounds limit to 100', async () => {
+  it('orders playback history newest first, bounds numeric limits to 100, and supports full history', async () => {
     const { token, jwk } = createJwt();
     installJwksMock(jwk);
     const db = createPlaybackDb();
@@ -549,6 +549,16 @@ describe('podcast playback recording Worker route', () => {
     assert.equal(data.items[0].id, 'play-104');
     assert.equal(data.items[1].id, 'play-103');
     assert.equal(db.state.calls.find((call) => call.kind === 'all' && /FROM podcast_plays/s.test(call.sql)).params.at(-1), 100);
+
+    const fullResponse = await worker.fetch(request('/api/plays?limit=all', { method: 'GET', token }), { ...baseEnv, DB: db });
+    const fullData = await body(fullResponse);
+
+    assert.equal(fullResponse.status, 200);
+    assert.equal(fullData.items.length, 105);
+    assert.equal(fullData.items[0].id, 'play-104');
+    assert.equal(fullData.items.at(-1).id, 'play-000');
+    const historyCalls = db.state.calls.filter((call) => call.kind === 'all' && /FROM podcast_plays/s.test(call.sql));
+    assert.equal(historyCalls.at(-1).params.at(-1), -1);
   });
 
   it('stores valid guest playback with nullable user identity', async () => {

@@ -1,19 +1,25 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  AlertCircle,
+  Clock3,
+  Flame,
+  Loader2,
+  Sparkles,
+} from 'lucide-react';
+
+import { voxylApi } from '@/api/voxylApiClient';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
 import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
 import MyPlaylistsContent from '@/components/feed/MyPlaylistsContent';
-import { Flame, Sparkles, Play, User } from 'lucide-react';
 import { useRequireAuth } from '@/hooks/useRequireAuth';
-import { cn } from '@/lib/utils';
-import { motion } from 'framer-motion';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
-import { t } from '@/lib/i18n';
 import { asArray } from '@/lib/arrayUtils';
+import { t } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 import {
   loadPlaylistLikeRecords,
   playlistLikeIds,
@@ -22,6 +28,177 @@ import {
   togglePlaylistLikeOptimistically,
 } from '@/lib/savedContentQueries';
 
+function HomeRankedContent({
+  rankingDays,
+  playlists,
+  podcasts,
+  isLoading,
+  isError,
+  onRetry,
+  user,
+  likedIds,
+  likesLoading,
+  likesFetching,
+  likesError,
+  onRetryLikes,
+  handleLike,
+  setBlockedIds,
+}) {
+  const windowLabel = rankingDays === 7
+    ? t('feedLastWeekWindow')
+    : t('feedTrendingWindow');
+
+  if (isLoading) {
+    return (
+      <div className="py-6">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
+          <Loader2 size={18} className="animate-spin text-primary" />
+          <span>{t('loading')}</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map(item => (
+            <div
+              key={item}
+              className="aspect-square rounded-2xl bg-secondary animate-pulse"
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center py-16 gap-3 text-center text-muted-foreground">
+        <AlertCircle size={28} className="text-destructive" />
+        <p className="font-medium text-foreground">
+          {t('feedRankingsError')}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="inline-flex items-center px-4 py-2 rounded-full gradient-primary text-white text-sm font-medium"
+        >
+          {t('retry')}
+        </button>
+      </div>
+    );
+  }
+
+  if (!playlists.length && !podcasts.length) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <p className="text-4xl mb-3">🎧</p>
+        <p className="font-medium text-foreground">
+          {t('feedRankingsEmpty')}
+        </p>
+        <p className="text-sm mt-1">{windowLabel}</p>
+      </div>
+    );
+  }
+
+  const likesUnavailable = likesLoading || likesFetching || likesError;
+
+  return (
+    <div className="space-y-8">
+      {user && likesError && (
+        <div className="rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
+          <span>{t('explorePlaylistsError')}</span>
+          <button
+            type="button"
+            onClick={onRetryLikes}
+            className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white"
+          >
+            {t('retry')}
+          </button>
+        </div>
+      )}
+
+      {playlists.length > 0 && (
+        <section>
+          <div className="mb-3">
+            <h2 className="text-base font-semibold text-foreground">
+              {t('feedTopPlaylists')}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {windowLabel}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            {playlists.slice(0, 12).map(playlist => (
+              <PlaylistCard
+                key={playlist.id}
+                playlist={{
+                  ...playlist,
+                  plays_count: playlist.window_plays_count,
+                }}
+                liked={
+                  !likesError &&
+                  !likesLoading &&
+                  likedIds.includes(playlist.id)
+                }
+                onLike={likesUnavailable ? undefined : handleLike}
+                currentUser={user}
+                onBlocked={id =>
+                  setBlockedIds(previous => [
+                    ...new Set([...previous, id]),
+                  ])
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {podcasts.length > 0 && (
+        <section>
+          <div className="mb-3">
+            <h2 className="text-base font-semibold text-foreground">
+              {t('feedTopPodcasts')}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {windowLabel}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            {podcasts.slice(0, 12).map(podcast => (
+              <Link
+                to={'/podcast/' + encodeURIComponent(podcast.feedUrl)}
+                key={podcast.feedUrl}
+                className="flex flex-col gap-2 p-2 rounded-2xl border border-border bg-card hover:border-primary/30 transition-all active:scale-95"
+              >
+                <div className="w-full aspect-square rounded-xl overflow-hidden bg-secondary">
+                  {podcast.image ? (
+                    <img
+                      src={podcast.image}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-purple-800 via-primary/60 to-cyan-600" />
+                  )}
+                </div>
+
+                <div className="min-w-0 px-1 pb-1">
+                  <p className="text-sm font-medium line-clamp-2 text-foreground">
+                    {podcast.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {podcast.playCount || 0} {t('feedRepros')}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export default function Feed() {
   const [user, setUser] = useState(null);
   const [blockedIds, setBlockedIds] = useState([]);
@@ -29,27 +206,35 @@ export default function Feed() {
   const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
   const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
   const [hiddenUsersError, setHiddenUsersError] = useState('');
-  const [followingIds, setFollowingIds] = useState(new Set());
-  const [tab, setTab] = useState('trending');
-  const [expandedPlaylists, setExpandedPlaylists] = useState(false);
-  const [expandedPodcasts, setExpandedPodcasts] = useState(false);
-  const { requireAuth } = useRequireAuth();
+  const [tab, setTab] = useState('for-you');
+
+  const { requireAuth, redirectToLogin } = useRequireAuth();
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
-  const loadHiddenUsers = async (u) => {
-    if (!u?.id) return;
-    const cacheKey = `hidden-users-${u.id}`;
+  const loadHiddenUsers = async (currentUser) => {
+    if (!currentUser?.id) return;
+
+    const cacheKey = 'hidden-users-' + currentUser.id;
+
     setHiddenUsersLoading(true);
     setHiddenUsersError('');
+
     try {
-      const ids = [...new Set(asArray(await voxylApi.blocks.hiddenUserIds()))];
+      const ids = [
+        ...new Set(
+          asArray(await voxylApi.blocks.hiddenUserIds()),
+        ),
+      ];
+
       setBlockedIds(ids);
       setCache(cacheKey, ids, TTL_5MIN);
       setHiddenUsersReady(true);
     } catch (error) {
       console.error('[Feed] Failed to load hidden users', { error });
+
       const cached = getCache(cacheKey);
+
       if (Array.isArray(cached)) {
         setBlockedIds(cached);
         setHiddenUsersReady(true);
@@ -63,49 +248,52 @@ export default function Feed() {
   };
 
   useEffect(() => {
-    voxylApi.auth.me().then(u => {
-      setUser(u);
-      setAuthResolved(true);
-      setTab('my-playlists'); // default to personal tab if logged in
-      loadHiddenUsers(u);
-      voxylApi.entities.Follow.filter({ follower_id: u.id, status: 'accepted' })
-        .then(follows => setFollowingIds(new Set(asArray(follows).map(f => f.following_id))))
-        .catch(error => console.error('[Feed] Failed to load following list', { userId: u.id, error }));
-    }).catch(error => {
-      if (error?.status && error.status !== 401) {
-        console.error('[Feed] Failed to load current user', { error });
-      }
-      setAuthResolved(true);
-    }); // guest mode — user stays null
+    voxylApi.auth.me()
+      .then(currentUser => {
+        setUser(currentUser);
+        setAuthResolved(true);
+        loadHiddenUsers(currentUser);
+      })
+      .catch(error => {
+        if (error?.status && error.status !== 401) {
+          console.error('[Feed] Failed to load current user', { error });
+        }
+
+        setAuthResolved(true);
+      });
   }, []);
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
-    invalidateCache('feed-playlists');
     invalidateCache('all-playlists-feed');
-    invalidateCache(`my-playlists-${user?.id}`);
-    invalidateCache(`user-podcast-plays-${user?.id}`);
-    queryClient.invalidateQueries({ queryKey: ['feed-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['top-podcasts'] });
-    queryClient.invalidateQueries({ queryKey: ['my-playlists'] });
-    queryClient.invalidateQueries({ queryKey: ['all-playlists-feed'] });
-    queryClient.invalidateQueries({ queryKey: ['user-podcast-plays'] });
+    invalidateCache('my-playlists-' + user?.id);
+    invalidateCache('user-podcast-plays-' + user?.id);
+    invalidateCache('user-episode-progress-' + user?.id);
+
+    queryClient.invalidateQueries({
+      queryKey: ['home-rankings'],
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: ['my-playlists'],
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: ['all-playlists-feed'],
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: ['user-podcast-plays'],
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: ['user-episode-progress'],
+    });
+
     if (user?.id) {
       loadHiddenUsers(user);
       refreshPlaylistLikeQuery(queryClient, user.id);
     }
   }, containerRef);
-
-  const { data: playlists = [], isLoading } = useQuery({
-    queryKey: ['feed-playlists'],
-    queryFn: async () => {
-      const cached = getCache('feed-playlists');
-      if (Array.isArray(cached)) return cached;
-      const data = asArray(await voxylApi.entities.Playlist.list('-plays_count', 100));
-      setCache('feed-playlists', data, TTL_5MIN);
-      return data;
-    },
-    initialData: () => getCache('feed-playlists') || undefined,
-  });
 
   const {
     data: likedRecords = [],
@@ -120,117 +308,137 @@ export default function Feed() {
       try {
         return await loadPlaylistLikeRecords(user.id);
       } catch (error) {
-        console.error('[Feed] Failed to load saved playlist likes', { userId: user.id, error });
+        console.error(
+          '[Feed] Failed to load saved playlist likes',
+          {
+            userId: user.id,
+            error,
+          },
+        );
+
         throw error;
       }
     },
     initialData: () => {
-      const cached = user ? getCache(`liked-playlists-${user.id}`) : null;
+      const cached = user
+        ? getCache('liked-playlists-' + user.id)
+        : null;
+
       if (Array.isArray(cached)) {
         return cached;
       }
+
       return undefined;
     },
   });
+
   const likedIds = playlistLikeIds(likedRecords);
 
-  const { data: topPodcasts = [] } = useQuery({
-    queryKey: ['top-podcasts'],
-    queryFn: async () => {
-      try {
-        const res = await voxylApi.functions.invoke('getTopPodcastsByPlayback', {});
-        if (Array.isArray(res.data)) return res.data;
-        if (Array.isArray(res.data?.podcasts)) return res.data.podcasts;
-        return Array.isArray(res.data) ? res.data : [];
-      } catch (err) {
-        return [];
-      }
-    },
+  const rankingDays = tab === 'last-week' ? 7 : 90;
+
+  const {
+    data: homeRankings,
+    isLoading: rankingsLoading,
+    isError: rankingsError,
+    refetch: refetchRankings,
+  } = useQuery({
+    queryKey: ['home-rankings', rankingDays],
+    enabled: tab === 'trending' || tab === 'last-week',
+    queryFn: () => voxylApi.home.rankings(rankingDays),
   });
 
-  const handleLike = requireAuth(async (playlist) => {
+  const handleLike = requireAuth(async playlist => {
     if (likesLoading || likesError) {
-      if (likesError) refetchLikes();
+      if (likesError) {
+        refetchLikes();
+      }
+
       return;
     }
+
     try {
       await togglePlaylistLikeOptimistically({
         queryClient,
         userId: user.id,
         playlistId: playlist.id,
-        toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id }),
+        toggle: () =>
+          voxylApi.functions.invoke(
+            'togglePlaylistLike',
+            {
+              playlist_id: playlist.id,
+            },
+          ),
       });
     } catch (error) {
-      console.error('[Feed] Failed to toggle playlist like', { playlistId: playlist.id, error });
+      console.error(
+        '[Feed] Failed to toggle playlist like',
+        {
+          playlistId: playlist.id,
+          error,
+        },
+      );
     }
   });
 
   const canRenderSocialContent = !user || hiddenUsersReady;
-  const visiblePlaylists = canRenderSocialContent ? asArray(playlists).filter(p => {
-    if (blockedIds.includes(p.creator_id)) return false;
-    if (!p.visibility || p.visibility === 'public') return true;
-    if (p.visibility === 'friends_only') return user && followingIds.has(p.creator_id);
-    return false;
-  }) : [];
 
-  const sortedPlaylists = tab === 'trending'
-    ? [...visiblePlaylists].sort((a, b) => (b.plays_count || 0) - (a.plays_count || 0))
-    : [...visiblePlaylists].sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
+  const rankedPlaylists = canRenderSocialContent
+    ? asArray(homeRankings?.playlists).filter(
+        playlist => !blockedIds.includes(playlist.creator_id),
+      )
+    : [];
 
-  // Recent tab: newest playlists with > 5 plays
-  const recentPlaylists = useMemo(() =>
-    [...visiblePlaylists]
-      .filter(p => (p.plays_count || 0) > 5)
-      .sort((a, b) => new Date(b.created_date).getTime() - new Date(a.created_date).getTime())
-      .slice(0, 10),
-    [visiblePlaylists]
-  );
-
-  const heroPlaylist = sortedPlaylists[0];
-  const trendingPlaylists = sortedPlaylists.slice(1);
-  const displayedTrendingPlaylists = expandedPlaylists ? trendingPlaylists : trendingPlaylists.slice(0, 8);
-  const safePodcasts = Array.isArray(topPodcasts) ? topPodcasts : [];
-  const displayedPodcasts = expandedPodcasts ? safePodcasts : safePodcasts.slice(0, 8);
-
-  const firstName = user?.full_name?.split(' ')[0] || user?.username || 'Eu';
+  const rankedPodcasts = canRenderSocialContent
+    ? asArray(homeRankings?.podcasts)
+    : [];
 
   return (
-    <div ref={containerRef} className="bg-background relative">
-      <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
+    <div
+      ref={containerRef}
+      className="bg-background relative"
+    >
+      <PullToRefreshIndicator
+        pullProgress={pullProgress}
+        refreshing={refreshing}
+      />
+
       <VoxylHeader
-        subtitle={t('feedSubtitle')}
-        title={<span className="text-gradient font-grotesk">Voxyl</span>}
+        subtitle={null}
+        title={
+          <span className="text-gradient font-grotesk">
+            Voxyl
+          </span>
+        }
         right={null}
       />
 
-      {/* Tabs */}
       <div className="flex gap-2 px-4 mb-4 overflow-x-auto no-scrollbar">
-        {user && (
-          <button
-            onClick={() => setTab('my-playlists')}
-            className={cn(
-              "flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap flex-shrink-0",
-              tab === 'my-playlists'
-                ? "gradient-primary text-white glow-primary"
-                : "bg-secondary text-muted-foreground"
-            )}
-          >
-            <User size={14} />
-            {firstName}
-          </button>
-        )}
         {[
-          { key: 'trending', label: t('feedTrending'), icon: Flame },
-          { key: 'recent', label: t('feedRecent'), icon: Sparkles },
+          {
+            key: 'for-you',
+            label: t('feedForYou'),
+            icon: Sparkles,
+          },
+          {
+            key: 'trending',
+            label: t('feedTrending'),
+            icon: Flame,
+          },
+          {
+            key: 'last-week',
+            label: t('feedLastWeek'),
+            icon: Clock3,
+          },
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
+            type="button"
             onClick={() => setTab(key)}
             className={cn(
-              "flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap flex-shrink-0",
+              'flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap flex-shrink-0',
               tab === key
-                ? "gradient-primary text-white glow-primary"
-                : "bg-secondary text-muted-foreground"
+                ? 'gradient-primary text-white glow-primary'
+                : 'bg-secondary text-muted-foreground',
             )}
           >
             <Icon size={14} />
@@ -239,176 +447,102 @@ export default function Feed() {
         ))}
       </div>
 
-      {/* Content Grid */}
       <div className="px-4 pb-24">
         {authResolved && user && !hiddenUsersReady && (
           <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
-            <span>{hiddenUsersLoading ? t('loading') : hiddenUsersError || t('blockLoadHiddenError')}</span>
+            <span>
+              {hiddenUsersLoading
+                ? t('loading')
+                : hiddenUsersError || t('blockLoadHiddenError')}
+            </span>
+
             {!hiddenUsersLoading && (
-              <button type="button" onClick={() => loadHiddenUsers(user)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
+              <button
+                type="button"
+                onClick={() => loadHiddenUsers(user)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white"
+              >
                 {t('blockRetry')}
               </button>
             )}
           </div>
         )}
 
-        {/* My Playlists Tab */}
-        {tab === 'my-playlists' && user && hiddenUsersReady && (
+        {tab === 'for-you' && !authResolved && (
+          <div className="flex flex-col items-center py-12 gap-3 text-muted-foreground">
+            <Loader2
+              size={24}
+              className="animate-spin text-primary"
+            />
+            <p className="text-sm">{t('loading')}</p>
+          </div>
+        )}
+
+        {tab === 'for-you' && authResolved && !user && (
+          <div className="rounded-3xl border border-border bg-card px-5 py-10 text-center">
+            <div className="w-12 h-12 mx-auto mb-4 rounded-full gradient-primary flex items-center justify-center glow-primary">
+              <Sparkles
+                size={20}
+                className="text-white"
+              />
+            </div>
+
+            <h2 className="text-lg font-semibold text-foreground">
+              {t('feedSignInForYouTitle')}
+            </h2>
+
+            <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto">
+              {t('feedSignInForYouHint')}
+            </p>
+
+            <button
+              type="button"
+              onClick={redirectToLogin}
+              className="mt-5 inline-flex items-center px-5 py-2.5 rounded-full gradient-primary text-white text-sm font-medium glow-primary"
+            >
+              {t('feedSignInForYouAction')}
+            </button>
+          </div>
+        )}
+
+        {tab === 'for-you' && user && hiddenUsersReady && (
           <MyPlaylistsContent
             user={user}
             likedIds={likedIds}
-            handleLike={likesLoading || likesFetching || likesError ? undefined : handleLike}
+            handleLike={
+              likesLoading || likesFetching || likesError
+                ? undefined
+                : handleLike
+            }
             blockedIds={blockedIds}
             setBlockedIds={setBlockedIds}
           />
         )}
 
-        {/* Trending / Recent Tabs */}
-        {tab !== 'my-playlists' && canRenderSocialContent && (
-          <>
-            {likesError && (
-              <div className="mb-4 rounded-2xl border border-border bg-card p-3 text-sm text-muted-foreground flex items-center justify-between gap-3">
-                <span>{t('explorePlaylistsError')}</span>
-                <button type="button" onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium gradient-primary text-white">
-                  {t('retry')}
-                </button>
-              </div>
-            )}
-            {likesLoading && (
-              <div className="mb-4 h-10 rounded-2xl bg-secondary animate-pulse" />
-            )}
-            {/* Recent: newest playlists with >5 plays */}
-            {tab === 'recent' && recentPlaylists.length > 0 && (
-              <div className="mb-8">
-                <h2 className="text-base font-semibold mb-3 text-foreground">Adicionadas recentemente</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-                  {recentPlaylists.map((pl, i) => (
-                    <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
-                      <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Playlists em Alta */}
-            {!isLoading && heroPlaylist && (
-              <div className="mb-8">
-                <h2 className="text-base font-semibold mb-3 text-foreground">{t('feedPlaylistsHot')}</h2>
-
-                {/* Hero Playlist */}
-                <Link to={`/playlist/${heroPlaylist.id}`}>
-                  <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="mb-4 relative rounded-3xl overflow-hidden h-48 md:h-64 bg-gradient-to-br from-purple-800 via-primary/60 to-cyan-600">
-                    {heroPlaylist.cover_image && (
-                      <img src={heroPlaylist.cover_image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                    )}
-                    <div className="absolute inset-0 bg-black/40" />
-                    <div className="absolute bottom-0 left-0 right-0 p-4 flex items-end justify-between">
-                      <div className="flex-1 min-w-0 mr-3">
-                        <p className="text-xs text-white/70 mb-0.5 font-medium">{t('feedMostPlayed')}</p>
-                        <h2 className="text-xl font-grotesk font-bold text-white truncate">{heroPlaylist.name}</h2>
-                        <p className="text-sm text-white/70 truncate">{t('detailBy')} {heroPlaylist.creator_username ? `@${heroPlaylist.creator_username}` : t('detailUser')} • {heroPlaylist.plays_count || 0} {t('feedPlays')}</p>
-                      </div>
-                      <div className="w-12 h-12 rounded-full gradient-primary flex items-center justify-center glow-primary flex-shrink-0">
-                        <Play size={20} fill="white" className="text-white ml-0.5" />
-                      </div>
-                    </div>
-                  </motion.div>
-                </Link>
-
-                {/* Grid de Playlists (8 cards) */}
-                {trendingPlaylists.length > 0 && (
-                  <div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mb-3">
-                      {displayedTrendingPlaylists.map((pl, i) => (
-                        <motion.div key={pl.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                          <PlaylistCard playlist={pl} liked={!likesError && !likesLoading && likedIds.includes(pl.id)} onLike={likesLoading || likesFetching || likesError ? undefined : handleLike} currentUser={user} onBlocked={id => setBlockedIds(prev => [...new Set([...prev, id])])} />
-                        </motion.div>
-                      ))}
-                    </div>
-
-                    {trendingPlaylists.length > 8 && (
-                      <motion.button
-                        onClick={() => setExpandedPlaylists(!expandedPlaylists)}
-                        className="w-full py-3 rounded-2xl bg-secondary hover:bg-secondary/80 text-foreground font-medium transition-colors text-sm"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                      >
-                        {expandedPlaylists ? t('feedSeeLess') : t('feedSeeMore')}
-                      </motion.button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Podcasts em Alta */}
-            {safePodcasts.length > 0 && (
-              <div>
-                <h2 className="text-base font-semibold mb-3 text-foreground">{t('feedPodcastsHot')}</h2>
-
-                {safePodcasts[0] && (
-                  <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="mb-4 relative rounded-3xl overflow-hidden h-48 md:h-64 bg-gradient-to-br from-purple-800 via-primary/60 to-cyan-600">
-                    {safePodcasts[0].image && (
-                      <img src={safePodcasts[0].image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                    )}
-                    <div className="absolute inset-0 bg-black/40" />
-                    <div className="absolute bottom-0 left-0 right-0 p-4 flex items-end justify-between">
-                      <div className="flex-1 min-w-0 mr-3">
-                        <p className="text-xs text-white/70 mb-0.5 font-medium">{t('feedMostPlayedPodcast')}</p>
-                        <h2 className="text-xl font-grotesk font-bold text-white truncate">{safePodcasts[0].title}</h2>
-                        <p className="text-sm text-white/70 truncate">{safePodcasts[0].playCount || 0} {t('feedRepros')}</p>
-                      </div>
-                      <div className="w-12 h-12 rounded-full gradient-primary flex items-center justify-center glow-primary flex-shrink-0">
-                        <Play size={20} fill="white" className="text-white ml-0.5" />
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                <div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mb-3">
-                    {displayedPodcasts.slice(1, 9).map((podcast, i) => (
-                      <motion.div key={podcast.feedUrl} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                        <div className="flex flex-col gap-2 p-2 rounded-2xl border border-border bg-card hover:border-primary/30 transition-all active:scale-95 h-full">
-                          <div className="w-full aspect-square rounded-lg overflow-hidden bg-secondary flex-shrink-0">
-                            {podcast.image && (
-                              <img src={podcast.image} alt="" className="w-full h-full object-cover" />
-                            )}
-                          </div>
-                          <div className="min-w-0 px-1 flex-1">
-                            <p className="text-xs font-medium line-clamp-2 text-foreground">{podcast.title}</p>
-                            <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{podcast.author || 'Podcast'}</p>
-                            <p className="text-xs text-muted-foreground mt-1">{podcast.playCount || 0} ▶</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-
-                  {safePodcasts.length > 9 && (
-                    <motion.button
-                      onClick={() => setExpandedPodcasts(!expandedPodcasts)}
-                      className="w-full py-3 rounded-2xl bg-secondary hover:bg-secondary/80 text-foreground font-medium transition-colors text-sm"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                    >
-                      {expandedPodcasts ? t('feedSeeLess') : t('feedSeeMore')}
-                    </motion.button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {!isLoading && sortedPlaylists.length === 0 && (
-              <div className="text-center py-16 text-muted-foreground">
-                <p className="text-4xl mb-3">🎧</p>
-                <p className="font-medium">{t('feedNoPlaylists')}</p>
-                <p className="text-sm mt-1">{t('feedCreateFirst')}</p>
-              </div>
-            )}
-          </>
-        )}
+        {(tab === 'trending' || tab === 'last-week') &&
+          canRenderSocialContent && (
+            <HomeRankedContent
+              rankingDays={rankingDays}
+              playlists={rankedPlaylists}
+              podcasts={rankedPodcasts}
+              isLoading={rankingsLoading}
+              isError={rankingsError}
+              onRetry={() => refetchRankings()}
+              user={user}
+              likedIds={likedIds}
+              likesLoading={likesLoading}
+              likesFetching={likesFetching}
+              likesError={likesError}
+              onRetryLikes={() =>
+                refreshPlaylistLikeQuery(
+                  queryClient,
+                  user?.id,
+                )
+              }
+              handleLike={handleLike}
+              setBlockedIds={setBlockedIds}
+            />
+          )}
       </div>
     </div>
   );
