@@ -11,12 +11,13 @@ import AddToPlaylistModal from '@/components/explore/AddToPlaylistModal';
 import UserSearchCard from '@/components/explore/UserSearchCard';
 import SelectBottomSheet from '@/components/common/SelectBottomSheet';
 import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
-import { Compass, Radio, RefreshCcw, Users } from 'lucide-react';
+import { Compass, Radio, RefreshCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
+import { resolveExploreTab } from '@/lib/discoverTabs';
 import { getCache, setCache, TTL_5MIN } from '@/lib/appCache';
 import {
   handlePodcastLikeMutationSuccess,
@@ -37,7 +38,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
 
   // Read initial state from URL query params (restored when navigating back)
   const params = new URLSearchParams(location.search);
-  const [tab, setTab] = useState(lockedTab || params.get('tab') || 'playlists');
+  const [tab, setTab] = useState(resolveExploreTab(lockedTab, params.get('tab')));
   const [user, setUser] = useState(null);
   const [search, setSearch] = useState(params.get('q') || '');
   const [podcastResults, setPodcastResults] = useState([]);
@@ -384,10 +385,10 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   const visibleFollowing = filteredUsers.filter(item => item.type === 'following');
   const visiblePending = filteredUsers.filter(item => item.type === 'pending');
 
-  const TABS = [
+  const DISCOVER_TABS = [
     { key: 'playlists', label: t('explorePlaylists'), icon: Compass },
     { key: 'podcasts', label: t('explorePodcasts'), icon: Radio },
-    { key: 'users', label: t('exploreUsers'), icon: Users },
+
   ];
 
   const sortOptions = [
@@ -434,7 +435,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
         <>
           {/* Tabs */}
           <div className="flex gap-2 px-4 justify-center">
-        {TABS.map(({ key, label, icon: TabIcon }) => (
+        {DISCOVER_TABS.map(({ key, label, icon: TabIcon }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
