@@ -43,6 +43,11 @@ describe('Issue #73 Discover card redesign', () => {
     assert.equal((podcastCardSource.match(/WebkitLineClamp: 2/g) || []).length, 2);
     assert.equal((podcastCardSource.match(/WebkitBoxOrient: 'vertical'/g) || []).length, 2);
     assert.equal((podcastCardSource.match(/display: '-webkit-box'/g) || []).length, 2);
+    assert.match(podcastCardSource, /<div className="px-3 pb-3">/);
+    assert.doesNotMatch(
+      podcastCardSource,
+      /className="px-3 pb-3 text-xs text-muted-foreground leading-relaxed line-clamp-2"/
+    );
     assert.doesNotMatch(podcastCardSource, /setExpanded/);
     assert.doesNotMatch(podcastCardSource, /ChevronDown|ChevronUp/);
     assert.doesNotMatch(podcastCardSource, /dangerouslySetInnerHTML/);

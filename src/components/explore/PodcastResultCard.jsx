@@ -70,17 +70,19 @@ export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked
       </div>
 
       {descriptionText && (
-        <p
-          className="px-3 pb-3 text-xs text-muted-foreground leading-relaxed line-clamp-2"
-          style={{
-            display: '-webkit-box',
-            WebkitBoxOrient: 'vertical',
-            WebkitLineClamp: 2,
-            overflow: 'hidden',
-          }}
-        >
-          {descriptionText}
-        </p>
+        <div className="px-3 pb-3">
+          <p
+            className="text-xs text-muted-foreground leading-relaxed line-clamp-2"
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              overflow: 'hidden',
+            }}
+          >
+            {descriptionText}
+          </p>
+        </div>
       )}
     </motion.div>
   );
