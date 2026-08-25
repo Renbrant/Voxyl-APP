@@ -40,6 +40,9 @@ describe('Issue #73 Discover card redesign', () => {
   it('replaces expandable podcast descriptions with a concise preview', () => {
     assert.match(podcastCardSource, /const descriptionText =/);
     assert.match(podcastCardSource, /line-clamp-2/);
+    assert.equal((podcastCardSource.match(/WebkitLineClamp: 2/g) || []).length, 2);
+    assert.equal((podcastCardSource.match(/WebkitBoxOrient: 'vertical'/g) || []).length, 2);
+    assert.equal((podcastCardSource.match(/display: '-webkit-box'/g) || []).length, 2);
     assert.doesNotMatch(podcastCardSource, /setExpanded/);
     assert.doesNotMatch(podcastCardSource, /ChevronDown|ChevronUp/);
     assert.doesNotMatch(podcastCardSource, /dangerouslySetInnerHTML/);

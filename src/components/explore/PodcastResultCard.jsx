@@ -33,6 +33,12 @@ export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked
           <Link
             to={`/podcast/${encodeURIComponent(podcast.feedUrl)}`}
             className="font-semibold text-sm text-foreground leading-tight hover:text-primary transition-colors line-clamp-2 block"
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              overflow: 'hidden',
+            }}
             onClick={e => e.stopPropagation()}
           >
             {podcast.title}
@@ -64,7 +70,15 @@ export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked
       </div>
 
       {descriptionText && (
-        <p className="px-3 pb-3 text-xs text-muted-foreground leading-relaxed line-clamp-2">
+        <p
+          className="px-3 pb-3 text-xs text-muted-foreground leading-relaxed line-clamp-2"
+          style={{
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+            overflow: 'hidden',
+          }}
+        >
           {descriptionText}
         </p>
       )}
