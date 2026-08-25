@@ -5879,6 +5879,11 @@ type PublicPodcastPlay = {
 
 function parsePodcastPlayHistoryLimit(request: Request): number {
   const value = new URL(request.url).searchParams.get("limit");
+
+  if (value === "all") {
+    return -1;
+  }
+
   const parsed = Number(value);
 
   if (!value || !Number.isFinite(parsed)) {

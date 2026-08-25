@@ -267,6 +267,7 @@ export default function Feed() {
     invalidateCache('all-playlists-feed');
     invalidateCache('my-playlists-' + user?.id);
     invalidateCache('user-podcast-plays-' + user?.id);
+    invalidateCache('user-episode-progress-' + user?.id);
 
     queryClient.invalidateQueries({
       queryKey: ['home-rankings'],
@@ -282,6 +283,10 @@ export default function Feed() {
 
     queryClient.invalidateQueries({
       queryKey: ['user-podcast-plays'],
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: ['user-episode-progress'],
     });
 
     if (user?.id) {
