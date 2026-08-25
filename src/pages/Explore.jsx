@@ -44,6 +44,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   const [podcastResults, setPodcastResults] = useState([]);
   const [podcastLoading, setPodcastLoading] = useState(false);
   const [podcastError, setPodcastError] = useState('');
+  const [podcastSearchNonce, setPodcastSearchNonce] = useState(0);
   const [selectedPodcast, setSelectedPodcast] = useState(null);
   const [voxylSearch, setVoxylSearch] = useState(params.get('vq') || '');
   const [userSearch, setUserSearch] = useState('');
@@ -326,7 +327,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
     return () => {
       cancelled = true;
     };
-  }, [debouncedQuery, tab, user, podcastLanguage, podcastSortBy, podcastCategory]);
+  }, [debouncedQuery, tab, user, podcastLanguage, podcastSortBy, podcastCategory, podcastSearchNonce]);
 
   const canRenderSocialContent = !user || hiddenUsersReady;
   const filteredPlaylists = canRenderSocialContent ? playlists
@@ -429,21 +430,21 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   return (
     <div ref={containerRef} className="bg-background pb-24 relative">
       <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
-      <VoxylHeader title={lockedTab === 'users' ? t('navPeople') : t('exploreTitle')} subtitle={lockedTab === 'users' ? t('exploreUsers') : t('exploreSubtitle')} right={null} />
+      <VoxylHeader title={lockedTab === 'users' ? t('navPeople') : t('navDiscover')} subtitle={lockedTab === 'users' ? t('exploreUsers') : t('discoverSearchSubtitle')} right={null} />
 
       {!lockedTab && (
         <>
           {/* Tabs */}
-          <div className="flex gap-2 px-4 justify-center">
+          <div className="grid grid-cols-2 gap-1.5 mx-4 p-1.5 rounded-2xl bg-secondary border border-border sm:max-w-md sm:mx-auto">
         {DISCOVER_TABS.map(({ key, label, icon: TabIcon }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
             className={cn(
-              "flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all flex-shrink-0",
+              "flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all min-w-0",
               tab === key
-                ? "gradient-primary text-white glow-primary"
-                : "bg-secondary text-muted-foreground"
+                ? "gradient-primary text-white shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-background/60"
             )}
           >
             <TabIcon size={14} />
@@ -455,7 +456,17 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
       )}
 
       {/* Search bar and filters */}
-      <div className="px-4 mb-4 mt-3">
+      <div className={cn("px-4 mb-5 mt-4", !lockedTab && "mx-auto w-full max-w-5xl")}>
+        {!lockedTab && (
+          <div className="mb-3">
+            <h2 className="text-base sm:text-lg font-semibold text-foreground">
+              {tab === 'playlists' ? t('discoverPlaylistsHeading') : t('discoverPodcastsHeading')}
+            </h2>
+            <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+              {tab === 'playlists' ? t('discoverPlaylistsHint') : t('discoverPodcastsHint')}
+            </p>
+          </div>
+        )}
         {tab === 'playlists' && <PodcastSearchBar value={voxylSearch} onChange={setVoxylSearch} loading={false} placeholder={t('exploreSearchPlaylists')} />}
         {tab === 'users' && <PodcastSearchBar value={userSearch} onChange={setUserSearch} loading={usersLoading} placeholder="Buscar usuários..." />}
         {tab === 'podcasts' && (
@@ -561,8 +572,13 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
               ))}
               {filteredPlaylists.length === 0 && (
                 <div className="text-center py-16 text-muted-foreground">
-                  <p className="text-4xl mb-3">🔍</p>
-                  <p>{t('noResults')}</p>
+                  <p className="text-4xl mb-3">{voxylSearch.trim() ? '🔍' : '🎧'}</p>
+                  <p className="font-medium text-foreground">
+                    {voxylSearch.trim() ? t('discoverNoPlaylistResults') : t('discoverNoPlaylistsAvailable')}
+                  </p>
+                  <p className="text-xs mt-1">
+                    {voxylSearch.trim() ? t('discoverTryAnotherSearch') : t('discoverNoPlaylistsHint')}
+                  </p>
                 </div>
               )}
             </div>
@@ -715,7 +731,15 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
             {!podcastLoading && podcastError && (
               <div className="text-center py-16 text-muted-foreground">
                 <p className="text-4xl mb-3">⚠️</p>
-                <p className="text-sm">{podcastError}</p>
+                <p className="text-sm mb-4">{podcastError}</p>
+                <button
+                  type="button"
+                  onClick={() => setPodcastSearchNonce(value => value + 1)}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+                >
+                  <RefreshCcw size={14} />
+                  {t('retry')}
+                </button>
               </div>
             )}
             {!podcastLoading && !podcastError && podcastResults.map((podcast, i) => (
