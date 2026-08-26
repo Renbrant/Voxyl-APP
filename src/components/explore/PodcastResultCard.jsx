@@ -1,11 +1,10 @@
-import { useState } from 'react';
-import { Plus, Mic, Heart, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Mic, Heart } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 
 export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked }) {
-  const [expanded, setExpanded] = useState(false);
+  const descriptionText = podcast.description?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || '';
 
   return (
     <motion.div
@@ -34,6 +33,12 @@ export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked
           <Link
             to={`/podcast/${encodeURIComponent(podcast.feedUrl)}`}
             className="font-semibold text-sm text-foreground leading-tight hover:text-primary transition-colors line-clamp-2 block"
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              overflow: 'hidden',
+            }}
             onClick={e => e.stopPropagation()}
           >
             {podcast.title}
@@ -64,21 +69,19 @@ export default function PodcastResultCard({ podcast, index, onAdd, onLike, liked
         </div>
       </div>
 
-      {/* Description expand */}
-      {podcast.description && (
-        <div className="px-3 pb-2">
-          <button
-            onClick={() => setExpanded(v => !v)}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      {descriptionText && (
+        <div className="px-3 pb-3">
+          <p
+            className="text-xs text-muted-foreground leading-relaxed line-clamp-2"
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              overflow: 'hidden',
+            }}
           >
-            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            {expanded ? 'Menos' : 'Ver descrição'}
-          </button>
-          {expanded && (
-            <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: podcast.description?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() }}
-            />
-          )}
+            {descriptionText}
+          </p>
         </div>
       )}
     </motion.div>
