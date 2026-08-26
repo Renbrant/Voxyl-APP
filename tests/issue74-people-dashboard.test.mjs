@@ -14,6 +14,14 @@ const i18nSource = fs.readFileSync(
   new URL('../src/lib/i18n.js', import.meta.url),
   'utf8',
 );
+const layoutSource = fs.readFileSync(
+  new URL('../src/components/Layout.jsx', import.meta.url),
+  'utf8',
+);
+const sidebarSource = fs.readFileSync(
+  new URL('../src/components/common/Sidebar.jsx', import.meta.url),
+  'utf8',
+);
 
 describe('Issue #74 People dashboard ownership', () => {
   it('owns People directly and defines exactly four social sections with no Overview tab', () => {
@@ -78,5 +86,24 @@ describe('Issue #74 People dashboard ownership', () => {
     ]) {
       assert.match(i18nSource, new RegExp(`${key}:`));
     }
+  });
+
+  it('uses authoritative incoming Requests for the People navigation badge', () => {
+    assert.match(layoutSource, /queryKey: \['people-summary', apiUser\?\.id\]/);
+    assert.match(layoutSource, /enabled: Boolean\(isAuthenticated && apiUser\?\.id\)/);
+    assert.match(layoutSource, /queryFn: \(\) => voxylApi\.people\.summary\(\)/);
+    assert.match(layoutSource, /refetchInterval: 30000/);
+    assert.match(
+      layoutSource,
+      /peopleRequestsCount = Number\(peopleSummaryQuery\.data\?\.counts\?\.requests\) \|\| 0/,
+    );
+    assert.match(layoutSource, /<Sidebar peopleRequestsCount=\{peopleRequestsCount\} \/>/);
+    assert.match(layoutSource, /md:hidden fixed bottom-0/);
+    assert.match(layoutSource, /id === 'people' && peopleRequestsCount > 0/);
+    assert.match(layoutSource, /peopleRequestsCount > 9 \? '9\+' : peopleRequestsCount/);
+    assert.match(sidebarSource, /Sidebar\(\{ peopleRequestsCount = 0 \}\)/);
+    assert.match(sidebarSource, /id === 'people' && peopleRequestsCount > 0/);
+    assert.match(sidebarSource, /peopleRequestsCount > 9 \? '9\+' : peopleRequestsCount/);
+    assert.doesNotMatch(layoutSource, /entities\.Follow\.filter/);
   });
 });

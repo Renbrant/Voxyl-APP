@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import AudioPlayer from './player/AudioPlayer';
 import { usePlayer } from '@/lib/PlayerContext';
@@ -9,6 +10,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
 import { Home, Compass, Users, Heart, User } from 'lucide-react';
 import { ACTIVE_PRIMARY_NAVIGATION } from '@/lib/primaryNavigation';
+import { voxylApi } from '@/api/voxylApiClient';
 
 const NAV_ICONS = Object.freeze({
   home: Home,
@@ -28,8 +30,15 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentEpisode } = usePlayer();
-  const { isAuthenticated, clerkLoaded, isLoadingAuth, navigateToLogin } = useAuth();
+  const { isAuthenticated, clerkLoaded, isLoadingAuth, apiUser, navigateToLogin } = useAuth();
   const authReady = clerkLoaded || !isLoadingAuth;
+  const peopleSummaryQuery = useQuery({
+    queryKey: ['people-summary', apiUser?.id],
+    enabled: Boolean(isAuthenticated && apiUser?.id),
+    queryFn: () => voxylApi.people.summary(),
+    refetchInterval: 30000,
+  });
+  const peopleRequestsCount = Number(peopleSummaryQuery.data?.counts?.requests) || 0;
   const tabHistory = useRef({});
 
   const handleNavClick = (path) => {
@@ -55,7 +64,7 @@ export default function Layout() {
       className="flex bg-background relative"
       style={{ height: '100dvh', background: '#0f0d0b' }}
     >
-      <Sidebar />
+      <Sidebar peopleRequestsCount={peopleRequestsCount} />
 
       <div className="flex flex-col flex-1 min-w-0 relative bg-background">
       <main
@@ -84,7 +93,7 @@ export default function Layout() {
         }}
       >
         <div className="h-16 flex items-center justify-around px-2">
-          {getNavItems().map(({ icon: Icon, label, path }) => {
+          {getNavItems().map(({ id, icon: Icon, label, path }) => {
             // For protected tabs, redirect to login if not authed
             const isProtected = path === '/library' || path === '/profile';
             const active = location.pathname === path ||
@@ -114,6 +123,17 @@ export default function Layout() {
                   active && "after:absolute after:-bottom-0.5 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:rounded-full after:bg-primary"
                 )}>
                   <Icon size={22} strokeWidth={active ? 2.5 : 1.8} />
+                  {id === 'people' && peopleRequestsCount > 0 && (
+                    <>
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute -right-2 -top-2 min-w-[18px] h-[18px] rounded-full bg-primary px-1 text-[10px] font-bold leading-[18px] text-primary-foreground shadow-md"
+                      >
+                        {peopleRequestsCount > 9 ? '9+' : peopleRequestsCount}
+                      </span>
+                      <span className="sr-only">{t('peopleRequests')}: {peopleRequestsCount}</span>
+                    </>
+                  )}
                 </div>
                 <span className="text-xs font-medium">{label}</span>
               </button>
