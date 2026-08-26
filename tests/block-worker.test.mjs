@@ -665,6 +665,6 @@ describe('Block Worker routes', () => {
     assert.match(feedSource, /\(tab === 'trending' \|\| tab === 'last-week'\) &&\s+canRenderSocialContent && \(/);
     assert.match(exploreSource, /showHiddenUsersGate/);
     assert.match(exploreSource, /tab === 'playlists' && !showHiddenUsersGate/);
-    assert.match(exploreSource, /tab === 'users' && !showHiddenUsersGate/);
+    assert.doesNotMatch(exploreSource, /UserSearchCard/);
   });
 });

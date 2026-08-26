@@ -8,7 +8,7 @@ import PlaylistCard from '@/components/playlist/PlaylistCard';
 import PodcastSearchBar from '@/components/explore/PodcastSearchBar';
 import PodcastResultCard from '@/components/explore/PodcastResultCard';
 import AddToPlaylistModal from '@/components/explore/AddToPlaylistModal';
-import UserSearchCard from '@/components/explore/UserSearchCard';
+
 import SelectBottomSheet from '@/components/common/SelectBottomSheet';
 import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
 import { Compass, Radio, RefreshCcw } from 'lucide-react';
@@ -32,13 +32,13 @@ import {
   togglePlaylistLikeOptimistically,
 } from '@/lib/savedContentQueries';
 
-export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
+export default function Explore() {
   const location = useLocation();
   const navigate = useNavigate();
 
   // Read initial state from URL query params (restored when navigating back)
   const params = new URLSearchParams(location.search);
-  const [tab, setTab] = useState(resolveExploreTab(lockedTab, params.get('tab')));
+  const [tab, setTab] = useState(resolveExploreTab(params.get('tab')));
   const [user, setUser] = useState(null);
   const [search, setSearch] = useState(params.get('q') || '');
   const [podcastResults, setPodcastResults] = useState([]);
@@ -47,15 +47,15 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   const [podcastSearchNonce, setPodcastSearchNonce] = useState(0);
   const [selectedPodcast, setSelectedPodcast] = useState(null);
   const [voxylSearch, setVoxylSearch] = useState(params.get('vq') || '');
-  const [userSearch, setUserSearch] = useState('');
-  const [userFilter, setUserFilter] = useState('connections');
+
+
   const [blockedIds, setBlockedIds] = useState([]);
   const [authResolved, setAuthResolved] = useState(false);
   const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
   const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
   const [hiddenUsersError, setHiddenUsersError] = useState('');
   const [followStatuses, setFollowStatuses] = useState({});
-  const [theyFollowMeIds, setTheyFollowMeIds] = useState(new Set());
+
   const [podcastSortBy, setPodcastSortBy] = useState(params.get('sort') || 'relevance');
   const [podcastLanguage, setPodcastLanguage] = useState(params.get('lang') || '');
   const [podcastCategory, setPodcastCategory] = useState(params.get('cat') || '');
@@ -63,21 +63,21 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   // Sync state to URL so it survives navigation
   useEffect(() => {
     const p = new URLSearchParams();
-    if (!lockedTab && tab !== 'playlists') p.set('tab', tab);
+    if (tab !== 'playlists') p.set('tab', tab);
     if (search) p.set('q', search);
     if (voxylSearch) p.set('vq', voxylSearch);
     if (podcastSortBy !== 'relevance') p.set('sort', podcastSortBy);
     if (podcastLanguage) p.set('lang', podcastLanguage);
     if (podcastCategory) p.set('cat', podcastCategory);
     const qs = p.toString();
-    const newUrl = qs ? `${routeBase}?${qs}` : routeBase;
+    const newUrl = qs ? '/discover?' + qs : '/discover';
     // Replace state to keep back button pointing to previous page (not previous search state)
     window.history.replaceState(null, '', newUrl);
     console.log('[Explore] Current tab:', tab);
-  }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory, lockedTab, routeBase]);
+  }, [tab, search, voxylSearch, podcastSortBy, podcastLanguage, podcastCategory]);
 
   const debouncedQuery = useDebounce(search, 600);
-  const debouncedUserSearch = useDebounce(userSearch, 400);
+
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
@@ -128,11 +128,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
           setFollowStatuses(map);
         })
         .catch(error => console.error('[Explore] Failed to load outgoing follows', { userId: u.id, error }));
-      voxylApi.entities.Follow.filter({ following_id: u.id, status: 'accepted' })
-        .then(follows => {
-          setTheyFollowMeIds(new Set(follows.map(f => f.follower_id)));
-        })
-        .catch(error => console.error('[Explore] Failed to load incoming follows', { userId: u.id, error }));
+
     }).catch(error => {
       if (error?.status && error.status !== 401) {
         console.error('[Explore] Failed to load current user', { error });
@@ -216,34 +212,6 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
       }
       return res.data?.playlists || [];
     },
-  });
-
-  // Followers: users who follow me (accepted)
-  const { data: followersList = [] } = useQuery({
-    queryKey: ['explore-followers', user?.id],
-    enabled: !!user && tab === 'users',
-    queryFn: () => voxylApi.entities.Follow.filter({ following_id: user.id, status: 'accepted' }),
-  });
-
-  // Following: users I follow (accepted)
-  const { data: followingList = [] } = useQuery({
-    queryKey: ['explore-following', user?.id],
-    enabled: !!user && tab === 'users',
-    queryFn: () => voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'accepted' }),
-  });
-
-  // Pending: requests I sent that are still pending
-  const { data: pendingList = [] } = useQuery({
-    queryKey: ['explore-pending', user?.id],
-    enabled: !!user && tab === 'users',
-    queryFn: () => voxylApi.entities.Follow.filter({ follower_id: user.id, status: 'pending' }),
-  });
-
-  // Search by exact username (only when query typed)
-  const { data: searchedUsers = [], isLoading: usersLoading } = useQuery({
-    queryKey: ['explore-users', debouncedUserSearch],
-    enabled: tab === 'users' && debouncedUserSearch.trim().length > 0,
-    queryFn: () => voxylApi.functions.invoke('searchUsers', { query: debouncedUserSearch }).then(r => r.data?.users || []),
   });
 
   const handleLikePodcast = async (podcast) => {
@@ -341,50 +309,7 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
         p.creator_name?.toLowerCase().includes(voxylSearch.toLowerCase());
     }) : [];
   const canRetryPlaylists = playlistsError && Boolean(playlistsQueryError) && !playlistsFetching;
-  const showHiddenUsersGate = authResolved && user && !hiddenUsersReady && (tab === 'playlists' || tab === 'users');
-
-  // Build user list based on active filter
-  const filteredUsers = (() => {
-    const q = debouncedUserSearch.trim().toLowerCase();
-
-    if (q) {
-      return canRenderSocialContent
-        ? searchedUsers.filter(u => !blockedIds.includes(u.id))
-        : [];
-    }
-
-    if (userFilter === 'connections') {
-      const followers = followersList.map(f => ({
-        id: f.follower_id,
-        username: f.follower_username,
-        full_name: f.follower_name,
-        profile_picture: f.follower_profile_picture,
-        type: 'follower',
-      }));
-      const following = followingList.map(f => ({
-        id: f.following_id,
-        username: f.following_username,
-        full_name: f.following_name,
-        profile_picture: f.following_profile_picture,
-        type: 'following',
-      }));
-      return canRenderSocialContent ? [...followers, ...following].filter(item => !blockedIds.includes(item.id)) : [];
-    }
-    if (userFilter === 'pending') {
-      return canRenderSocialContent ? pendingList.map(f => ({
-        id: f.following_id,
-        username: f.following_username,
-        full_name: f.following_name,
-        profile_picture: f.following_profile_picture,
-        type: 'pending',
-      })).filter(item => !blockedIds.includes(item.id)) : [];
-    }
-
-    return [];
-  })();
-  const visibleFollowers = filteredUsers.filter(item => item.type === 'follower');
-  const visibleFollowing = filteredUsers.filter(item => item.type === 'following');
-  const visiblePending = filteredUsers.filter(item => item.type === 'pending');
+  const showHiddenUsersGate = authResolved && user && !hiddenUsersReady && tab === 'playlists';
 
   const DISCOVER_TABS = [
     { key: 'playlists', label: t('explorePlaylists'), icon: Compass },
@@ -430,12 +355,10 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
   return (
     <div ref={containerRef} className="bg-background pb-24 relative">
       <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
-      <VoxylHeader title={lockedTab === 'users' ? t('navPeople') : t('navDiscover')} subtitle={lockedTab === 'users' ? t('exploreUsers') : t('discoverSearchSubtitle')} right={null} />
+      <VoxylHeader title={t('navDiscover')} subtitle={t('discoverSearchSubtitle')} right={null} />
 
-      {!lockedTab && (
-        <>
-          {/* Tabs */}
-          <div className="grid grid-cols-2 gap-1.5 mx-4 p-1.5 rounded-2xl bg-secondary border border-border sm:max-w-md sm:mx-auto">
+      {/* Tabs */}
+      <div className="grid grid-cols-2 gap-1.5 mx-4 p-1.5 rounded-2xl bg-secondary border border-border sm:max-w-md sm:mx-auto">
         {DISCOVER_TABS.map(({ key, label, icon: TabIcon }) => (
           <button
             key={key}
@@ -451,13 +374,10 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
             {label}
           </button>
         ))}
-          </div>
-        </>
-      )}
+      </div>
 
       {/* Search bar and filters */}
-      <div className={cn("px-4 mb-5 mt-4", !lockedTab && "mx-auto w-full max-w-5xl")}>
-        {!lockedTab && (
+      <div className="px-4 mb-5 mt-4 mx-auto w-full max-w-5xl">
           <div className="mb-3">
             <h2 className="text-base sm:text-lg font-semibold text-foreground">
               {tab === 'playlists' ? t('discoverPlaylistsHeading') : t('discoverPodcastsHeading')}
@@ -466,9 +386,8 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
               {tab === 'playlists' ? t('discoverPlaylistsHint') : t('discoverPodcastsHint')}
             </p>
           </div>
-        )}
         {tab === 'playlists' && <PodcastSearchBar value={voxylSearch} onChange={setVoxylSearch} loading={false} placeholder={t('exploreSearchPlaylists')} />}
-        {tab === 'users' && <PodcastSearchBar value={userSearch} onChange={setUserSearch} loading={usersLoading} placeholder="Buscar usuários..." />}
+
         {tab === 'podcasts' && (
           <div className="space-y-3">
             <PodcastSearchBar value={search} onChange={setSearch} loading={podcastLoading} placeholder={t('exploreSearchPodcasts')} />
@@ -493,27 +412,6 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
                 placeholder="Categoria"
                 activeColor="accent"
               />
-            </div>
-          </div>
-        )}
-        {tab === 'users' && (
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              {[
-                { key: 'connections', label: t('exploreConnections') },
-                { key: 'pending', label: t('explorePending') },
-              ].map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setUserFilter(key)}
-                  className={cn(
-                    'px-3 py-1.5 rounded-full text-xs font-medium transition-all flex-shrink-0',
-                    userFilter === key ? 'gradient-primary text-white' : 'bg-secondary text-muted-foreground'
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
             </div>
           </div>
         )}
@@ -583,105 +481,6 @@ export default function Explore({ lockedTab = null, routeBase = '/discover' }) {
                   <p className="text-xs mt-1">
                     {voxylSearch.trim() ? t('discoverTryAnotherSearch') : t('discoverNoPlaylistsHint')}
                   </p>
-                </div>
-              )}
-            </div>
-          )
-        )}
-
-        {/* Users tab */}
-        {tab === 'users' && !showHiddenUsersGate && (
-          usersLoading ? (
-            <div className="space-y-3">
-              {[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-2xl bg-secondary animate-pulse" />)}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredUsers.length === 0 ? (
-                <div className="text-center py-16 text-muted-foreground">
-                  <p className="text-4xl mb-3">👤</p>
-                  <p className="text-sm">
-                    {debouncedUserSearch.trim()
-                      ? t('noResults')
-                      : userFilter === 'connections'
-                        ? t('exploreNoConnections')
-                        : t('exploreNoPending')}
-                  </p>
-                </div>
-              ) : debouncedUserSearch.trim() ? (
-                <div className="space-y-2">
-                  {filteredUsers.map((searchedUser, i) => (
-                    <UserSearchCard
-                      key={searchedUser.id}
-                      user={searchedUser}
-                      index={i}
-                      currentUser={user}
-                      followStatus={followStatuses[searchedUser.id] || null}
-                      theyFollowMe={theyFollowMeIds.has(searchedUser.id)}
-                      onStatusChange={(status) =>
-                        setFollowStatuses(prev => ({ ...prev, [searchedUser.id]: status }))
-                      }
-                    />
-                  ))}
-                </div>
-              ) : userFilter === 'connections' ? (
-                <>
-                  {visibleFollowers.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">👥 {t('exploreFollowers')} ({visibleFollowers.length})</h3>
-                      <div className="space-y-2">
-                        {visibleFollowers.map((f, i) => (
-                          <UserSearchCard
-                            key={f.id}
-                            user={f}
-                            index={i}
-                            currentUser={user}
-                            followStatus={followStatuses[f.id] || null}
-                            theyFollowMe={theyFollowMeIds.has(f.id)}
-                            onStatusChange={(status) =>
-                              setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {visibleFollowing.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground mb-2">➡️ {t('exploreFollowing')} ({visibleFollowing.length})</h3>
-                      <div className="space-y-2">
-                        {visibleFollowing.map((f, i) => (
-                          <UserSearchCard
-                            key={f.id}
-                            user={f}
-                            index={i}
-                            currentUser={user}
-                            followStatus={followStatuses[f.id] || null}
-                            theyFollowMe={theyFollowMeIds.has(f.id)}
-                            onStatusChange={(status) =>
-                              setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="space-y-2">
-                  {visiblePending.map((f, i) => (
-                    <UserSearchCard
-                      key={f.id}
-                      user={f}
-                      index={i}
-                      currentUser={user}
-                      followStatus={followStatuses[f.id] || null}
-                      theyFollowMe={theyFollowMeIds.has(f.id)}
-                      onStatusChange={(status) =>
-                        setFollowStatuses(prev => ({ ...prev, [f.id]: status }))
-                      }
-                    />
-                  ))}
                 </div>
               )}
             </div>

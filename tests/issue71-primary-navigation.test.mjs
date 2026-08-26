@@ -227,7 +227,7 @@ test('Issue #71 primary navigation architecture', async t => {
     );
   });
 
-  await t.test('exposes People as a stable primary root without duplicating social implementation', () => {
+  await t.test('exposes People as a dedicated stable primary root', () => {
     const appSource = fs.readFileSync(
       new URL('../src/App.jsx', import.meta.url),
       'utf8',
@@ -238,40 +238,27 @@ test('Issue #71 primary navigation architecture', async t => {
       'utf8',
     );
 
-    const exploreSource = fs.readFileSync(
-      new URL('../src/pages/Explore.jsx', import.meta.url),
-      'utf8',
-    );
-
     assert.match(
       appSource,
       /path="\/people" element=\{<People \/>}/,
     );
 
+    assert.doesNotMatch(
+      peopleSource,
+      /from '@\/pages\/Explore'/,
+    );
+
     assert.match(
       peopleSource,
-      /<Explore[\s\S]*lockedTab="users"[\s\S]*routeBase="\/people"/,
+      /voxylApi\.people\.summary\(\)/,
     );
 
-    assert.match(
-      exploreSource,
-      /lockedTab = null, routeBase = '\/discover'/,
-    );
-
-    assert.match(
-      exploreSource,
-      /const newUrl = qs \? `\$\{routeBase\}\?\$\{qs\}` : routeBase;/,
-    );
-
-    assert.match(
-      exploreSource,
-      /!lockedTab && tab !== 'playlists'/,
-    );
-
-    assert.match(
-      exploreSource,
-      /\{!lockedTab && \(/,
-    );
+    for (const section of ['following', 'followers', 'requests', 'suggestions']) {
+      assert.match(
+        peopleSource,
+        new RegExp(`key: '${section}'`),
+      );
+    }
   });
 });
 test('Issue #71 keeps canonical Profile identity while preserving auth gating', () => {
