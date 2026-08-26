@@ -450,6 +450,10 @@ function isTopPlaylistsLegacyRoute(pathname: string): boolean {
     pathname === "/functions/getTopPlaylistsByPlayback";
 }
 
+function isPeopleSummaryRoute(pathname: string): boolean {
+  return pathname === "/api/people/summary" || pathname === "/people/summary";
+}
+
 function isSearchUsersRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchUsers" || pathname === "/functions/searchUsers";
 }
@@ -5431,6 +5435,105 @@ async function updatePlaylistResponse(request: Request, env: Env, playlistId: st
   );
 }
 
+async function peopleSummaryResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const user = auth.user!;
+  const blockerScope = getBlockIdentityScope(user, "blocker");
+  const blockedScope = getBlockIdentityScope(user, "blocked");
+
+  const hiddenUsersCte = `WITH hidden_users AS (
+    SELECT DISTINCT
+      CASE
+        WHEN ${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")}
+        THEN b.blocked_id
+        ELSE b.blocker_id
+      END AS user_id
+    FROM blocks b
+    WHERE (${blockerScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+       OR (${blockedScope.predicates.map((predicate) => `b.${predicate}`).join(" OR ")})
+  )`;
+
+  const summary = await env.DB.prepare(
+    `${hiddenUsersCte}
+     SELECT
+       (SELECT COUNT(*)
+        FROM follows
+        WHERE follower_id = ?
+          AND status = 'accepted'
+          AND following_id NOT IN (SELECT user_id FROM hidden_users)) AS following_count,
+       (SELECT COUNT(*)
+        FROM follows
+        WHERE following_id = ?
+          AND status = 'accepted'
+          AND follower_id NOT IN (SELECT user_id FROM hidden_users)) AS followers_count,
+       (SELECT COUNT(*)
+        FROM follows f
+        WHERE f.following_id = ?
+          AND f.status = 'pending'
+          AND f.follower_id NOT IN (SELECT user_id FROM hidden_users)) AS requests_count,
+       (SELECT COUNT(*)
+        FROM users candidate
+        WHERE candidate.id <> ?
+          AND candidate.username IS NOT NULL
+          AND TRIM(candidate.username) <> ''
+          AND COALESCE(candidate.profile_hidden, 0) = 0
+          AND candidate.id NOT IN (SELECT user_id FROM hidden_users)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM follows existing
+            WHERE existing.follower_id = ?
+              AND existing.following_id = candidate.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM follows incoming_request
+            WHERE incoming_request.follower_id = candidate.id
+              AND incoming_request.following_id = ?
+              AND incoming_request.status = 'pending'
+          )) AS suggestions_count`,
+  )
+    .bind(
+      ...blockerScope.params,
+      ...blockerScope.params,
+      ...blockedScope.params,
+      user.id,
+      user.id,
+      user.id,
+      user.id,
+      user.id,
+      user.id,
+    )
+    .first<{
+      following_count: number;
+      followers_count: number;
+      requests_count: number;
+      suggestions_count: number;
+    }>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      counts: {
+        following: Number(summary?.following_count || 0),
+        followers: Number(summary?.followers_count || 0),
+        requests: Number(summary?.requests_count || 0),
+        suggestions: Number(summary?.suggestions_count || 0),
+      },
+      meta: {
+        suggestions_strategy: "visible-follow-candidates",
+      },
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 async function followsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -6438,6 +6541,10 @@ export default {
       if ((request.method === "GET" && isTopPlaylistsDiscoveryRoute(pathname)) ||
         (request.method === "POST" && isTopPlaylistsLegacyRoute(pathname))) {
         return withCors(await topPlaylistsByPlaybackResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isPeopleSummaryRoute(pathname)) {
+        return withCors(await peopleSummaryResponse(request, env), request, env);
       }
 
       if (request.method === "POST" && isSearchUsersRoute(pathname)) {
