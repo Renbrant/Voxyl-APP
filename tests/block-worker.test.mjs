@@ -124,6 +124,7 @@ function createBlockDb() {
     follows: [],
     calls: [],
     failNextBlockInsert: false,
+    peopleSummaryResult: null,
   };
 
   function currentUser() {
@@ -209,6 +210,12 @@ function createBlockDb() {
                 const blockedId = params.at(-1);
                 const row = state.blocks.find((block) => matches(block, 'blocker') && block.blocked_id === blockedId);
                 return row ? publicBlockRow(state, row) : null;
+              }
+              if (/AS following_count[\s\S]*AS suggestions_count/s.test(sql)) {
+                if (!state.peopleSummaryResult) {
+                  throw new Error('People summary result was not configured for this test');
+                }
+                return state.peopleSummaryResult;
               }
               throw new Error(`Unhandled first SQL: ${sql}`);
             },
@@ -331,12 +338,46 @@ describe('Block Worker routes', () => {
       ['/api/blocks/block-1', 'DELETE'],
       ['/api/blocks/hidden-users', 'GET'],
       ['/api/blocks/status/other-user', 'GET'],
+      ['/api/people/summary', 'GET'],
     ]) {
       const response = await worker.fetch(request(path, { method, payload }), { ...baseEnv, DB: createBlockDb() });
       assert.equal(response.status, 401, `${method} ${path}`);
     }
   });
 
+  it('returns the integrated People summary response contract', async () => {
+    const { token, jwk } = createJwt();
+    installJwksMock(jwk);
+    const db = createBlockDb();
+
+    db.state.peopleSummaryResult = {
+      following_count: 3,
+      followers_count: 4,
+      requests_count: 2,
+      suggestions_count: 5,
+    };
+
+    const response = await worker.fetch(
+      request('/api/people/summary', { token }),
+      { ...baseEnv, DB: db },
+    );
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data, {
+      ok: true,
+      counts: {
+        following: 3,
+        followers: 4,
+        requests: 2,
+        suggestions: 5,
+      },
+      meta: {
+        suggestions_strategy: 'visible-follow-candidates',
+      },
+    });
+    assertNoPrivateIdentityFields(data);
+  });
   it('creates and lists only the authenticated user outbound blocks without private identity fields', async () => {
     const { token, jwk } = createJwt();
     installJwksMock(jwk);
