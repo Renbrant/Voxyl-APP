@@ -83,4 +83,44 @@ describe("Issue #75 public profile relationship context", () => {
     assert.match(i18nSource, /No current relationship/);
     assert.match(i18nSource, /Nenhuma relação atual/);
   });
+
+  it("localizes the complete public-profile shell instead of mixing hardcoded Portuguese with i18n", () => {
+    for (const key of [
+      "profileTitle",
+      "profileUnnamedUser",
+      "profileBlock",
+      "profileBlocked",
+      "profileUnblock",
+      "profileStats_followers",
+      "profileStats_playlists",
+      "profilePublicPlaylists",
+      "profileNoPublic",
+      "profileBlockConfirmTitle",
+      "profileUnblockConfirmTitle",
+      "profileUnblockConfirmBody",
+      "profileBlockConfirmBodyPrefix",
+      "profileBlockConfirmBodySuffix",
+      "cancel",
+    ]) {
+      assert.match(userProfileSource, new RegExp(key));
+      assert.match(i18nSource, new RegExp(key + ":"));
+    }
+
+    for (const hardcodedPortuguese of [
+      ">Perfil<",
+      " seguidores · ",
+      "Nenhuma playlist pública",
+      "Desbloquear usuário?",
+      "Bloquear usuário?",
+      "Aguarde...",
+      "Cancelar",
+      "Usuário",
+    ]) {
+      assert.equal(
+        userProfileSource.includes(hardcodedPortuguese),
+        false,
+        hardcodedPortuguese,
+      );
+    }
+  });
 });
