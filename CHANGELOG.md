@@ -6,6 +6,107 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.3 - August 2026
+
+### UX Phase 4 - People Social Dashboard
+
+- Completed Issue #74 with a dedicated **People** destination.
+- Added four social summary areas: **Following**, **Followers**, **Requests**, and **Suggestions**.
+- Moved people search out of Discover and into People.
+- Added incoming follow-request badges to primary navigation.
+- Added authoritative production-backed People summary counts.
+- Preserved explicit incoming-request semantics and social visibility rules.
+- Kept Discover focused on podcast and playlist discovery.
+
+### Validation and Android Release
+
+- Full automated suite passed with **428/428 tests** across 38 suites.
+- ESLint passed.
+- Production web build passed.
+- Authenticated Android and desktop People runtime validation passed.
+- Signed Android release built as version `0.4.3` / versionCode `403`.
+- True in-place Android upgrade from `0.4.2 / 402` to `0.4.3 / 403` passed using `adb install -r`.
+- No uninstall or data clear was used.
+- `firstInstallTime` was preserved.
+- Installed APK bytes matched the frozen release artifact exactly.
+- Manual session, People, branding, and playback smoke passed.
+- Published GitHub APK was downloaded again and verified byte-for-byte against the frozen/tested artifact.
+
+### Release Provenance
+
+- Source commit: `888af88480390c3d519d54643548dcea3236d9ce`
+- Android package: `com.renbrant.voxyl`
+- APK: `Voxyl-v0.4.3-release.apk`
+- APK SHA-256: `F4D1A47DE7415D81896152C5F8078A20E7E7CBE207C6C160BEAE3868D85C887D`
+
+---
+
+## v0.4.2 - August 2026
+
+### UX Phase 3 - Discover Redesign
+
+- Completed Issue #73.
+- Refocused Discover exclusively on **Playlists** and **Podcasts**.
+- Removed people search from the normal Discover experience.
+- Simplified playlist discovery cards.
+- Simplified podcast result cards and descriptions.
+- Improved responsive layout and explicit loading/error states.
+
+### Validation and Android Release
+
+- Full automated suite passed with **416/416 tests**.
+- ESLint passed.
+- Production web build passed.
+- Clean Capacitor native regeneration validated.
+- Production Android build/signing passed.
+- True in-place Android upgrade from `0.4.1 / 401` to `0.4.2 / 402` passed using `adb install -r`.
+- No uninstall or data clear was used.
+- Installed APK bytes matched the validated release artifact exactly.
+- Manual Discover UX, playback, and orphan/duplicate-audio regression smoke passed on a physical device.
+
+### Release Provenance
+
+- Source commit: `dd9821801e4bb4aedaf5118fbab6963e25019b28`
+- Android package: `com.renbrant.voxyl`
+- APK: `Voxyl-v0.4.2-release.apk`
+- APK SHA-256: `C6D3D3000C871AC5D9990CA623526B6933549582DD2E78DBF7D58C687BDA1E3C`
+
+---
+
+## v0.4.1 - August 2026
+
+### UX Phase 2 - Personalized Home
+
+- Added **For You**, **Trending**, and **Last Week** Home views.
+- Trending uses real 90-day Voxyl playback activity.
+- Last Week uses real 7-day playback activity.
+- Added **Continue Listening** with persisted episode progress and direct resume.
+- Added recently played playlists and podcasts.
+- Added expandable listening history.
+- Added explicit loading, empty, error, and retry states.
+- Preserved blocked-user filtering across Home content.
+- Validated responsive behavior across narrow mobile, standard mobile, tablet, and desktop-width layouts.
+
+### Validation and Android Release
+
+- Full automated suite passed with **404/404 tests** across 33 suites.
+- ESLint passed.
+- Production build passed.
+- Real production Trending and Last Week rankings were validated.
+- Signed Android release built with the established Voxyl production certificate.
+- True in-place Android upgrade from `0.4.0 / 400` to `0.4.1 / 401` passed.
+- Installed APK bytes matched the validated release artifact exactly.
+- Manual post-upgrade smoke passed for session/data preservation, Home surfaces, navigation, and playback.
+
+### Release Provenance
+
+- Source commit: `1bfca7a3194db7809150ac14fd4cadb5f28b62ac`
+- Android package: `com.renbrant.voxyl`
+- APK: `Voxyl-v0.4.1-release.apk`
+- APK SHA-256: `900266B574FBD547D2DB9C4BB315C7C44B6AC77DB50F3751AEF13A972D8BBE7E`
+
+---
+
 ## v0.4.0 - August 2026
 
 ### UX Phase 1 - Primary Navigation
