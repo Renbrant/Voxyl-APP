@@ -8,23 +8,22 @@ const peopleSource = fs.readFileSync(new URL('../src/pages/People.jsx', import.m
 const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
 
 describe('Issue #73 Discover content boundary', () => {
-  it('limits unlocked Discover to playlists and podcasts', () => {
+  it('limits Discover to playlists and podcasts', () => {
     assert.deepEqual(DISCOVER_TAB_KEYS, ['playlists', 'podcasts']);
-    assert.equal(resolveExploreTab(null, null), 'playlists');
-    assert.equal(resolveExploreTab(null, 'playlists'), 'playlists');
-    assert.equal(resolveExploreTab(null, 'podcasts'), 'podcasts');
-    assert.equal(resolveExploreTab(null, 'users'), 'playlists');
-    assert.equal(resolveExploreTab(null, 'anything-else'), 'playlists');
+    assert.equal(resolveExploreTab(null), 'playlists');
+    assert.equal(resolveExploreTab('playlists'), 'playlists');
+    assert.equal(resolveExploreTab('podcasts'), 'podcasts');
+    assert.equal(resolveExploreTab('users'), 'playlists');
+    assert.equal(resolveExploreTab('anything-else'), 'playlists');
   });
 
-  it('preserves the locked People user mode', () => {
-    assert.equal(resolveExploreTab('users', 'podcasts'), 'users');
-    assert.match(peopleSource, /lockedTab="users"/);
-    assert.match(peopleSource, /routeBase="\/people"/);
+  it('routes People through a dedicated page', () => {
     assert.match(appSource, /<Route path="\/people"/);
+    assert.doesNotMatch(peopleSource, /lockedTab="users"/);
+    assert.doesNotMatch(peopleSource, /routeBase="\/people"/);
+    assert.doesNotMatch(peopleSource, /from '@\/pages\/Explore'/);
   });
-
-  it('removes Users from the Discover tab selector without deleting social search', () => {
+  it('keeps People ownership completely out of Discover', () => {
     const tabsStart = exploreSource.indexOf('const DISCOVER_TABS = [');
     const tabsEnd = exploreSource.indexOf('const sortOptions', tabsStart);
 
@@ -36,8 +35,13 @@ describe('Issue #73 Discover content boundary', () => {
     assert.match(tabsSource, /key: 'playlists'/);
     assert.match(tabsSource, /key: 'podcasts'/);
     assert.doesNotMatch(tabsSource, /key: 'users'/);
-    assert.match(exploreSource, /resolveExploreTab\(lockedTab, params\.get\('tab'\)\)/);
-    assert.match(exploreSource, /invoke\('searchUsers'/);
-    assert.match(exploreSource, /tab === 'users'/);
+    assert.doesNotMatch(exploreSource, /lockedTab/);
+    assert.doesNotMatch(exploreSource, /routeBase/);
+    assert.doesNotMatch(exploreSource, /tab === 'users'/);
+    assert.doesNotMatch(exploreSource, /invoke\('searchUsers'/);
+    assert.doesNotMatch(exploreSource, /UserSearchCard/);
+    assert.match(peopleSource, /voxylApi\.people\.summary\(\)/);
+    assert.match(peopleSource, /invoke\('searchUsers'/);
+    assert.match(peopleSource, /key: 'suggestions'/);
   });
 });

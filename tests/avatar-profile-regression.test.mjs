@@ -20,7 +20,7 @@ const workerSource = source('../workers/api/src/index.ts');
 const migrationSource = source('../workers/api/migrations/0004_clerk_profile_picture.sql');
 const profileSource = source('../src/pages/Profile.jsx');
 const userProfileSource = source('../src/pages/UserProfile.jsx');
-const exploreSource = source('../src/pages/Explore.jsx');
+const peopleSource = source('../src/pages/People.jsx');
 const userSearchCardSource = source('../src/components/explore/UserSearchCard.jsx');
 const followRequestsSource = source('../src/components/profile/FollowRequestsModal.jsx');
 const userAvatarSource = source('../src/components/common/UserAvatar.jsx');
@@ -159,21 +159,28 @@ describe('Issue #35 Google/Clerk avatar regressions', () => {
     );
   });
 
-  it('propagates follower, following, and pending avatars through Explore', () => {
+  it('propagates follow DTO avatars through People', () => {
     assert.match(
-      exploreSource,
-      /profile_picture:\s*f\.follower_profile_picture/,
+      peopleSource,
+      /const prefix = side === 'follower' \? 'follower' : 'following'/,
+    );
+
+    assert.match(
+      peopleSource,
+      /profile_picture: follow\[/,
     );
 
     const followingMatches =
-      exploreSource.match(/profile_picture:\s*f\.following_profile_picture/g) || [];
+      peopleSource.match(/userFromFollow\(follow, 'following'\)/g) || [];
 
-    assert.equal(followingMatches.length, 2);
+    const followerMatches =
+      peopleSource.match(/userFromFollow\(follow, 'follower'\)/g) || [];
 
-    const cardMatches = exploreSource.match(/user=\{f\}/g) || [];
-    assert.equal(cardMatches.length, 3);
+    assert.equal(followingMatches.length, 1);
+    assert.equal(followerMatches.length, 2);
+    assert.match(peopleSource, /user=\{sectionUser\}/);
+    assert.match(peopleSource, /user=\{searchedUser\}/);
   });
-
   it('keeps existing playlist creator avatars synchronized in the Worker', () => {
     assert.match(
       workerSource,

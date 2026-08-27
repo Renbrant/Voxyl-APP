@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { describe, it } from 'node:test';
 
 const exploreSource = fs.readFileSync(new URL('../src/pages/Explore.jsx', import.meta.url), 'utf8');
+const peopleSource = fs.readFileSync(new URL('../src/pages/People.jsx', import.meta.url), 'utf8');
 const i18nSource = fs.readFileSync(new URL('../src/lib/i18n.js', import.meta.url), 'utf8');
 
 describe('Issue #73 Discover experience redesign', () => {
@@ -33,8 +34,9 @@ describe('Issue #73 Discover experience redesign', () => {
     assert.match(i18nSource, /discoverNoPlaylistResults:/);
   });
 
-  it('does not remove the preserved People implementation', () => {
-    assert.match(exploreSource, /tab === 'users'/);
-    assert.match(exploreSource, /invoke\('searchUsers'/);
+  it('keeps People available through its dedicated page', () => {
+    assert.match(peopleSource, /voxylApi\.people\.summary\(\)/);
+    assert.match(peopleSource, /invoke\('searchUsers'/);
+    assert.doesNotMatch(peopleSource, /from '@\/pages\/Explore'/);
   });
 });

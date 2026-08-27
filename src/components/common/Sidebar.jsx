@@ -21,7 +21,7 @@ const getNavItems = () => ACTIVE_PRIMARY_NAVIGATION.map(item => ({
   label: t(item.labelKey),
 }));
 
-export default function Sidebar() {
+export default function Sidebar({ peopleRequestsCount = 0 }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, clerkLoaded, isLoadingAuth, user, navigateToLogin, logout } = useAuth();
@@ -58,7 +58,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-1 px-3 mt-2">
-        {getNavItems().map(({ icon: Icon, label, path }) => {
+        {getNavItems().map(({ id, icon: Icon, label, path }) => {
           const isProtected = path === '/library' || path === '/profile';
           const active = location.pathname === path ||
             (path !== '/' && location.pathname.startsWith(path));
@@ -83,7 +83,20 @@ export default function Sidebar() {
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
               )}
             >
-              <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
+              <div className="relative flex-shrink-0">
+                <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
+                {id === 'people' && peopleRequestsCount > 0 && (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -right-2 -top-2 min-w-[18px] h-[18px] rounded-full bg-primary px-1 text-[10px] font-bold leading-[18px] text-primary-foreground shadow-md"
+                    >
+                      {peopleRequestsCount > 9 ? '9+' : peopleRequestsCount}
+                    </span>
+                    <span className="sr-only">{t('peopleRequests')}: {peopleRequestsCount}</span>
+                  </>
+                )}
+              </div>
               <span>{label}</span>
             </button>
           );

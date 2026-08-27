@@ -8,19 +8,18 @@ const workerSource = fs.readFileSync(
   'utf8',
 );
 
-const exploreSource = fs.readFileSync(
-  new URL('../src/pages/Explore.jsx', import.meta.url),
+const peopleSource = fs.readFileSync(
+  new URL('../src/pages/People.jsx', import.meta.url),
   'utf8',
 );
 
 describe('Issue #63 social/profile regressions', () => {
-  it('renders searched users independently from connections and pending filters', () => {
+  it('renders searched users independently from social sections', () => {
     assert.match(
-      exploreSource,
-      /debouncedUserSearch\.trim\(\) \? \([\s\S]*filteredUsers\.map\(\(searchedUser/,
+      peopleSource,
+      /searchMode \? \([\s\S]*searchRows\.map\(\(searchedUser/,
     );
   });
-
   it('derives both sides of follow display data from users rows', () => {
     assert.match(
       workerSource,
