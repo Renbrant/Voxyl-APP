@@ -110,6 +110,10 @@ const translations = {
   peopleRequested: { pt: 'Solicitado', en: 'Requested' },
   peopleUnnamedUser: { pt: 'Usuário', en: 'User' },
   peopleUsernameUnavailable: { pt: 'Sem nome de usuário', en: 'No username' },
+  peopleRequestContext: { pt: 'Quer seguir você', en: 'Wants to follow you' },
+  peopleAccept: { pt: 'Aceitar', en: 'Accept' },
+  peopleDecline: { pt: 'Recusar', en: 'Decline' },
+  peopleRequestActionError: { pt: 'Não foi possível atualizar esta solicitação. Tente novamente.', en: 'Could not update this request. Try again.' },
 
   // Explore
   exploreTitle: { pt: 'Explorar', en: 'Explore' },
