@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { UserPlus, UserCheck, Clock, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 // status: null = not following, 'pending' = request sent, 'accepted' = following
 export default function FollowButton({ currentUserId, currentUserEmail, currentUserName, targetUserId, targetUserEmail, followStatus, onStatusChange, theyFollowMe = false }) {
@@ -32,15 +33,17 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
     }
   };
 
-  const label = followStatus === 'accepted' ? 'Seguindo' : followStatus === 'pending' ? 'Solicitado' : theyFollowMe ? 'Seguir de volta' : 'Seguir';
+  const label = followStatus === 'accepted' ? t('peopleFollowing') : followStatus === 'pending' ? t('peopleRequested') : theyFollowMe ? t('peopleFollowBack') : t('peopleFollow');
   const Icon = followStatus === 'accepted' ? UserCheck : followStatus === 'pending' ? Clock : UserPlus;
 
   return (
     <button
+      type="button"
+      aria-label={label}
       onClick={handleClick}
       disabled={loading}
       className={cn(
-        'flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all',
+        'flex flex-shrink-0 items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all',
         followStatus === 'accepted'
           ? 'bg-secondary text-foreground border border-border'
           : followStatus === 'pending'

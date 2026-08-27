@@ -104,6 +104,12 @@ const translations = {
   peopleSignInAction: { pt: 'Entrar', en: 'Sign in' },
   peopleSignInError: { pt: 'Não foi possível iniciar o login.', en: 'Could not start sign-in.' },
   peopleBackDashboard: { pt: 'Voltar para Pessoas', en: 'Back to People' },
+  peopleFollowsYou: { pt: 'Segue você', en: 'Follows you' },
+  peopleFollow: { pt: 'Seguir', en: 'Follow' },
+  peopleFollowBack: { pt: 'Seguir de volta', en: 'Follow back' },
+  peopleRequested: { pt: 'Solicitado', en: 'Requested' },
+  peopleUnnamedUser: { pt: 'Usuário', en: 'User' },
+  peopleUsernameUnavailable: { pt: 'Sem nome de usuário', en: 'No username' },
 
   // Explore
   exploreTitle: { pt: 'Explorar', en: 'Explore' },

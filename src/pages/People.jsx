@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, Inbox, RefreshCcw, Sparkles, UserCheck, User
 import { voxylApi } from '@/api/voxylApiClient';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import PodcastSearchBar from '@/components/explore/PodcastSearchBar';
-import UserSearchCard from '@/components/explore/UserSearchCard';
+import PeopleUserCard from '@/components/people/PeopleUserCard';
 import { useDebounce } from '@/hooks/useDebounce';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -381,7 +381,7 @@ export default function People() {
             ) : (
               <div className="space-y-2">
                 {searchRows.map((searchedUser, index) => (
-                  <UserSearchCard
+                  <PeopleUserCard
                     key={searchedUser.id}
                     user={searchedUser}
                     index={index}
@@ -457,7 +457,7 @@ export default function People() {
                 ) : (
                   <div className="space-y-2">
                     {sectionRows.map((sectionUser, index) => (
-                      <UserSearchCard
+                      <PeopleUserCard
                         key={sectionUser.id}
                         user={sectionUser}
                         index={index}
