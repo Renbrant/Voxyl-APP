@@ -114,6 +114,11 @@ const translations = {
   peopleAccept: { pt: 'Aceitar', en: 'Accept' },
   peopleDecline: { pt: 'Recusar', en: 'Decline' },
   peopleRequestActionError: { pt: 'Não foi possível atualizar esta solicitação. Tente novamente.', en: 'Could not update this request. Try again.' },
+  peopleRelationshipContext: { pt: 'Relação social', en: 'Social relationship' },
+  peopleRelationshipNone: { pt: 'Nenhuma relação atual', en: 'No current relationship' },
+  peopleRelationshipLoading: { pt: 'Carregando relação...', en: 'Loading relationship...' },
+  peopleRelationshipError: { pt: 'Não foi possível carregar esta relação.', en: 'Could not load this relationship.' },
+  peopleRelationshipRetry: { pt: 'Tentar novamente', en: 'Retry' },
 
   // Explore
   exploreTitle: { pt: 'Explorar', en: 'Explore' },

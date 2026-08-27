@@ -43,7 +43,7 @@ export default function FollowButton({ currentUserId, currentUserEmail, currentU
       onClick={handleClick}
       disabled={loading}
       className={cn(
-        'flex flex-shrink-0 items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all',
+        'flex min-h-11 flex-shrink-0 items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all',
         followStatus === 'accepted'
           ? 'bg-secondary text-foreground border border-border'
           : followStatus === 'pending'
