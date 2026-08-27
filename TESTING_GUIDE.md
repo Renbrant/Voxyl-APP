@@ -1,217 +1,334 @@
-# Teste Manual - Issue #63 User Profile and Social Features
+# Voxyl Testing Guide
 
-## Pré-requisitos
+This document describes the current validation strategy for the Voxyl beta line.
 
-✅ Worker rodando: `http://127.0.0.1:8787`
-✅ App rodando: `http://localhost:5173` (não precisa estar carregando, só para login)
+It replaces the old Issue #63-specific manual test guide. Historical investigation details remain available in issue-specific documents and GitHub history, but they are not the current project-wide testing contract.
 
-## Método 1: Teste Rápido com Curl (SEM AUTENTICAÇÃO)
+---
 
-Todos os endpoints devem retornar **401 Unauthorized** (behavior correto):
+## Validation Layers
 
-```powershell
-# Test 1: POST /api/files/upload (sem file, sem auth)
-curl.exe -X POST http://127.0.0.1:8787/api/files/upload -H "Content-Type: application/json" -d "{}"
-# Esperado: {"ok":false,"authenticated":false,"error":"Unauthorized"}
+Voxyl validation is intentionally layered. A green source test suite does not replace runtime validation, and a successful build does not prove release provenance.
 
-# Test 2: PATCH /api/me (sem auth)
-curl.exe -X PATCH http://127.0.0.1:8787/api/me -H "Content-Type: application/json" -d "{}"
-# Esperado: {"ok":false,"authenticated":false,"error":"Unauthorized"}
+The main evidence layers are:
 
-# Test 3: POST /api/functions/requestFollow (sem auth)
-curl.exe -X POST http://127.0.0.1:8787/api/functions/requestFollow -H "Content-Type: application/json" -d '{"targetUserId":"test"}'
-# Esperado: {"ok":false,"authenticated":false,"error":"Unauthorized"}
+1. focused regression tests;
+2. full automated suite;
+3. lint and type checking;
+4. production web build;
+5. runtime/visual validation when behavior changes;
+6. physical Android validation for native lifecycle behavior;
+7. release artifact identity/provenance/signing checks;
+8. true upgrade validation when releasing Android;
+9. post-publication byte verification.
 
-# Test 4: POST /api/functions/cancelFollowRequest (sem auth)
-curl.exe -X POST http://127.0.0.1:8787/api/functions/cancelFollowRequest -H "Content-Type: application/json" -d '{"targetUserId":"test"}'
-# Esperado: {"ok":false,"authenticated":false,"error":"Unauthorized"}
-```
+---
 
-## Método 2: Teste Automático com Node.js
+## Standard Source Validation
 
-```bash
-cd c:\GitHub\Voxyl-APP
-npm run test
-```
-
-Este comando roda toda a suite de testes (304 testes, todos devem passar).
-
-## Método 3: Teste Manual Completo (COM AUTENTICAÇÃO)
-
-### Passo 1: Obter Token Clerk
-
-1. Abra `http://localhost:5173` em seu navegador
-2. Faça login com sua conta Clerk
-3. Abra Developer Tools (F12)
-4. Vá à aba **Network** 
-5. Faça qualquer requisição de API (ex: carregar um podcast)
-6. Clique em qualquer requisição e procure pelo header:
-   ```
-   Authorization: Bearer eyJhbGc...
-   ```
-7. Copie o token (apenas a parte após "Bearer ")
-
-### Passo 2: Exportar Token para PowerShell
-
-```powershell
-$TOKEN = "eyJhbGc..."  # Cole aqui o token que você copiou
-```
-
-### Passo 3: Testar Endpoints
-
-#### A) Test POST /api/files/upload (Upload de Foto)
-
-```powershell
-# Criar imagem de teste (1x1 PNG)
-$imageBytes = @(137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 216, 0, 0, 0, 12, 73, 68, 65, 84, 8, 29, 1, 1, 0, 0, 0, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0, 34, 230, 167, 32, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130) -as [byte[]]
-$imageBytes | Set-Content -Path temp_image.png -Encoding Byte
-
-# Upload
-$headers = @{
-    "Authorization" = "Bearer $TOKEN"
-}
-$file = Get-Item temp_image.png
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:8787/api/files/upload" `
-    -Method POST `
-    -Headers $headers `
-    -Form @{ file = $file } `
-    -ContentType "multipart/form-data"
-
-Write-Host "Upload Response:" -ForegroundColor Green
-$response.Content | ConvertFrom-Json | Format-Table -AutoSize
-
-# Resultado esperado:
-# {
-#   "file_url": "https://media.renbrant.com/profiles/..."
-# }
-```
-
-#### B) Test PATCH /api/me (Salvar Photo na Profile)
-
-```powershell
-$TOKEN = "seu_token_aqui"
-$headers = @{
-    "Authorization" = "Bearer $TOKEN"
-    "Content-Type" = "application/json"
-}
-
-$body = @{
-    profile_picture = "https://media.renbrant.com/profiles/test.jpg"
-    profile_hidden = $false
-} | ConvertTo-Json
-
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:8787/api/me" `
-    -Method PATCH `
-    -Headers $headers `
-    -Body $body
-
-Write-Host "Profile Update Response:" -ForegroundColor Green
-$response.Content | ConvertFrom-Json | Format-Table -AutoSize
-
-# Resultado esperado:
-# {
-#   "data": {
-#     "id": "user_xyz",
-#     "profile_picture": "https://media.renbrant.com/profiles/test.jpg",
-#     "profile_hidden": false,
-#     ...
-#   }
-# }
-```
-
-#### C) Test requestFollow (Seguir Usuário)
-
-```powershell
-$TOKEN = "seu_token_aqui"
-$targetUserId = "user_id_of_person_to_follow"  # Substitua com ID real
-
-$headers = @{
-    "Authorization" = "Bearer $TOKEN"
-    "Content-Type" = "application/json"
-}
-
-$body = @{
-    targetUserId = $targetUserId
-} | ConvertTo-Json
-
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:8787/api/functions/requestFollow" `
-    -Method POST `
-    -Headers $headers `
-    -Body $body
-
-Write-Host "Request Follow Response:" -ForegroundColor Green
-$response.Content | ConvertFrom-Json | Format-Table -AutoSize
-
-# Resultado esperado:
-# {
-#   "data": {
-#     "id": "follow_id",
-#     "status": "pending"
-#   }
-# }
-```
-
-#### D) Test cancelFollowRequest (Parar de Seguir)
-
-```powershell
-$TOKEN = "seu_token_aqui"
-$targetUserId = "user_id_of_person_to_unfollow"
-
-$headers = @{
-    "Authorization" = "Bearer $TOKEN"
-    "Content-Type" = "application/json"
-}
-
-$body = @{
-    targetUserId = $targetUserId
-} | ConvertTo-Json
-
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:8787/api/functions/cancelFollowRequest" `
-    -Method POST `
-    -Headers $headers `
-    -Body $body
-
-Write-Host "Cancel Follow Response:" -ForegroundColor Green
-$response.Content | ConvertFrom-Json | Format-Table -AutoSize
-
-# Resultado esperado:
-# {
-#   "data": {
-#     "deleted": true
-#   }
-# }
-```
-
-## Validação Checklist
-
-- [ ] **POST /api/files/upload** retorna `file_url` válido
-- [ ] **PATCH /api/me** persiste `profile_picture` e `profile_hidden`
-- [ ] **requestFollow** cria follow com `status: "pending"`
-- [ ] **cancelFollowRequest** retorna `deleted: true`
-- [ ] Todos os 304 testes passam com `npm run test`
-- [ ] Sem erros no console do Worker
-
-## Troubleshooting
-
-### "curl command not found"
-Use: `curl.exe` em vez de `curl`
-
-### "401 Unauthorized esperado"
-- Verifique se o token é válido e não expirou
-- Token deve estar depois de "Bearer "
-- Verifique se há space depois de "Bearer"
-
-### Erro de CORS
-- Esperado se testar do navegador sem CORS headers
-- Worker adiciona `withCors()` automaticamente
-
-## Próximos Passos
-
-Se tudo passar aqui, o código está pronto para merge! 🚀
+For a normal frontend/backend increment, start with focused tests for the changed behavior and then run the full project gates.
 
 ```bash
-git checkout main
-git merge fix/issue-63-user-profile-social
-git push
-gh issue close 63 --comment "✅ Phase 2 implementation complete..."
+npm test
+npm run lint
+npm run typecheck
+npm run build
 ```
+
+Repository integrity:
+
+```bash
+git status
+git diff --check
+```
+
+Use `npm ci` in clean validation/release worktrees when reproducibility from `package-lock.json` matters.
+
+---
+
+## Current Automated Baseline
+
+The v0.4.3 release candidate completed:
+
+```text
+428 / 428 automated tests
+38 test suites
+ESLint: PASS
+Production build: PASS
+```
+
+The exact test count is evidence for that release, not a permanent constant. Future changes may legitimately add or remove tests; the requirement is that the discovered current suite passes completely.
+
+---
+
+## UI and Product Runtime Validation
+
+Changes to navigation, responsive layout, loading/error states, or user flows should be exercised in the real application rather than inferred only from unit tests.
+
+Useful viewport classes include:
+
+- narrow mobile;
+- standard mobile;
+- tablet;
+- desktop.
+
+For authenticated experiences, validate with a real authenticated session whenever the feature depends on production-shaped user/social data.
+
+### Current primary navigation
+
+Verify the five canonical destinations when navigation behavior changes:
+
+```text
+Home · Discover · People · Library · Profile
+```
+
+### Home regressions
+
+When Home behavior changes, validate as applicable:
+
+- For You;
+- Trending (90-day activity semantics);
+- Last Week (7-day activity semantics);
+- Continue Listening;
+- recently played content;
+- history;
+- loading/empty/error/retry states.
+
+### Discover regressions
+
+Discover should remain focused on:
+
+- Playlists;
+- Podcasts.
+
+People search should not silently return to Discover.
+
+### People regressions
+
+When social behavior changes, validate:
+
+- Following;
+- Followers;
+- incoming Requests;
+- Suggestions;
+- People search;
+- summary-count/detail consistency;
+- incoming-request badges;
+- hidden/block/relationship eligibility rules where affected.
+
+---
+
+## Authentication Validation
+
+Web and Android authentication use different Clerk integration paths and both should be respected in testing.
+
+### Web
+
+Validate as applicable:
+
+- sign in;
+- authenticated API calls;
+- protected-route behavior;
+- sign out;
+- session restoration.
+
+### Android
+
+Physical-device validation is required for meaningful changes to:
+
+- Clerk hosted auth;
+- system-browser return;
+- `clerk://com.renbrant.voxyl.callback`;
+- native session restoration;
+- logout;
+- signed-out cold start;
+- Android WebView API authorization/CORS.
+
+Do not infer native auth correctness only from browser tests.
+
+---
+
+## Android Playback Validation
+
+Persistent playback is stateful native behavior and must be tested on a real Android device when its architecture or integration changes.
+
+Important invariants:
+
+- one authoritative process-owned playback engine;
+- one MediaSession;
+- Activity/WebView recreation does not create a second player;
+- UI reconnects to native playback state;
+- pause controls the actual active stream;
+- stop terminates/clears playback according to product semantics;
+- repeated close/reopen cycles do not accumulate orphaned or duplicate audio.
+
+Recommended regression flow:
+
+1. start playback;
+2. pause/resume;
+3. navigate between product sections;
+4. background and foreground the app;
+5. remove/recreate the UI as appropriate;
+6. reopen Voxyl and confirm control reconnects to the existing session;
+7. switch episode;
+8. confirm no parallel audio streams;
+9. stop and reopen;
+10. confirm stopped state remains coherent.
+
+When the change is unrelated to playback but a signed Android release is being prepared, perform a smaller playback smoke to protect this high-risk invariant.
+
+---
+
+## Backend / Social Validation
+
+Backend changes should test both authorization and the final API contract.
+
+For protected operations:
+
+- unauthenticated calls should be rejected;
+- ownership must derive from validated Clerk identity;
+- client-supplied ownership identifiers must not bypass authorization;
+- relationship mutations should be checked against resulting authoritative state.
+
+For People/social work, do not validate only individual helper queries. Confirm that the final API representation and rendered summary/detail behavior agree.
+
+---
+
+## D1 Migration Validation
+
+Schema changes must use a new sequential migration in:
+
+```text
+workers/api/migrations/
+```
+
+Validate:
+
+- migration syntax;
+- behavior on representative existing data;
+- preservation of existing rows unless a deliberate migration says otherwise;
+- application/API compatibility after migration;
+- production deployment separately from source merge.
+
+Do not rewrite the historical meaning of an already-applied migration.
+
+---
+
+## Production Web Validation
+
+A successful merge to `main` is not proof that the corresponding web artifact is running in production.
+
+After production deployment, verify:
+
+```text
+https://v.renbrant.com/version.json
+```
+
+The deployed metadata should match the intended:
+
+- version;
+- full Git SHA;
+- branch;
+- build artifact.
+
+Then perform a real production smoke for the changed behavior.
+
+---
+
+## Android Release Validation
+
+Android release validation is a separate release-engineering boundary.
+
+Before publication, verify at least:
+
+- exact release source commit;
+- `versionName`;
+- `versionCode`;
+- package `com.renbrant.voxyl`;
+- production Clerk configuration availability;
+- production signing certificate continuity;
+- embedded build/source provenance;
+- APK size;
+- APK SHA-256.
+
+Once those gates pass, freeze that signed APK. Downstream device or GitHub failures must not cause an unnecessary rebuild of the same valid artifact.
+
+See [docs/release-process.md](docs/release-process.md).
+
+---
+
+## True In-Place Android Upgrade
+
+A true upgrade test requires the device to be on the verified prior production version.
+
+Expected pattern:
+
+```text
+previous version installed
+        |
+        v
+adb install -r <frozen-new-apk>
+        |
+        v
+new version installed
+```
+
+Validate:
+
+- previous `versionName/versionCode` before mutation;
+- `adb install -r` success;
+- new `versionName/versionCode`;
+- no uninstall;
+- no data clear;
+- `firstInstallTime` preserved when used as continuity evidence;
+- session/user data preserved;
+- pulled installed `base.apk` hash matches the frozen release artifact when practical.
+
+If the device is already on the target version, do not describe a same-version reinstall as a true previous-version upgrade.
+
+---
+
+## Post-Publication Verification
+
+For GitHub Android releases, publication is not complete at successful upload.
+
+After publication:
+
+1. verify tag/release identity;
+2. verify the expected APK asset exists exactly once;
+3. download the published APK into a separate verification location;
+4. compare file size with the frozen artifact;
+5. compare SHA-256 with the frozen artifact.
+
+This proves that the bytes available to users are the bytes that were validated and tested.
+
+---
+
+## Evidence and Failure Classification
+
+When a validation checkpoint fails, classify the failure before changing product code:
+
+- product defect;
+- test defect;
+- environment/readiness failure;
+- harness/tooling failure;
+- methodology compliance failure.
+
+Preserve successful evidence from earlier stages and resume from the smallest technically correct boundary.
+
+Do not repeat expensive validation merely to make the transcript look linear when the underlying source/artifact identity has not changed.
+
+---
+
+## Historical Issue-Specific Tests
+
+Issue-specific testing documents and investigations may remain in repository history for traceability, including the former Issue #63 profile/social test guide.
+
+Treat those as historical evidence. Current acceptance criteria come from:
+
+- the active GitHub issue/PR;
+- current source/tests;
+- this guide;
+- [CONTRIBUTING.md](CONTRIBUTING.md);
+- [docs/release-process.md](docs/release-process.md);
+- the adopted AI-assisted development methodology.
