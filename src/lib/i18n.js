@@ -25,6 +25,7 @@ const translations = {
   noResults: { pt: 'Nenhum resultado encontrado', en: 'No results found' },
   retry: { pt: 'Tentar novamente', en: 'Retry' },
   search: { pt: 'Buscar', en: 'Search' },
+  cancel: { pt: 'Cancelar', en: 'Cancel' },
 
   // Navigation
   navHome: { pt: 'Início', en: 'Home' },
@@ -195,6 +196,15 @@ const translations = {
 
   // Profile
   profileTitle: { pt: 'Perfil', en: 'Profile' },
+  profileUnnamedUser: { pt: 'Usuário', en: 'User' },
+  profileBlock: { pt: 'Bloquear', en: 'Block' },
+  profileBlocked: { pt: 'Bloqueado', en: 'Blocked' },
+  profileUnblock: { pt: 'Desbloquear', en: 'Unblock' },
+  profileBlockConfirmTitle: { pt: 'Bloquear usuário?', en: 'Block user?' },
+  profileUnblockConfirmTitle: { pt: 'Desbloquear usuário?', en: 'Unblock user?' },
+  profileUnblockConfirmBody: { pt: 'poderá te seguir novamente e ver seus conteúdos.', en: 'will be able to follow you again and view your content.' },
+  profileBlockConfirmBodyPrefix: { pt: 'Você não verá mais o conteúdo de', en: 'You will no longer see content from' },
+  profileBlockConfirmBodySuffix: { pt: 'e ele não verá o seu. O seguimento entre vocês será removido.', en: 'and they will no longer see yours. The follow relationship between you will be removed.' },
   profileSubtitle: { pt: 'Sua conta', en: 'Your account' },
   profileHidden: { pt: 'Perfil oculto', en: 'Profile hidden' },
   profileVisible: { pt: 'Perfil visível', en: 'Profile visible' },

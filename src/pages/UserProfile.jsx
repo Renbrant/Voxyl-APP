@@ -224,7 +224,7 @@ export default function UserProfile() {
 
   const displayName = profileUser?.username
     ? `@${profileUser.username}`
-    : profileUser?.full_name || 'Usuário';
+    : profileUser?.full_name || t('profileUnnamedUser');
   const isOwnProfile = currentUser?.id === userId;
   const inboundBlocked = currentUser && !isOwnProfile && isBlocked && !hasOutboundBlock;
   const canShowProfileContent = authResolved && (!currentUser || isOwnProfile || (blockStatusReady && !isBlocked));
@@ -238,7 +238,7 @@ export default function UserProfile() {
           <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center" style={{ WebkitTapHighlightColor: 'transparent' }}>
             <ArrowLeft size={18} />
           </button>
-          <h1 className="text-xl font-grotesk font-bold">Perfil</h1>
+          <h1 className="text-xl font-grotesk font-bold">{t('profileTitle')}</h1>
         </div>
         {canShowBlockButton && (
           <button
@@ -246,7 +246,7 @@ export default function UserProfile() {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-muted-foreground bg-secondary border border-border"
           >
             <Ban size={13} />
-            {hasOutboundBlock ? 'Bloqueado' : 'Bloquear'}
+            {hasOutboundBlock ? t('profileBlocked') : t('profileBlock')}
           </button>
         )}
       </div>
@@ -260,7 +260,7 @@ export default function UserProfile() {
           className="w-16 h-16 mb-2 flex-shrink-0"
         />
         <h2 className="text-lg font-grotesk font-bold">{displayName}</h2>
-        <p className="text-sm text-muted-foreground mb-3">{followersCount} seguidores · {playlists.length} playlists</p>
+        <p className="text-sm text-muted-foreground mb-3">{followersCount} {t('profileStats_followers')} · {playlists.length} {t('profileStats_playlists')}</p>
 
         {currentUser && !isOwnProfile && blockStatusError && (
           <div className="mt-2 rounded-2xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground flex items-center gap-2">
@@ -383,14 +383,14 @@ export default function UserProfile() {
 
       {canShowProfileContent && (
         <div className="px-4 pb-4">
-          <h3 className="font-semibold mb-3">Playlists</h3>
+          <h3 className="font-semibold mb-3">{t('profilePublicPlaylists')}</h3>
           {loading ? (
             <div className="space-y-3">
               {[...Array(3)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
             </div>
           ) : playlists.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
-              <p>Nenhuma playlist pública</p>
+              <p>{t('profileNoPublic')}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -414,12 +414,12 @@ export default function UserProfile() {
               className="w-full max-w-md bg-card border-t border-border rounded-t-3xl p-5"
             >
               <h3 className="font-grotesk font-bold text-base mb-2">
-                {hasOutboundBlock ? 'Desbloquear usuário?' : 'Bloquear usuário?'}
+                {hasOutboundBlock ? t('profileUnblockConfirmTitle') : t('profileBlockConfirmTitle')}
               </h3>
               <p className="text-sm text-muted-foreground mb-5">
                 {hasOutboundBlock
-                  ? `${displayName} poderá te seguir novamente e ver seus conteúdos.`
-                  : `Você não verá mais o conteúdo de ${displayName} e ele não verá o seu. O seguimento entre vocês será removido.`}
+                  ? `${displayName} ${t('profileUnblockConfirmBody')}`
+                  : `${t('profileBlockConfirmBodyPrefix')} ${displayName} ${t('profileBlockConfirmBodySuffix')}`}
               </p>
               {blockError && (
                 <p className="text-xs text-destructive mb-3">{blockError}</p>
@@ -429,10 +429,10 @@ export default function UserProfile() {
                 disabled={blockLoading}
                 className="w-full py-3 rounded-2xl bg-destructive text-white font-semibold text-sm mb-2 disabled:opacity-50"
               >
-                {blockLoading ? 'Aguarde...' : hasOutboundBlock ? 'Desbloquear' : 'Bloquear'}
+                {blockLoading ? t('loading') : hasOutboundBlock ? t('profileUnblock') : t('profileBlock')}
               </button>
               <button onClick={() => setShowBlockConfirm(false)} className="w-full py-3 rounded-2xl bg-secondary text-sm font-medium">
-                Cancelar
+                {t('cancel')}
               </button>
             </motion.div>
           </div>
