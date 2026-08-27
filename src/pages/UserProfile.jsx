@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
@@ -12,12 +13,16 @@ import { t } from '@/lib/i18n';
 export default function UserProfile() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [currentUser, setCurrentUser] = useState(null);
   const [profileUser, setProfileUser] = useState(null);
   const [playlists, setPlaylists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [followStatus, setFollowStatus] = useState(null); // null | 'pending' | 'accepted'
   const [theyFollowMe, setTheyFollowMe] = useState(false);
+  const [relationshipReady, setRelationshipReady] = useState(false);
+  const [relationshipError, setRelationshipError] = useState('');
+  const [relationshipRetryNonce, setRelationshipRetryNonce] = useState(0);
   const [followersCount, setFollowersCount] = useState(0);
   const [authResolved, setAuthResolved] = useState(false);
   const [blockStatusReady, setBlockStatusReady] = useState(false);
@@ -72,7 +77,7 @@ export default function UserProfile() {
       .then(res => {
         const data = res.data;
         setPlaylists(data.playlists || []);
-        setFollowStatus(data.isFollowing ? 'accepted' : null);
+
         setLoading(false);
         const first = (data.playlists || [])[0];
         if (first) {
@@ -90,45 +95,99 @@ export default function UserProfile() {
   }, [userId]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) return undefined;
+
+    if (currentUser.id === userId) {
+      setFollowStatus(null);
+      setTheyFollowMe(false);
+      setRelationshipReady(true);
+      setRelationshipError('');
+      return undefined;
+    }
+
+    let active = true;
+    setFollowStatus(null);
+    setTheyFollowMe(false);
+    setRelationshipReady(false);
+    setRelationshipError('');
+
+    Promise.all([
+      voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId }),
+      voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id, status: 'accepted' }),
+    ])
+      .then(([outgoingFollows, incomingFollows]) => {
+        if (!active) return;
+
+        const outgoing = Array.isArray(outgoingFollows)
+          ? outgoingFollows[0]
+          : null;
+        const outgoingStatus =
+          outgoing?.status === 'accepted' || outgoing?.status === 'pending'
+            ? outgoing.status
+            : null;
+
+        setFollowStatus(outgoingStatus);
+        setTheyFollowMe(
+          Array.isArray(incomingFollows) && incomingFollows.length > 0,
+        );
+        setRelationshipReady(true);
+      })
+      .catch(error => {
+        if (!active) return;
+        console.error('[UserProfile] Failed to load relationship context', {
+          currentUserId: currentUser.id,
+          userId,
+          error,
+        });
+        setFollowStatus(null);
+        setTheyFollowMe(false);
+        setRelationshipError(t('peopleRelationshipError'));
+        setRelationshipReady(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUser, userId, relationshipRetryNonce]);
+
+  useEffect(() => {
+    if (!currentUser) return undefined;
+
     if (currentUser.id === userId) {
       setBlockStatusReady(true);
       setIsBlocked(false);
       setHasOutboundBlock(false);
       setBlockRecordId(null);
-      return;
+      return undefined;
     }
 
-    // Check follow status for pending
-    voxylApi.entities.Follow.filter({ follower_id: currentUser.id, following_id: userId })
-      .then(follows => {
-        if (follows.length > 0 && follows[0].status === 'pending') {
-          setFollowStatus('pending');
-        }
-      })
-      .catch(error => console.error('[UserProfile] Failed to load follow status', { currentUserId: currentUser.id, userId, error }));
-
-    // Check if they follow me
-    voxylApi.entities.Follow.filter({ follower_id: userId, following_id: currentUser.id, status: 'accepted' })
-      .then(follows => setTheyFollowMe(follows.length > 0))
-      .catch(error => console.error('[UserProfile] Failed to load reciprocal follow status', { currentUserId: currentUser.id, userId, error }));
-
+    let active = true;
     setBlockStatusReady(false);
     setBlockStatusError('');
+
     voxylApi.blocks.status(userId)
       .then(status => {
+        if (!active) return;
         setIsBlocked(Boolean(status.hidden));
         setHasOutboundBlock(Boolean(status.can_unblock));
         setBlockRecordId(status.outbound_block_id || null);
         setBlockStatusReady(true);
       })
       .catch(error => {
-        console.error('[UserProfile] Failed to load block status', { currentUserId: currentUser.id, userId, error });
+        if (!active) return;
+        console.error('[UserProfile] Failed to load block status', {
+          currentUserId: currentUser.id,
+          userId,
+          error,
+        });
         setBlockStatusError(t('blockLoadHiddenError'));
         setBlockStatusReady(false);
       });
-  }, [currentUser, userId]);
 
+    return () => {
+      active = false;
+    };
+  }, [currentUser, userId]);
   const handleBlock = async () => {
     if (!currentUser) return;
     setBlockLoading(true);
@@ -150,6 +209,10 @@ export default function UserProfile() {
         setBlockStatusReady(true);
         setFollowStatus(null);
       }
+      setTheyFollowMe(false);
+      setRelationshipReady(false);
+      setRelationshipError('');
+      setRelationshipRetryNonce((value) => value + 1);
       setShowBlockConfirm(false);
     } catch (error) {
       console.error('[UserProfile] Failed to update block status', { userId, isBlocked, error });
@@ -221,22 +284,94 @@ export default function UserProfile() {
         )}
 
         {currentUser && !isOwnProfile && !isBlocked && blockStatusReady && (
-          <FollowButton
-            currentUserId={currentUser.id}
-            currentUserEmail={currentUser.email}
-            currentUserName={currentUser.full_name}
-            targetUserId={userId}
-            targetUserEmail={playlists[0]?.creator_email || ''}
-            followStatus={followStatus}
-            theyFollowMe={theyFollowMe}
-            onStatusChange={(status) => {
-              const wasAccepted = followStatus === 'accepted';
-              setFollowStatus(status);
-              if (wasAccepted && !status) setFollowersCount(prev => Math.max(0, prev - 1));
-            }}
-          />
-        )}
+          <div className="flex w-full max-w-sm flex-col items-center gap-3">
+            <div
+              className="flex min-h-7 flex-wrap items-center justify-center gap-2"
+              aria-label={t('peopleRelationshipContext')}
+            >
+              {!relationshipReady ? (
+                <span className="text-xs text-muted-foreground">
+                  {t('peopleRelationshipLoading')}
+                </span>
+              ) : relationshipError ? (
+                <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+                  <span className="text-xs text-muted-foreground">
+                    {relationshipError}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setRelationshipRetryNonce((value) => value + 1)}
+                    className="min-h-9 text-xs font-semibold text-primary"
+                  >
+                    {t('peopleRelationshipRetry')}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {followStatus === 'accepted' && (
+                    <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                      {t('peopleFollowing')}
+                    </span>
+                  )}
 
+                  {followStatus === 'pending' && (
+                    <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                      {t('peopleRequested')}
+                    </span>
+                  )}
+
+                  {theyFollowMe && (
+                    <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                      {t('peopleFollowsYou')}
+                    </span>
+                  )}
+
+                  {!followStatus && !theyFollowMe && (
+                    <span className="rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-muted-foreground">
+                      {t('peopleRelationshipNone')}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
+            {relationshipReady && !relationshipError && (
+              <FollowButton
+                currentUserId={currentUser.id}
+                currentUserEmail={currentUser.email}
+                currentUserName={currentUser.full_name}
+                targetUserId={userId}
+                targetUserEmail={playlists[0]?.creator_email || ''}
+                followStatus={followStatus}
+                theyFollowMe={theyFollowMe}
+                onStatusChange={(status) => {
+                  const wasAccepted = followStatus === 'accepted';
+                  setFollowStatus(status);
+                  setRelationshipReady(true);
+                  setRelationshipError('');
+
+                  if (wasAccepted && !status) {
+                    setFollowersCount(prev => Math.max(0, prev - 1));
+                  }
+
+                  const invalidations = [
+                    queryClient.invalidateQueries({
+                      queryKey: ['people-outgoing-follows', currentUser.id],
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: ['people-summary', currentUser.id],
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: ['people-suggestions-preview', currentUser.id],
+                    }),
+                  ];
+
+                  void Promise.allSettled(invalidations);
+                }}
+              />
+            )}
+          </div>
+        )}
         {hasOutboundBlock && (
           <p className="text-xs text-muted-foreground mt-1">{t('blockYouBlockedUser')}</p>
         )}

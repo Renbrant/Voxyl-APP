@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Inbox, RefreshCcw, Sparkles, UserCheck, Users } from 'lucide-react';
 import { voxylApi } from '@/api/voxylApiClient';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import PodcastSearchBar from '@/components/explore/PodcastSearchBar';
-import UserSearchCard from '@/components/explore/UserSearchCard';
+import PeopleUserCard from '@/components/people/PeopleUserCard';
+import PeopleRequestCard from '@/components/people/PeopleRequestCard';
 import { useDebounce } from '@/hooks/useDebounce';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -68,6 +69,7 @@ function userFromFollow(follow, side) {
 export default function People() {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const params = new URLSearchParams(location.search);
   const requestedSection = params.get('section');
   const selectedSection = PEOPLE_SECTION_KEYS.has(requestedSection)
@@ -79,6 +81,8 @@ export default function People() {
   const [loginError, setLoginError] = useState('');
   const [userSearch, setUserSearch] = useState('');
   const [followOverrides, setFollowOverrides] = useState({});
+  const [requestActionId, setRequestActionId] = useState(null);
+  const [requestActionError, setRequestActionError] = useState(null);
 
   const debouncedUserSearch = useDebounce(userSearch, 400);
   const searchMode = debouncedUserSearch.trim().length > 0;
@@ -202,7 +206,10 @@ export default function People() {
 
     if (selectedSection === 'requests') {
       return asArray(incomingPendingQuery.data)
-        .map((follow) => userFromFollow(follow, 'follower'))
+        .map((follow) => ({
+          ...userFromFollow(follow, 'follower'),
+          follow_id: follow.id,
+        }))
         .filter((candidate) => !hiddenIds.has(candidate.id));
     }
 
@@ -264,6 +271,91 @@ export default function People() {
     }));
   };
 
+  const updateRequestCaches = (requestUser, action) => {
+    const pendingKey = ['people-incoming-pending', user.id];
+    const summaryKey = ['people-summary', user.id];
+
+    queryClient.setQueryData(pendingKey, (current) => {
+      if (!Array.isArray(current)) return current;
+
+      return current.filter(
+        (follow) => follow.id !== requestUser.follow_id,
+      );
+    });
+
+    queryClient.setQueryData(summaryKey, (current) => {
+      if (!current?.counts) return current;
+
+      const currentRequests = Number(current.counts.requests) || 0;
+      const currentFollowers = Number(current.counts.followers) || 0;
+
+      return {
+        ...current,
+        counts: {
+          ...current.counts,
+          requests: Math.max(0, currentRequests - 1),
+          followers: action === 'accept'
+            ? currentFollowers + 1
+            : currentFollowers,
+        },
+      };
+    });
+
+    return { pendingKey, summaryKey };
+  };
+
+  const handleRequestAction = async (requestUser, action) => {
+    if (!user || !requestUser?.follow_id || requestActionId) return;
+
+    setRequestActionId(requestUser.follow_id);
+    setRequestActionError(null);
+
+    try {
+      if (action === 'accept') {
+        await voxylApi.entities.Follow.update(
+          requestUser.follow_id,
+          { status: 'accepted' },
+        );
+      } else if (action === 'decline') {
+        await voxylApi.entities.Follow.delete(requestUser.follow_id);
+      } else {
+        throw new Error('Unsupported follow request action');
+      }
+
+      const { pendingKey, summaryKey } = updateRequestCaches(
+        requestUser,
+        action,
+      );
+
+      const refreshes = [
+        queryClient.invalidateQueries({ queryKey: pendingKey }),
+        queryClient.invalidateQueries({ queryKey: summaryKey }),
+      ];
+
+      if (action === 'accept') {
+        refreshes.push(
+          queryClient.invalidateQueries({
+            queryKey: ['people-incoming-accepted', user.id],
+          }),
+        );
+      }
+
+      await Promise.allSettled(refreshes);
+    } catch (error) {
+      console.error('[People] Failed to resolve follow request', {
+        followId: requestUser.follow_id,
+        action,
+        error,
+      });
+
+      setRequestActionError({
+        id: requestUser.follow_id,
+        message: t('peopleRequestActionError'),
+      });
+    } finally {
+      setRequestActionId(null);
+    }
+  };
   const retrySocial = () => {
     hiddenQuery.refetch();
     outgoingQuery.refetch();
@@ -381,7 +473,7 @@ export default function People() {
             ) : (
               <div className="space-y-2">
                 {searchRows.map((searchedUser, index) => (
-                  <UserSearchCard
+                  <PeopleUserCard
                     key={searchedUser.id}
                     user={searchedUser}
                     index={index}
@@ -457,7 +549,21 @@ export default function People() {
                 ) : (
                   <div className="space-y-2">
                     {sectionRows.map((sectionUser, index) => (
-                      <UserSearchCard
+                      selectedSection === 'requests' ? (
+                        <PeopleRequestCard
+                          key={sectionUser.follow_id}
+                          request={sectionUser}
+                          index={index}
+                          loading={requestActionId === sectionUser.follow_id}
+                          disabled={Boolean(requestActionId)}
+                          error={requestActionError?.id === sectionUser.follow_id
+                            ? requestActionError.message
+                            : ''}
+                          onAccept={() => handleRequestAction(sectionUser, 'accept')}
+                          onDecline={() => handleRequestAction(sectionUser, 'decline')}
+                        />
+                      ) : (
+                        <PeopleUserCard
                         key={sectionUser.id}
                         user={sectionUser}
                         index={index}
@@ -466,6 +572,7 @@ export default function People() {
                         theyFollowMe={incomingAcceptedIds.has(sectionUser.id)}
                         onStatusChange={(status) => handleStatusChange(sectionUser.id, status)}
                       />
+                      )
                     ))}
                   </div>
                 )}
