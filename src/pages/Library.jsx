@@ -202,7 +202,7 @@ export default function Library() {
 
   return (
     <div className="bg-background pb-24">
-      <VoxylHeader title={t('navLibrary')} subtitle={t('playlistsSubtitle')} />
+      <VoxylHeader title={t('navLibrary')} subtitle={t('playlistsSubtitle')} right={null} />
 
       {hasRemoteError && (
         <div className="mx-4 mb-4 flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3">
