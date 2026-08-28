@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronLeft, Download, ListMusic, LogIn, Mic, Plus, RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { t } from '@/lib/i18n';
 import { voxylApi } from '@/api/voxylApiClient';
 import { useAuth } from '@/lib/AuthContext';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, ListMusic, Mic, Download, LogIn, RefreshCw } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { motion } from 'framer-motion';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import PlaylistCard from '@/components/playlist/PlaylistCard';
 import CreatePlaylistModal from '@/components/playlist/CreatePlaylistModal';
@@ -28,38 +28,40 @@ import {
   togglePlaylistLikeOptimistically,
 } from '@/lib/savedContentQueries';
 
-const TABS = () => [
-{ key: 'playlists', label: t('playlistsTabPlaylists'), icon: ListMusic },
-{ key: 'podcasts', label: t('playlistsTabPodcasts'), icon: Mic },
-{ key: 'downloads', label: t('playlistsTabDownloads'), icon: Download }];
+const VIEW_CONFIG = {
+  mine: { titleKey: 'playlistsMine', icon: ListMusic },
+  followed: { titleKey: 'playlistsLiked', icon: ListMusic },
+  podcasts: { titleKey: 'playlistsTabPodcasts', icon: Mic },
+  downloads: { titleKey: 'playlistsTabDownloads', icon: Download },
+};
 
-
-export default function Playlists() {
+export default function Playlists({ view = 'mine' }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, isAuthenticated, isLoadingAuth, accountSyncError, navigateToLogin, checkUserAuth } = useAuth();
-  const [tab, setTab] = useState('playlists');
   const [showCreate, setShowCreate] = useState(false);
   const [downloads, setDownloads] = useState([]);
   const containerRef = useRef(null);
-  const queryClient = useQueryClient();
   const canLoadUserData = Boolean(user && !user.account_sync_pending && !accountSyncError);
+  const config = VIEW_CONFIG[view] || VIEW_CONFIG.mine;
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
     invalidateCache(`my-playlists-${user?.id}`);
-    queryClient.invalidateQueries({ queryKey: ['my-playlists'] });
+    queryClient.invalidateQueries({ queryKey: ['my-playlists', user?.id] });
     if (canLoadUserData) {
       refreshPlaylistLikeQuery(queryClient, user.id);
       refreshPodcastLikeQuery(queryClient, user.id);
     }
+    setDownloads(getDownloads());
   }, containerRef);
 
   useEffect(() => {
     setDownloads(getDownloads());
-  }, []);
+  }, [view]);
 
-  // My playlists
   const { data: myPlaylists = [], refetch: refetchMine } = useQuery({
     queryKey: ['my-playlists', user?.id],
-    enabled: canLoadUserData,
+    enabled: canLoadUserData && (view === 'mine' || view === 'followed'),
     queryFn: async () => {
       const cacheKey = `my-playlists-${user.id}`;
       const cached = getCache(cacheKey);
@@ -71,12 +73,10 @@ export default function Playlists() {
     },
     initialData: () => {
       if (!canLoadUserData) return undefined;
-      const cached = getCachedContent(user.id, 'MY_PLAYLISTS');
-      return cached || getCache(`my-playlists-${user.id}`) || undefined;
-    }
+      return getCachedContent(user.id, 'MY_PLAYLISTS') || getCache(`my-playlists-${user.id}`) || undefined;
+    },
   });
 
-  // Liked playlist IDs
   const {
     data: likedPlaylistRecords = [],
     isLoading: likedPlaylistsLoading,
@@ -84,25 +84,22 @@ export default function Playlists() {
     isError: likedPlaylistsError,
   } = useQuery({
     queryKey: savedContentQueryKeys.playlistLikes(user?.id),
-    enabled: canLoadUserData && tab === 'playlists',
+    enabled: canLoadUserData && (view === 'mine' || view === 'followed'),
     queryFn: async () => {
       try {
         return await loadPlaylistLikeRecords(user.id);
       } catch (error) {
-        console.error('[Playlists] Failed to load saved playlist likes', { userId: user.id, error });
+        console.error('[Library] Failed to load playlist likes', { userId: user.id, error });
         throw error;
       }
     },
     initialData: () => {
       if (!canLoadUserData) return undefined;
-      const cached = getCachedContent(user.id, 'LIKED_PLAYLISTS');
-      return cached || getCache(`liked-playlists-${user.id}`) || undefined;
-    }
+      return getCachedContent(user.id, 'LIKED_PLAYLISTS') || getCache(`liked-playlists-${user.id}`) || undefined;
+    },
   });
 
   const likedPlaylistIds = playlistLikeIds(likedPlaylistRecords);
-
-  // Liked playlists data (excluding ones I own, since they already appear above)
   const {
     data: likedPlaylists = [],
     isLoading: likedPlaylistDataLoading,
@@ -111,33 +108,30 @@ export default function Playlists() {
     refetch: refetchLikedPlaylistData,
   } = useQuery({
     queryKey: savedContentQueryKeys.likedPlaylists(user?.id, likedPlaylistIds),
-    enabled: canLoadUserData && tab === 'playlists' && likedPlaylistIds.length > 0,
+    enabled: canLoadUserData && view === 'followed' && likedPlaylistIds.length > 0,
     queryFn: async () => {
       try {
         return await loadLikedPlaylistsForRecords(likedPlaylistRecords, myPlaylists);
       } catch (error) {
-        console.error('[Playlists] Failed to load liked playlist metadata', { userId: user.id, likedPlaylistIds, error });
+        console.error('[Library] Failed to load followed playlist metadata', { userId: user.id, likedPlaylistIds, error });
         throw error;
       }
-    }
+    },
   });
 
-  // User's recent plays (for sorting)
   const { data: userPlays = [] } = useQuery({
     queryKey: ['user-plays-sort', user?.id],
-    enabled: canLoadUserData,
+    enabled: canLoadUserData && (view === 'mine' || view === 'followed' || view === 'podcasts'),
     queryFn: () => voxylApi.entities.PodcastPlay.filter({ user_id: user.id }, '-played_at', 500),
   });
 
-  // Map: feed_url -> last played_at
   const feedLastPlayed = {};
-  userPlays.forEach(play => {
+  userPlays.forEach((play) => {
     if (!feedLastPlayed[play.feed_url] || play.played_at > feedLastPlayed[play.feed_url]) {
       feedLastPlayed[play.feed_url] = play.played_at;
     }
   });
 
-  // Liked podcasts
   const {
     data: likedPodcasts = [],
     refetch: refetchPodcasts,
@@ -146,20 +140,19 @@ export default function Playlists() {
     isError: likedPodcastsError,
   } = useQuery({
     queryKey: savedContentQueryKeys.podcastLikes(user?.id),
-    enabled: canLoadUserData && tab === 'podcasts',
+    enabled: canLoadUserData && view === 'podcasts',
     queryFn: async () => {
       try {
         return await loadPodcastLikeRecords(user.id);
       } catch (error) {
-        console.error('[Playlists] Failed to load saved podcasts', { userId: user.id, error });
+        console.error('[Library] Failed to load liked podcasts', { userId: user.id, error });
         throw error;
       }
     },
     initialData: () => {
       if (!canLoadUserData) return undefined;
-      const cached = getCachedContent(user.id, 'LIKED_PODCASTS');
-      return cached || getCache(`liked-podcasts-${user.id}`) || undefined;
-    }
+      return getCachedContent(user.id, 'LIKED_PODCASTS') || getCache(`liked-podcasts-${user.id}`) || undefined;
+    },
   });
 
   const handleUnlikePodcast = async (podcastLike) => {
@@ -168,7 +161,7 @@ export default function Playlists() {
       handlePodcastLikeMutationSuccess(queryClient, user?.id);
       refetchPodcasts();
     } catch (error) {
-      console.error('[Playlists] Failed to remove saved podcast', { podcastLikeId: podcastLike.id, error });
+      console.error('[Library] Failed to remove liked podcast', { podcastLikeId: podcastLike.id, error });
     }
   };
 
@@ -182,9 +175,19 @@ export default function Playlists() {
         toggle: () => voxylApi.functions.invoke('togglePlaylistLike', { playlist_id: playlist.id }),
       });
     } catch (error) {
-      console.error('[Playlists] Failed to toggle playlist like', { playlistId: playlist.id, error });
+      console.error('[Library] Failed to toggle playlist like', { playlistId: playlist.id, error });
     }
   };
+
+  const sortPlaylistsByRecentListening = (playlists) => [...playlists].sort((a, b) => {
+    const aLast = Math.max(...(a.rss_feeds || []).map((feed) => (
+      feedLastPlayed[feed.url] ? new Date(feedLastPlayed[feed.url]).getTime() : 0
+    )), 0);
+    const bLast = Math.max(...(b.rss_feeds || []).map((feed) => (
+      feedLastPlayed[feed.url] ? new Date(feedLastPlayed[feed.url]).getTime() : 0
+    )), 0);
+    return bLast - aLast;
+  });
 
   if (!isLoadingAuth && !isAuthenticated) {
     return (
@@ -197,6 +200,7 @@ export default function Playlists() {
           <p className="text-sm text-muted-foreground">{t('loginToAccessHint')}</p>
         </div>
         <button
+          type="button"
           onClick={navigateToLogin}
           className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
         >
@@ -217,6 +221,7 @@ export default function Playlists() {
           <p className="text-sm text-muted-foreground">{accountSyncError.message}</p>
         </div>
         <button
+          type="button"
           onClick={checkUserAuth}
           className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
         >
@@ -230,211 +235,178 @@ export default function Playlists() {
     <div ref={containerRef} className="bg-background pb-24 relative">
       <PullToRefreshIndicator pullProgress={pullProgress} refreshing={refreshing} />
       <VoxylHeader
-        title={t('playlistsTitle')}
-        subtitle={t('playlistsSubtitle')}
-        right={
-        tab === 'playlists' &&
-        <button
-          onClick={() => setShowCreate(true)}
-          className="w-9 h-9 rounded-full gradient-primary flex items-center justify-center glow-primary"
-          style={{ WebkitTapHighlightColor: 'transparent' }}>
-          
-              <Plus size={18} className="text-white" />
-            </button>
-
-        } />
-      
-
-      {/* Tabs */}
-      <div className="flex gap-2 px-4 mb-4">
-        {TABS().map(({ key, label, icon: Icon }) =>
-        <button
-          key={key}
-          onClick={() => setTab(key)}
-          className={cn(
-            'flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all flex-shrink-0',
-            tab === key ? 'gradient-primary text-white glow-primary' : 'bg-secondary text-muted-foreground'
-          )}>
-          
-            <Icon size={14} />
-            {label}
+        title={t(config.titleKey)}
+        subtitle={t('navLibrary')}
+        right={view === 'mine' ? (
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="w-9 h-9 rounded-full gradient-primary flex items-center justify-center glow-primary"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+            aria-label="Create playlist"
+          >
+            <Plus size={18} className="text-white" />
           </button>
-        )}
+        ) : null}
+      />
+
+      <div className="px-4 mb-4">
+        <button
+          type="button"
+          onClick={() => navigate('/library')}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary"
+        >
+          <ChevronLeft size={16} />
+          {t('navLibrary')}
+        </button>
       </div>
 
       <div className="px-4 space-y-2">
-        {/* Playlists tab: mine first, then liked */}
-        {tab === 'playlists' &&
-        <>
-            {/* My playlists */}
-            {myPlaylists.length > 0 &&
-          <>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium pb-1">{t('playlistsMine')}</p>
-                {[...myPlaylists].sort((a, b) => {
-                  const aLast = Math.max(...(a.rss_feeds || []).map(f => feedLastPlayed[f.url] ? new Date(feedLastPlayed[f.url]).getTime() : 0), 0);
-                  const bLast = Math.max(...(b.rss_feeds || []).map(f => feedLastPlayed[f.url] ? new Date(feedLastPlayed[f.url]).getTime() : 0), 0);
-                  return bLast - aLast;
-                }).map((pl, i) =>
-            <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
+        {view === 'mine' && (
+          myPlaylists.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-4xl mb-3">🎵</p>
+              <p className="font-medium text-foreground">{t('playlistsEmpty')}</p>
+              <p className="text-sm mt-1">{t('playlistsEmptyHint')}</p>
+            </div>
+          ) : (
+            sortPlaylistsByRecentListening(myPlaylists).map((playlist, index) => (
+              <motion.div key={playlist.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.03 }}>
                 <PlaylistCard
-                playlist={pl}
-                compact
-                liked={!likedPlaylistsError && !likedPlaylistsLoading && likedPlaylistIds.includes(pl.id)}
-                currentUser={user}
-                onEdited={refetchMine} />
-              
-                  </motion.div>
-            )}
-              </>
-          }
+                  playlist={playlist}
+                  compact
+                  liked={!likedPlaylistsError && !likedPlaylistsLoading && likedPlaylistIds.includes(playlist.id)}
+                  currentUser={user}
+                  onEdited={refetchMine}
+                />
+              </motion.div>
+            ))
+          )
+        )}
 
-            {/* Liked playlists from others */}
-            {(likedPlaylistsLoading || likedPlaylistsFetching) &&
-          <div className="pt-3 space-y-2">
-                <div className="h-4 w-28 rounded bg-secondary animate-pulse" />
-                <div className="h-20 rounded-2xl bg-secondary animate-pulse" />
-              </div>
-          }
-
-            {likedPlaylistsError &&
-          <div className="text-center py-8 text-muted-foreground">
-                <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
-                <button
-                  type="button"
-                  onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
-                >
-                  <RefreshCw size={14} />
-                  {t('retry')}
-                </button>
-              </div>
-          }
-
-            {!likedPlaylistsError && !likedPlaylistsLoading && !likedPlaylistsFetching && likedPlaylistIds.length > 0 && (likedPlaylistDataLoading || likedPlaylistDataFetching) &&
-          <div className="pt-3 space-y-2">
-                <div className="h-4 w-32 rounded bg-secondary animate-pulse" />
-                <div className="h-20 rounded-2xl bg-secondary animate-pulse" />
-              </div>
-          }
-
-            {likedPlaylistDataError &&
-          <div className="text-center py-8 text-muted-foreground">
-                <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
-                <button
-                  type="button"
-                  onClick={() => refetchLikedPlaylistData()}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
-                >
-                  <RefreshCw size={14} />
-                  {t('retry')}
-                </button>
-              </div>
-          }
-
-            {!likedPlaylistsError && !likedPlaylistDataError && likedPlaylists.length > 0 &&
-          <>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium pt-3 pb-1">{t('playlistsLiked')}</p>
-                {[...likedPlaylists].sort((a, b) => {
-                  const aLast = Math.max(...(a.rss_feeds || []).map(f => feedLastPlayed[f.url] ? new Date(feedLastPlayed[f.url]).getTime() : 0), 0);
-                  const bLast = Math.max(...(b.rss_feeds || []).map(f => feedLastPlayed[f.url] ? new Date(feedLastPlayed[f.url]).getTime() : 0), 0);
-                  return bLast - aLast;
-                }).map((pl, i) =>
-            <motion.div key={pl.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                    <PlaylistCard
-                playlist={pl}
-                compact
-                liked
-                onLike={handleLikePlaylist}
-                currentUser={user} />
-              
-                  </motion.div>
-            )}
-              </>
-          }
-
-            {myPlaylists.length === 0 && !likedPlaylistDataError && likedPlaylists.length === 0 &&
-              !likedPlaylistsError && !likedPlaylistsLoading && !likedPlaylistsFetching &&
-              !likedPlaylistDataLoading && !likedPlaylistDataFetching &&
-          <div className="text-center py-16 text-muted-foreground">
-                <p className="text-4xl mb-3">🎵</p>
-                <p className="font-medium text-foreground">{t('playlistsEmpty')}</p>
-                <p className="text-sm mt-1">{t('playlistsEmptyHint')}</p>
-              </div>
-          }
-          </>
-        }
-
-        {/* Downloads tab */}
-        {tab === 'downloads' && (
-        downloads.length === 0 ?
-        <div className="text-center py-16 text-muted-foreground">
-              <p className="text-4xl mb-3">📥</p>
-              <p className="font-medium text-foreground">{t('playlistsNoDownloads')}</p>
-              <p className="text-sm mt-1">{t('playlistsNoDownloadsHint')}</p>
-            </div> :
-
-        <div className="space-y-2">
-              {downloads.map((ep, i) =>
-          <motion.div key={ep.audioUrl} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                  <DownloadedEpisodeCard
-              episode={ep}
-              onRemoved={() => setDownloads(getDownloads())} />
-            
-                </motion.div>
-          )}
-            </div>)
-
-        }
-
-        {/* Podcasts tab */}
-        {tab === 'podcasts' && (
-        likedPodcastsLoading || likedPodcastsFetching ?
-        <div className="space-y-2">
-              {[...Array(3)].map((_, i) => <div key={i} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
-            </div> :
-        likedPodcastsError ?
-        <div className="text-center py-16 text-muted-foreground">
-              <p className="text-sm mb-4">{t('podcastSearchFailed')}</p>
+        {view === 'followed' && (
+          likedPlaylistsLoading || likedPlaylistsFetching || likedPlaylistDataLoading || likedPlaylistDataFetching ? (
+            <div className="space-y-2">
+              {[...Array(3)].map((_, index) => <div key={index} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
+            </div>
+          ) : likedPlaylistsError ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
               <button
                 type="button"
-                  onClick={() => refreshPodcastLikeQuery(queryClient, user?.id)}
+                onClick={() => refreshPlaylistLikeQuery(queryClient, user?.id)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
               >
                 <RefreshCw size={14} />
                 {t('retry')}
               </button>
-            </div> :
-        likedPodcasts.length === 0 ?
-        <div className="text-center py-16 text-muted-foreground">
+            </div>
+          ) : likedPlaylistDataError ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-sm mb-4">{t('explorePlaylistsError')}</p>
+              <button
+                type="button"
+                onClick={() => refetchLikedPlaylistData()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+              >
+                <RefreshCw size={14} />
+                {t('retry')}
+              </button>
+            </div>
+          ) : likedPlaylists.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-4xl mb-3">🎵</p>
+              <p className="font-medium text-foreground">{t('playlistsEmpty')}</p>
+              <p className="text-sm mt-1">{t('playlistsEmptyHint')}</p>
+            </div>
+          ) : (
+            sortPlaylistsByRecentListening(likedPlaylists).map((playlist, index) => (
+              <motion.div key={playlist.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.03 }}>
+                <PlaylistCard
+                  playlist={playlist}
+                  compact
+                  liked
+                  onLike={handleLikePlaylist}
+                  currentUser={user}
+                />
+              </motion.div>
+            ))
+          )
+        )}
+
+        {view === 'downloads' && (
+          downloads.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-4xl mb-3">📥</p>
+              <p className="font-medium text-foreground">{t('playlistsNoDownloads')}</p>
+              <p className="text-sm mt-1">{t('playlistsNoDownloadsHint')}</p>
+            </div>
+          ) : (
+            downloads.map((episode, index) => (
+              <motion.div key={episode.audioUrl} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.03 }}>
+                <DownloadedEpisodeCard
+                  episode={episode}
+                  onRemoved={() => setDownloads(getDownloads())}
+                />
+              </motion.div>
+            ))
+          )
+        )}
+
+        {view === 'podcasts' && (
+          likedPodcastsLoading || likedPodcastsFetching ? (
+            <div className="space-y-2">
+              {[...Array(3)].map((_, index) => <div key={index} className="h-20 rounded-2xl bg-secondary animate-pulse" />)}
+            </div>
+          ) : likedPodcastsError ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <p className="text-sm mb-4">{t('podcastSearchFailed')}</p>
+              <button
+                type="button"
+                onClick={() => refreshPodcastLikeQuery(queryClient, user?.id)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium gradient-primary text-white"
+              >
+                <RefreshCw size={14} />
+                {t('retry')}
+              </button>
+            </div>
+          ) : likedPodcasts.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
               <p className="text-4xl mb-3">🎙️</p>
               <p className="font-medium text-foreground">{t('playlistsNoPodcasts')}</p>
               <p className="text-sm mt-1">{t('playlistsNoPodcastsHint')}</p>
-            </div> :
-
-        [...likedPodcasts].sort((a, b) => {
-          const aLast = feedLastPlayed[a.feed_url] ? new Date(feedLastPlayed[a.feed_url]).getTime() : 0;
-          const bLast = feedLastPlayed[b.feed_url] ? new Date(feedLastPlayed[b.feed_url]).getTime() : 0;
-          return bLast - aLast;
-        }).map((like, i) =>
-        <motion.div key={like.feed_url} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>
-                <LikedPodcastCard
-            podcastLike={like}
-            onUnlike={() => handleUnlikePodcast(like)} />
-          
-              </motion.div>
-        ))
-
-        }
+            </div>
+          ) : (
+            [...likedPodcasts]
+              .sort((a, b) => {
+                const aLast = feedLastPlayed[a.feed_url] ? new Date(feedLastPlayed[a.feed_url]).getTime() : 0;
+                const bLast = feedLastPlayed[b.feed_url] ? new Date(feedLastPlayed[b.feed_url]).getTime() : 0;
+                return bLast - aLast;
+              })
+              .map((like, index) => (
+                <motion.div key={like.feed_url} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.03 }}>
+                  <LikedPodcastCard
+                    podcastLike={like}
+                    onUnlike={() => handleUnlikePodcast(like)}
+                  />
+                </motion.div>
+              ))
+          )
+        )}
       </div>
 
-      {showCreate && user &&
-      <CreatePlaylistModal
-        user={user}
-        playlistCount={myPlaylists.length}
-        onClose={() => setShowCreate(false)}
-        onCreated={() => {setShowCreate(false);invalidateCache(`my-playlists-${user?.id}`);refetchMine();}} />
-
-      }
-    </div>);
-
+      {showCreate && user && (
+        <CreatePlaylistModal
+          user={user}
+          playlistCount={myPlaylists.length}
+          onClose={() => setShowCreate(false)}
+          onCreated={() => {
+            setShowCreate(false);
+            invalidateCache(`my-playlists-${user?.id}`);
+            refetchMine();
+          }}
+        />
+      )}
+    </div>
+  );
 }
