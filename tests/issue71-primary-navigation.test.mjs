@@ -190,7 +190,7 @@ test('Issue #71 primary navigation architecture', async t => {
 
     assert.match(
       appSource,
-      /path="\/library" element=\{<Playlists \/>}/,
+      /path="\/library" element=\{<Library \/>}/,
     );
 
     assert.match(
