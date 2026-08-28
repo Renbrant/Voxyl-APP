@@ -93,6 +93,8 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
     assert.match(librarySource, /labelKey: 'playlistsLikedPodcasts'/);
     assert.match(collectionsSource, /podcasts: \{ titleKey: 'playlistsLikedPodcasts'/);
     assert.match(i18nSource, /playlistsLikedPodcasts: \{ pt: 'Podcasts curtidos', en: 'Liked podcasts' \}/);
+    assert.equal((i18nSource.match(/playlistsLikedPodcasts:/g) || []).length, 1);
+    assert.match(i18nSource, /playlistsTabPodcasts:[^\r\n]*\r?\n  playlistsLikedPodcasts:/);
     assert.match(likedPodcastCardSource, /htmlToPlainText\(podcastLike\.podcast_description\)/);
     assert.equal(htmlToPlainText('<p>Welcome <strong>home</strong> &amp; enjoy.</p>'), 'Welcome home & enjoy.');
     assert.equal(htmlToPlainText('Plain description'), 'Plain description');
