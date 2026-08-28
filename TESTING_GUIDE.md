@@ -19,8 +19,9 @@ The main evidence layers are:
 5. runtime/visual validation when behavior changes;
 6. physical Android validation for native lifecycle behavior;
 7. release artifact identity/provenance/signing checks;
-8. true upgrade validation when releasing Android;
-9. post-publication byte verification.
+8. true upgrade validation when the verified prior-version baseline is available;
+9. same-version install smoke when that is the actual available baseline;
+10. post-publication byte verification.
 
 ---
 
@@ -48,11 +49,10 @@ Use `npm ci` in clean validation/release worktrees when reproducibility from `pa
 
 ## Current Automated Baseline
 
-The v0.4.3 release candidate completed:
+The v0.4.4 release candidate completed:
 
 ```text
-428 / 428 automated tests
-38 test suites
+447 / 447 automated tests
 ESLint: PASS
 Production build: PASS
 ```
@@ -112,9 +112,16 @@ When social behavior changes, validate:
 - incoming Requests;
 - Suggestions;
 - People search;
+- navigation from People search/results to public profiles;
 - summary-count/detail consistency;
 - incoming-request badges;
-- hidden/block/relationship eligibility rules where affected.
+- Follow, Follow back, Following, and Unfollow relationship labels/actions;
+- Accept/Decline request actions and immediate count/badge reconciliation;
+- stale request cards disappearing after successful mutation;
+- hidden/block/relationship eligibility rules where affected;
+- public-profile relationship context matching the People detail state.
+
+For mutation testing, do not manufacture unsafe or invalid social state merely to exercise a button. If no safe pending request exists, record that the destructive/request mutation path was not executed rather than fabricating evidence.
 
 ---
 
@@ -156,6 +163,7 @@ Important invariants:
 
 - one authoritative process-owned playback engine;
 - one MediaSession;
+- one playback service;
 - Activity/WebView recreation does not create a second player;
 - UI reconnects to native playback state;
 - pause controls the actual active stream;
@@ -164,18 +172,38 @@ Important invariants:
 
 Recommended regression flow:
 
-1. start playback;
+1. start playback from a loaded media item;
 2. pause/resume;
 3. navigate between product sections;
 4. background and foreground the app;
 5. remove/recreate the UI as appropriate;
-6. reopen Voxyl and confirm control reconnects to the existing session;
+6. reopen Voxyl and confirm control reconnects to the existing process-owned session;
 7. switch episode;
 8. confirm no parallel audio streams;
 9. stop and reopen;
 10. confirm stopped state remains coherent.
 
-When the change is unrelated to playback but a signed Android release is being prepared, perform a smaller playback smoke to protect this high-risk invariant.
+### Lifecycle boundary must be explicit
+
+Activity/task recreation, service recreation, process death, and OS media resumption are different contracts.
+
+Before a stateful Android test, state which boundary is being exercised. A `MediaSessionService` may be singleton and healthy after process recreation while having no currently loaded media item. In that state, a blind OS `MEDIA_PLAY` command is not proof of an app regression.
+
+If the PID changes during a test whose acceptance contract assumes process survival, classify that process transition before continuing. Do not silently reinterpret an Activity/task-recreation test as a process-death restoration test.
+
+### Android observability guidance
+
+Android diagnostics and accessibility trees vary by OS and OEM.
+
+- Do not assume WebView/HTML controls will appear as a specific Android accessibility class.
+- Capability-check OEM/platform commands before depending on them.
+- For launcher/Recents automation, identify the intended task by contextual identity such as package, resource ID, content description, and bounds rather than matching any occurrence of the app name.
+- Preserve XML/screenshot/runtime evidence after a detector failure and diagnose the saved evidence before repeating a mutation.
+- Use multiple signals for important playback assertions: process identity when meaningful, service/session count, active output/stream state, UI-reconnected state, and actual runtime behavior.
+
+When a detector fails but other evidence proves correct behavior, classify the result as an observability/harness problem rather than a product failure.
+
+When the change is unrelated to playback but a signed Android release is being prepared, perform a bounded playback smoke to protect this high-risk invariant. If the playback implementation bytes are unchanged from a previously accepted release, prior lifecycle evidence may be reused when content identity is proven, supplemented by an appropriate spot-check of the final artifact.
 
 ---
 
@@ -286,6 +314,15 @@ Validate:
 
 If the device is already on the target version, do not describe a same-version reinstall as a true previous-version upgrade.
 
+### v0.4.4 release classification
+
+For the final corrected v0.4.4 artifact:
+
+- same-version `0.4.4 → 0.4.4` install smoke: **PASS**;
+- final installed APK byte identity: **EXACT** against the frozen artifact;
+- authenticated session/data continuity: **PASS**;
+- literal `0.4.3 → 0.4.4` upgrade of the final corrected artifact: **NOT EXECUTED** because the device was already on v0.4.4.
+
 ---
 
 ## Post-Publication Verification
@@ -296,11 +333,20 @@ After publication:
 
 1. verify tag/release identity;
 2. verify the expected APK asset exists exactly once;
-3. download the published APK into a separate verification location;
-4. compare file size with the frozen artifact;
-5. compare SHA-256 with the frozen artifact.
+3. verify GitHub-reported asset size/digest when available;
+4. download the published APK into a separate verification location;
+5. compare file size with the frozen artifact;
+6. compare SHA-256 with the frozen artifact;
+7. persist publication evidence that binds the source commit, tag/release, frozen artifact, and downloaded public bytes.
 
 This proves that the bytes available to users are the bytes that were validated and tested.
+
+For v0.4.4, the published APK was verified at:
+
+```text
+11884417 bytes
+SHA-256 6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8
+```
 
 ---
 
@@ -312,11 +358,14 @@ When a validation checkpoint fails, classify the failure before changing product
 - test defect;
 - environment/readiness failure;
 - harness/tooling failure;
+- observability/parser failure;
 - methodology compliance failure.
 
 Preserve successful evidence from earlier stages and resume from the smallest technically correct boundary.
 
 Do not repeat expensive validation merely to make the transcript look linear when the underlying source/artifact identity has not changed.
+
+Repeated harness failures in the same increment are evidence that the harness design itself should be simplified or replaced, not an invitation to keep stacking detector patches.
 
 ---
 
