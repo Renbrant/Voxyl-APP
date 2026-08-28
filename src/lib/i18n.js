@@ -189,7 +189,7 @@ const translations = {
   playlistsNoPodcasts: { pt: 'Nenhum podcast curtido', en: 'No liked podcasts' },
   playlistsNoPodcastsHint: { pt: 'Explore e curta podcasts para salvá-los aqui!', en: 'Explore and like podcasts to save them here!' },
   playlistsNoDownloads: { pt: 'Nenhum episódio baixado', en: 'No downloaded episodes' },
-  playlistsNoDownloadsHint: { pt: 'Funcionalidade ainda não implementada.', en: 'Feature not yet implemented.' },
+  playlistsNoDownloadsHint: { pt: 'Os episódios que você baixar aparecerão aqui.', en: 'Episodes you download will appear here.' },
   loginToAccess: { pt: 'Entre para continuar', en: 'Sign in to continue' },
   loginToAccessHint: { pt: 'Faça login para criar playlists, curtir e salvar seus podcasts favoritos.', en: 'Sign in to create playlists, like and save your favorite podcasts.' },
   loginWithGoogle: { pt: 'Entrar com Google', en: 'Sign in with Google' },

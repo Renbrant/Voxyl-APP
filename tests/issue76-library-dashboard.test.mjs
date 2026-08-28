@@ -73,11 +73,14 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
   });
 
   it('uses downloaded episodes as the supported episode collection instead of inventing a SavedEpisode backend', () => {
+    const i18nSource = fs.readFileSync(new URL('../src/lib/i18n.js', import.meta.url), 'utf8');
     assert.match(librarySource, /path: '\/library\/downloads'/);
     assert.match(collectionsSource, /<DownloadedEpisodeCard/);
     assert.match(collectionsSource, /getDownloads\(\)/);
     assert.doesNotMatch(librarySource, /SavedEpisode/);
     assert.doesNotMatch(collectionsSource, /entities\.SavedEpisode/);
+    assert.doesNotMatch(i18nSource, /Feature not yet implemented\./);
+    assert.match(i18nSource, /Episodes you download will appear here\./);
   });
 
   it('provides explicit loading/error handling for remote dashboard collections', () => {
