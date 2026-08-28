@@ -936,7 +936,7 @@ describe('saved-content frontend regressions', () => {
     assert.match(playlists, /isError: likedPlaylistsError/);
     assert.match(playlists, /isError: likedPodcastsError/);
     assert.match(playlists, /isError: likedPlaylistDataError/);
-    assert.match(playlists, /console\.error\('\[Playlists\] Failed to load saved podcasts'/);
+    assert.match(playlists, /console\.error\('\[Library\] Failed to load liked podcasts'/);
     assert.match(explore, /console\.error\('\[Explore\] Failed to load saved playlist likes'/);
     assert.match(feed, /togglePlaylistLikeOptimistically/);
     assert.match(podcastDetail, /normalizePodcastFeedUrl/);
@@ -944,8 +944,8 @@ describe('saved-content frontend regressions', () => {
     assert.match(helper, /savedContentQueryKeys\.podcastLikes/);
     assert.match(helper, /queryClient\.invalidateQueries\(\{ queryKey: savedContentQueryKeys\.podcastLikes\(userId\) \}\)/);
     assert.match(helper, /voxylApi\.entities\.Playlist\.get\(id\)/);
-    assert.match(playlists, /likedPlaylistsError &&\s*<div className="text-center py-8/s);
-    assert.match(playlists, /myPlaylists\.length > 0/);
+    assert.match(playlists, /likedPlaylistsError \?\s*\(\s*<div[^>]*>\s*<p[^>]*>\{t\('explorePlaylistsError'\)\}<\/p>/s);
+    assert.match(playlists, /sortPlaylistsByRecentListening\(myPlaylists\)\.map/);
     assert.doesNotMatch(playlists, /Playlist\.filter\(\{ id \}/);
     assert.doesNotMatch(explore, /invalidateQueries\(\)/);
   });
