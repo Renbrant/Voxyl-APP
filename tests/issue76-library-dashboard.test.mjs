@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
+import { htmlToPlainText } from '../src/lib/text.js';
 
 const appSource = fs.readFileSync(
   new URL('../src/App.jsx', import.meta.url),
@@ -12,6 +13,10 @@ const librarySource = fs.readFileSync(
 );
 const collectionsSource = fs.readFileSync(
   new URL('../src/pages/Playlists.jsx', import.meta.url),
+  'utf8',
+);
+const likedPodcastCardSource = fs.readFileSync(
+  new URL('../src/components/explore/LikedPodcastCard.jsx', import.meta.url),
   'utf8',
 );
 const downloadsSource = fs.readFileSync(
@@ -83,6 +88,15 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
     assert.match(i18nSource, /Episodes you download will appear here\./);
   });
 
+  it('labels PodcastLike content as liked podcasts and renders plain-text descriptions', () => {
+    const i18nSource = fs.readFileSync(new URL('../src/lib/i18n.js', import.meta.url), 'utf8');
+    assert.match(librarySource, /labelKey: 'playlistsLikedPodcasts'/);
+    assert.match(collectionsSource, /podcasts: \{ titleKey: 'playlistsLikedPodcasts'/);
+    assert.match(i18nSource, /playlistsLikedPodcasts: \{ pt: 'Podcasts curtidos', en: 'Liked podcasts' \}/);
+    assert.match(likedPodcastCardSource, /htmlToPlainText\(podcastLike\.podcast_description\)/);
+    assert.equal(htmlToPlainText('<p>Welcome <strong>home</strong> &amp; enjoy.</p>'), 'Welcome home & enjoy.');
+    assert.equal(htmlToPlainText('Plain description'), 'Plain description');
+  });
   it('provides explicit loading/error handling for remote dashboard collections', () => {
     assert.match(librarySource, /myPlaylistsQuery\.isLoading/);
     assert.match(librarySource, /playlistLikesQuery\.isError/);

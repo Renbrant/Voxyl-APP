@@ -32,7 +32,7 @@ const LIBRARY_CARDS = [
   },
   {
     key: 'podcasts',
-    labelKey: 'playlistsTabPodcasts',
+    labelKey: 'playlistsLikedPodcasts',
     path: '/library/liked-podcasts',
     icon: Mic,
   },

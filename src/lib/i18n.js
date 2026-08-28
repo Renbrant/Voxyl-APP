@@ -180,7 +180,7 @@ const translations = {
   playlistsTitle: { pt: 'Curtidas', en: 'Saved' },
   playlistsSubtitle: { pt: 'Suas playlists e podcasts salvos', en: 'Your saved playlists and podcasts' },
   playlistsTabPlaylists: { pt: 'Playlists', en: 'Playlists' },
-  playlistsTabPodcasts: { pt: 'Podcasts', en: 'Podcasts' },
+  playlistsTabPodcasts: { pt: 'Podcasts', en: 'Podcasts' },  playlistsLikedPodcasts: { pt: 'Podcasts curtidos', en: 'Liked podcasts' },  playlistsLikedPodcasts: { pt: 'Podcasts curtidos', en: 'Liked podcasts' },
   playlistsTabDownloads: { pt: 'Baixados', en: 'Downloads' },
   playlistsMine: { pt: 'Minhas playlists', en: 'My playlists' },
   playlistsLiked: { pt: 'Playlists curtidas', en: 'Liked playlists' },

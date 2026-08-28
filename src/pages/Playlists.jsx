@@ -31,7 +31,7 @@ import {
 const VIEW_CONFIG = {
   mine: { titleKey: 'playlistsMine', icon: ListMusic },
   followed: { titleKey: 'playlistsLiked', icon: ListMusic },
-  podcasts: { titleKey: 'playlistsTabPodcasts', icon: Mic },
+  podcasts: { titleKey: 'playlistsLikedPodcasts', icon: Mic },
   downloads: { titleKey: 'playlistsTabDownloads', icon: Download },
 };
 

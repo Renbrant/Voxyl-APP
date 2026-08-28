@@ -1,7 +1,9 @@
 import { Link } from 'react-router-dom';
 import { Mic, Heart, Play } from 'lucide-react';
+import { htmlToPlainText } from '@/lib/text';
 
 export default function LikedPodcastCard({ podcastLike, onUnlike }) {
+  const description = htmlToPlainText(podcastLike.podcast_description);
   return (
     <Link
       to={`/podcast/${encodeURIComponent(podcastLike.feed_url)}`}
@@ -24,8 +26,8 @@ export default function LikedPodcastCard({ podcastLike, onUnlike }) {
         {podcastLike.podcast_author && (
           <p className="text-xs text-primary truncate mt-0.5">{podcastLike.podcast_author}</p>
         )}
-        {podcastLike.podcast_description && (
-          <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{podcastLike.podcast_description}</p>
+        {description && (
+          <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{description}</p>
         )}
       </div>
 
