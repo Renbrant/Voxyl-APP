@@ -86,8 +86,13 @@ People is the dedicated social surface:
 - Suggestions
 - people search
 - incoming-request navigation badges
+- relationship-aware public-profile navigation
+- explicit Follow, Follow back, Following, and Unfollow states
+- Accept/Decline handling for incoming requests
 
 The People dashboard consumes authoritative summary counts from the Worker rather than deriving counts only from rendered client collections.
+
+People detail flows reconcile mutations with the visible social state so request cards, counts, badges, and relationship labels update coherently after a successful action. Relationship authorization remains server-owned; UI state is not an authority boundary.
 
 ### Library
 
@@ -96,6 +101,8 @@ Library owns saved and user-managed collections.
 ### Profile
 
 Profile owns identity, public profile representation, avatar preferences, and account settings.
+
+Public profiles expose social relationship context but do not replace People as the primary social-management destination.
 
 ---
 
@@ -120,6 +127,7 @@ The frontend is responsible for:
 - podcast and playlist discovery;
 - personalized Home presentation;
 - People/social presentation;
+- relationship-aware public-profile presentation;
 - playlist display and management;
 - authentication interaction;
 - web audio/player state;
@@ -304,6 +312,7 @@ Responsibilities include:
 - authenticated user resolution;
 - public podcast/playlist reads;
 - People/social summary and relationship logic;
+- follow/follow-back/unfollow/request mutation authorization;
 - D1 database access;
 - R2 media integration;
 - API response normalization;
@@ -491,6 +500,8 @@ Important invariants:
 - repeated close/reopen cycles must not create duplicate or orphaned streams;
 - stop/pause semantics must control the actual native authority.
 
+The authority described above is process-owned. Activity/task recreation and process death are different lifecycle contracts: process-death restoration or OS media resumption must be tested and claimed separately when required.
+
 Native playback changes require physical-device lifecycle validation because browser-only testing cannot reproduce Android process/service behavior reliably.
 
 ---
@@ -622,9 +633,10 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current documented Android release:
 
 ```text
-Voxyl 0.4.3
-versionCode 403
-source 888af88480390c3d519d54643548dcea3236d9ce
+Voxyl 0.4.4
+versionCode 404
+source bc3a47c77c1b8a50939c267904b5dbcd00fe3c56
+APK SHA-256 6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8
 ```
 
-The v0.4.3 milestone completes UX Phase 4 with the dedicated People dashboard while preserving the Cloudflare/Clerk platform and process-owned Media3 playback foundations.
+The v0.4.4 milestone completes UX Phase 5 with People detail flows and social interactions while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
