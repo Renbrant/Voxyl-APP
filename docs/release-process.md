@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.3
-Android versionCode 403
+Voxyl 0.4.4
+Android versionCode 404
 Package com.renbrant.voxyl
 ```
 
@@ -156,6 +156,8 @@ embedded provenance
 validation status
 ```
 
+Downstream install, smoke, publication, and post-publication verification should consume or cross-check this manifest instead of repeatedly retyping release constants.
+
 ---
 
 ## Android Readiness Gate
@@ -196,11 +198,26 @@ Validate:
 
 A same-version reinstall is useful evidence but must not be called a previous-version upgrade.
 
+### v0.4.4 example
+
+The final corrected v0.4.4 artifact was installed over an already-installed v0.4.4 build.
+
+Therefore the recorded result is:
+
+```text
+same-version 0.4.4 -> 0.4.4 install smoke: PASS
+installed APK byte identity: EXACT
+session/data continuity: PASS
+literal 0.4.3 -> final corrected 0.4.4 upgrade: NOT EXECUTED
+```
+
+The prior-version upgrade was not manufactured by destructive downgrade.
+
 ---
 
 ## Manual Android Smoke
 
-After the automatic upgrade gate, manually validate the highest-risk product behaviors for the release.
+After the automatic install/upgrade gate, validate the highest-risk product behaviors for the release.
 
 Typical smoke includes:
 
@@ -208,7 +225,7 @@ Typical smoke includes:
 - primary navigation opens correctly;
 - release-specific feature works;
 - Voxyl branding renders correctly;
-- play/pause works;
+- play/pause works from a valid loaded media item;
 - close/reopen does not create orphaned or duplicate audio;
 - native playback remains controllable.
 
@@ -220,7 +237,34 @@ For People-related releases, include:
 - Requests;
 - Suggestions;
 - people search;
-- summary/detail consistency.
+- public-profile navigation;
+- Follow / Follow back / Following / Unfollow states;
+- Accept/Decline handling when safe pending requests exist;
+- summary/detail/count/badge consistency.
+
+Do not manufacture unsafe relationship state simply to exercise a mutation. Record a path as not executed when a safe precondition is unavailable.
+
+---
+
+## Stateful Android Validation Boundaries
+
+Voxyl's persistent Android playback authority is process-owned. Lifecycle tests must distinguish:
+
+```text
+Activity/WebView recreation
+Task/Recents dismissal with process survival
+Service recreation
+Process death and process restart
+OS/media-resumption behavior after process death
+```
+
+These are different contracts.
+
+Before a stateful playback test, declare which boundary is being exercised. If the PID changes unexpectedly in a test that assumes process survival, classify the process transition before continuing.
+
+A newly recreated `VoxylPlaybackService`/`MediaSession` can be healthy and singleton while containing no currently loaded media item. A blind OS `MEDIA_PLAY` command after process death is therefore not by itself proof of a Voxyl regression.
+
+Android observability also varies by OS/OEM. Do not rely on one accessibility class, one `dumpsys` line shape, or one launcher text match as the sole invariant. Preserve saved XML/screenshots/runtime output after detector failures and diagnose those artifacts before repeating a mutation.
 
 ---
 
@@ -237,7 +281,32 @@ The release tag must resolve to the exact validated source commit.
 
 Publish the **already frozen APK**. Do not rebuild just before upload.
 
-The generic methodology helper `scripts/Publish-GitHubRelease.ps1` supports asset verification when used from the methodology repository.
+The generic methodology helper `scripts/Publish-GitHubRelease.ps1` is the preferred publication mechanism for this boundary because it already implements the mechanical tag/release/asset/race/public-byte checks.
+
+### Obtaining the official helper
+
+Do not assume the methodology repository exists at a particular local filesystem path.
+
+Before invoking the helper, prove how its bytes are being sourced:
+
+1. resolve the current methodology `main` commit;
+2. if a local methodology checkout is explicitly known and verified, use the helper from that checkout after proving it corresponds to the intended methodology commit;
+3. if no local checkout is proven, obtain the helper directly from GitHub at the pinned immutable methodology commit;
+4. verify the downloaded helper against the expected Git blob identity before execution;
+5. record the methodology commit/helper identity in publication evidence when practical.
+
+Do not invent an intermediate helper-export mechanism or assume an unverified path merely because a local checkout would be convenient.
+
+For v0.4.4, the successful chain was:
+
+```text
+current methodology commit
+        -> exact Publish-GitHubRelease.ps1 blob
+        -> verified local helper bytes
+        -> official helper execution
+        -> frozen APK publication
+        -> public-byte verification
+```
 
 ---
 
@@ -249,7 +318,7 @@ After GitHub Release creation:
 
 1. verify release tag/title/draft/prerelease state;
 2. verify the expected APK exists exactly once;
-3. verify GitHub-reported size;
+3. verify GitHub-reported size/digest when available;
 4. download the published APK into a separate verification directory;
 5. calculate its SHA-256;
 6. compare downloaded size and SHA-256 with the frozen artifact.
@@ -265,7 +334,24 @@ validated source
 
 are bound to the same artifact bytes.
 
-Persist a publication evidence manifest when practical.
+Persist a publication evidence manifest after this verification succeeds.
+
+Recommended publication-evidence fields include:
+
+```text
+release/tag
+release URL
+target/source SHA
+verified remote tag target
+published asset name
+frozen artifact size/SHA-256
+downloaded asset size/SHA-256
+explicit byte-identity result
+draft/prerelease/latest state
+runtime/install/upgrade status
+methodology/helper identity when material
+publication verification timestamp
+```
 
 ---
 
@@ -321,7 +407,8 @@ Observable states include:
 2. tag exists and points to expected source;
 3. GitHub Release exists in intended state;
 4. asset exists exactly once;
-5. downloaded asset matches frozen bytes.
+5. downloaded asset matches frozen bytes;
+6. publication evidence manifest records the verified public binding.
 
 If a late stage fails, inspect the existing state and resume from the first missing/invalid boundary.
 
@@ -331,20 +418,36 @@ Do not blindly:
 - delete a correct tag;
 - recreate a correct release;
 - upload duplicate assets;
-- repeat a true upgrade test whose artifact/source identity has not changed.
+- repeat a true upgrade test whose artifact/source identity has not changed;
+- regenerate large publication harnesses when the official helper already owns the mechanical sequence.
+
+Repeated harness/tooling failures should trigger a redesign of the mechanism, not another layer of ad hoc wrapper logic.
 
 ---
 
 ## Current Reference Release
 
-The first release completed with the full freeze → true-upgrade → publish → public-byte-verification chain documented here is:
+The current Android reference release is:
 
 ```text
-Voxyl v0.4.3
-source commit 888af88480390c3d519d54643548dcea3236d9ce
-versionCode 403
-APK Voxyl-v0.4.3-release.apk
-SHA-256 F4D1A47DE7415D81896152C5F8078A20E7E7CBE207C6C160BEAE3868D85C887D
+Voxyl v0.4.4
+source commit bc3a47c77c1b8a50939c267904b5dbcd00fe3c56
+versionCode 404
+APK Voxyl-v0.4.4-release.apk
+size 11884417 bytes
+SHA-256 6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8
 ```
 
-The public GitHub release asset was downloaded after publication and verified byte-for-byte against the frozen/tested artifact.
+The GitHub tag points to the exact source commit, the Release is public and non-prerelease, exactly one APK asset is present, GitHub reports the same size/digest, and the helper downloaded the public asset again and verified exact byte identity against the frozen APK.
+
+Validation classification for the final corrected artifact:
+
+```text
+source/tests/lint/build: PASS
+artifact identity/signing/freeze: PASS
+same-version physical install: PASS
+public-profile visual validation: PASS
+playback singleton architecture: unchanged from accepted v0.3.2 implementation, with final-artifact playback spot-check
+literal 0.4.3 -> final corrected 0.4.4 upgrade: NOT EXECUTED
+GitHub publication/public-byte verification: PASS
+```
