@@ -63,11 +63,12 @@ People search no longer belongs to Discover.
 
 People is Voxyl's dedicated social destination.
 
-- **Following** — people you follow.
-- **Followers** — people who follow you.
-- **Requests** — incoming follow requests waiting for action.
+- **Following** — people you follow, with explicit Following state and access to public profiles.
+- **Followers** — people who follow you, including Follows you, Follow back, and mutual relationship states.
+- **Requests** — incoming follow requests with Accept and Decline actions and immediate count/badge reconciliation.
 - **Suggestions** — eligible people you may want to follow.
-- People search lives directly inside the People experience.
+- People search lives directly inside the People experience and opens public profiles.
+- Public profiles expose relationship-aware Follow, Follow back, Following, and Unfollow states.
 - Incoming request counts can surface as navigation badges.
 
 ### Library
@@ -86,7 +87,7 @@ Profile contains the user's identity, public profile information, account settin
 - **Custom Podcast Playlists:** Build personalized collections from multiple podcast sources.
 - **Social Discovery:** Follow listeners, manage requests, and discover community-curated content.
 - **Personalized Home:** For You, 90-day Trending, 7-day Last Week, Continue Listening, and listening history.
-- **Dedicated People Dashboard:** Following, Followers, Requests, Suggestions, and people search.
+- **Dedicated People Experience:** Following, Followers, Requests, Suggestions, people search, relationship-aware public profiles, and follow-request actions.
 - **Profile Identity:** Use a Clerk/provider profile image, optionally override it with a custom Voxyl/R2 image, and fall back to initials.
 - **Guest Mode:** Explore public content without creating an account.
 - **Flexible Visibility:** Set playlists as public, followers-only, or private.
@@ -128,6 +129,7 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.1** | Phase 2 | Personalized and activity-driven Home |
 | **v0.4.2** | Phase 3 | Discover focused on Playlists and Podcasts |
 | **v0.4.3** | Phase 4 | Dedicated People social dashboard and people search |
+| **v0.4.4** | Phase 5 | People detail flows, relationship-aware public profiles, and social interactions |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -282,7 +284,7 @@ git status
 git diff --check
 ```
 
-The v0.4.3 release candidate completed **428/428 automated tests**, ESLint, and the production build before Android packaging and physical-device validation.
+The v0.4.4 release candidate completed **447/447 automated tests**, ESLint, and the production build before Android packaging and physical-device validation.
 
 For the current testing model, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
@@ -430,14 +432,16 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.3 — Beta**
+**Voxyl 0.4.4 — Beta**
 
-Android versionCode: **403**
+Android versionCode: **404**
 
-The v0.4.3 milestone completes UX Phase 4 with a dedicated **People** dashboard, authoritative social summary counts, incoming-request badges, and people search separated from Discover.
+The v0.4.4 milestone completes UX Phase 5 with detailed **Following**, **Followers**, **Requests**, and **Suggestions** flows, relationship-aware public profiles, direct people search/profile navigation, and explicit follow-request actions.
 
-Release source: `888af88480390c3d519d54643548dcea3236d9ce`
+Release source: `bc3a47c77c1b8a50939c267904b5dbcd00fe3c56`
 
-**[View the v0.4.3 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.3)**
+Release APK SHA-256: `6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8`
+
+**[View the v0.4.4 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.4)**
 
 Thank you for helping shape the future of social podcasting.
