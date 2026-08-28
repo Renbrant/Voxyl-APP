@@ -12,6 +12,7 @@ import Layout from '@/components/Layout';
 import Feed from '@/pages/Feed';
 import Explore from '@/pages/Explore';
 import People from '@/pages/People';
+import Library from '@/pages/Library';
 import Playlists from '@/pages/Playlists.jsx';
 import Profile from '@/pages/Profile';
 import Settings from '@/pages/Settings';
@@ -92,7 +93,7 @@ const LegacyRouteRedirect = ({ to }) => {
 };
 
 const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
+  const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
   const location = useLocation();
 
   if (isLoadingPublicSettings || isLoadingAuth) {
@@ -128,7 +129,11 @@ const AuthenticatedApp = () => {
         <Route path="/discover" element={<Explore />} />
         <Route path="/explore" element={<LegacyRouteRedirect to="/discover" />} />
         <Route path="/people" element={<People />} />
-        <Route path="/library" element={<Playlists />} />
+        <Route path="/library" element={<Library />} />
+        <Route path="/library/my-playlists" element={<Playlists view="mine" />} />
+        <Route path="/library/followed-playlists" element={<Playlists view="followed" />} />
+        <Route path="/library/liked-podcasts" element={<Playlists view="podcasts" />} />
+        <Route path="/library/downloads" element={<Playlists view="downloads" />} />
         <Route path="/playlists" element={<LegacyRouteRedirect to="/library" />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/settings" element={<Settings />} />
