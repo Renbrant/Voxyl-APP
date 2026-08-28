@@ -6,6 +6,61 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.4 - August 2026
+
+### UX Phase 5 - People Detail Flows and Social Interactions
+
+- Completed Issue #75 with detailed social flows inside the dedicated **People** destination.
+- Expanded **Following** with explicit Following state, public-profile navigation, and non-dominant Unfollow actions.
+- Expanded **Followers** with `Follows you`, `Follow back`, and mutual relationship states.
+- Added actionable incoming **Requests** with Accept and Decline behavior plus immediate count/badge reconciliation.
+- Added **Suggestions** with clear relationship-aware Follow actions.
+- Kept people search owned by People and connected search results directly to public profiles.
+- Added relationship-aware public-profile states for Follow, Follow back, Following, and Unfollow.
+- Corrected the public-profile shell localization so the validated English runtime no longer mixed Portuguese labels.
+- Preserved server-side authorization and avoided expanding the release into chat/messages/stories/feed scope.
+
+### Validation and Android Release
+
+- Full automated suite passed with **447/447 tests**.
+- ESLint passed.
+- Production web build passed.
+- Production Android build and signing passed.
+- Production signing-certificate continuity was verified against the official v0.4.3 APK.
+- Final corrected Android artifact was frozen at **11,884,417 bytes**.
+- Final corrected APK SHA-256: `6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8`.
+- Final corrected APK installed successfully over the already-installed v0.4.4 build with `adb install -r`.
+- No uninstall or data clear was performed.
+- `firstInstallTime` and authenticated application/session continuity were preserved.
+- Installed `base.apk` bytes matched the frozen release artifact exactly.
+- Physical-device People flows and public-profile relationship states were validated.
+- Corrected public-profile localization received real-device visual validation.
+- The persistent Android playback implementation remained byte-identical to the previously accepted v0.3.2 singleton architecture; a final-artifact playback spot-check confirmed a single active stream/service/MediaSession authority.
+- Literal `0.4.3 / 403 -> final corrected 0.4.4 / 404` upgrade was **NOT EXECUTED** because the physical device was already on v0.4.4 when the final corrected artifact was frozen.
+
+### GitHub Publication and Provenance
+
+- Source commit: `bc3a47c77c1b8a50939c267904b5dbcd00fe3c56`.
+- Android package: `com.renbrant.voxyl`.
+- Android versionCode: `404`.
+- APK: `Voxyl-v0.4.4-release.apk`.
+- APK size: `11884417` bytes.
+- APK SHA-256: `6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8`.
+- GitHub tag `v0.4.4` was verified to point exactly to the release source commit.
+- GitHub Release was verified public, non-draft, and non-prerelease.
+- Exactly one APK asset was published.
+- The published APK was downloaded again and verified byte-for-byte against the frozen artifact.
+- A separate publication-evidence manifest recorded the final source -> frozen artifact -> public release -> downloaded bytes binding.
+
+### Release-Process Lessons
+
+- Reused the official methodology `Publish-GitHubRelease.ps1` helper rather than reimplementing publication mechanics.
+- Documented immutable remote-helper bootstrap for environments without a proven local methodology checkout.
+- Clarified Android lifecycle validation boundaries between Activity/task recreation and process-death/media-resumption behavior.
+- Hardened Android observability guidance against OEM-specific command/accessibility assumptions.
+
+---
+
 ## v0.4.3 - August 2026
 
 ### UX Phase 4 - People Social Dashboard
