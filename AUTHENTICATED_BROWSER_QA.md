@@ -163,6 +163,8 @@ node Capture-CdpTarget.mjs <webSocketDebuggerUrl> <outputPng> <selector> <minimu
 
 The caller remains responsible for route/viewport choice, target creation/closure, artifact hash/dimension checks, and evidence aggregation.
 
+When invoking the Node helper from Windows PowerShell, do not assume `""` is a safe positional placeholder for `requiredText` or `forbiddenText`. If a probe does not care about one of those positions, use a non-empty harmless sentinel or another invocation method whose empty-argument transport has been explicitly proven. This prevents later positional arguments such as width/height from shifting unexpectedly.
+
 ## Semantic readiness rules
 
 Readiness must describe the feature state being validated.
@@ -242,6 +244,8 @@ The workflow successfully preserved prior captures when later findings required:
 - repairing a duplicated i18n key discovered during remote diff review.
 
 Only affected states were recaptured after each product change.
+
+The graduated methodology helper was subsequently validated against this same authenticated Voxyl runtime. Its immutable blob identity, Node syntax, fail-closed invalid-width behavior, and a real 390×844 `/library` capture all passed. The helper validation also exposed the Windows PowerShell empty-native-argument transport hazard documented above.
 
 ## Recommended next-issue sequence
 
