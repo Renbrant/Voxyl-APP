@@ -192,6 +192,17 @@ export const voxylApi = {
       const data = await apiFetch("/me", { method: "PATCH", body: payload });
       return data?.user || data;
     },
+    async deleteMe() {
+      const data = await apiFetch("/me", { method: "DELETE" });
+
+      if (!data?.ok || data?.deleted !== true) {
+        const error = new Error("Account deletion did not complete");
+        error.data = data;
+        throw error;
+      }
+
+      return data;
+    },
     async redirectToLogin(fromUrl = window.location.href) {
       const clerk = window.Clerk;
       if (!clerk) {

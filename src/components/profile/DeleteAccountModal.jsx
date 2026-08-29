@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 import { t, isEn } from '@/lib/i18n';
 
-const REQUIRED_TEXT_VALUE = () => isEn ? 'DEACTIVATE MY ACCOUNT' : 'DESATIVAR MINHA CONTA';
+const REQUIRED_TEXT_VALUE = () => isEn ? 'DELETE MY ACCOUNT' : 'EXCLUIR MINHA CONTA';
 
 // Multi-step deletion with 3 confirmation stages
 const STEPS = () => [
@@ -36,6 +36,7 @@ export default function DeleteAccountModal({ user, onClose }) {
   const [step, setStep] = useState(0);
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const REQUIRED_TEXT = REQUIRED_TEXT_VALUE();
   const canDelete = confirm.trim() === REQUIRED_TEXT;
@@ -46,17 +47,30 @@ export default function DeleteAccountModal({ user, onClose }) {
   };
 
   const handleDelete = async () => {
-    if (!canDelete) return;
-    setLoading(true);
-    const res = await voxylApi.functions.invoke('deleteAccount', {});
-    const data = res.data;
-    if (!data?.success && data?.errors?.length > 0) {
-      // Partial failure — still log out but show errors in console for debugging
-      console.error('[deleteAccount] partial errors:', data.errors);
-    }
-    voxylApi.auth.logout('/');
-  };
+    if (!canDelete || loading) return;
 
+    setLoading(true);
+    setError('');
+
+    try {
+      const result = await voxylApi.auth.deleteMe();
+
+      if (!result?.deleted) {
+        throw new Error('Account deletion did not complete');
+      }
+
+      try {
+        await voxylApi.auth.logout('/');
+      } catch (logoutError) {
+        console.warn('[deleteAccount] post-deletion logout cleanup failed:', logoutError);
+        window.location.assign('/');
+      }
+    } catch (deleteError) {
+      console.error('[deleteAccount] deletion failed:', deleteError);
+      setError(t('deleteError'));
+      setLoading(false);
+    }
+  };
   const current = steps[step];
 
   return (
@@ -119,6 +133,14 @@ export default function DeleteAccountModal({ user, onClose }) {
           </div>
         )}
 
+        {error && (
+          <div
+            role="alert"
+            className="mb-4 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            {error}
+          </div>
+        )}
         {/* Actions */}
         <div className="flex gap-3">
           <Button
