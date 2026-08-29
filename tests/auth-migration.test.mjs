@@ -1016,7 +1016,17 @@ describe('Clerk production identity migration', () => {
 
   it('keeps the brand-new user bootstrap path working', async () => {
     const { token, jwk } = createJwt({ sub: 'clerk-new-user', email: 'new@example.com', name: 'New User' });
-    installJwksMock(jwk);
+    installJwksMock(jwk, {
+      id: 'clerk-new-user',
+      full_name: 'New User',
+      primary_email_address_id: 'email-new-user',
+      email_addresses: [
+        {
+          id: 'email-new-user',
+          email_address: 'new@example.com',
+        },
+      ],
+    });
     const db = createAuthMigrationDb({ users: [] });
 
     const response = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });

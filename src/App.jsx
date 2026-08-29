@@ -20,6 +20,7 @@ import PlaylistDetail from '@/pages/PlaylistDetail';
 import UserProfile from '@/pages/UserProfile';
 import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
+import AccountDeletion from '@/pages/AccountDeletion';
 import PodcastDetail from '@/pages/PodcastDetail';
 import AuthCallback from '@/pages/AuthCallback';
 import ClerkTest from '@/pages/ClerkTest';
@@ -142,6 +143,7 @@ const AuthenticatedApp = () => {
       <Route path="/share/:id" element={<PlaylistPreview />} />
       <Route path="/user/:userId" element={<UserProfile />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
+      <Route path="/account-deletion" element={<AccountDeletion />} />
       <Route path="/podcast/:feedUrl" element={<PodcastDetail />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/clerk-test" element={<ClerkTest />} />

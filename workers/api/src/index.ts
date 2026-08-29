@@ -2983,7 +2983,20 @@ async function resolveD1UserFromClerkClaims(
   }
 
   if (!user) {
-    await createUserFromClerkClaims(env, enrichedClaims, profile.imageUrl);
+    const bootstrapProfile = shouldFetchClerkProfile
+      ? profile
+      : await getClerkProfile(env, enrichedClaims.userId);
+
+    if (!bootstrapProfile.fetched) {
+      return null;
+    }
+
+    await createUserFromClerkClaims(
+      env,
+      enrichedClaims,
+      bootstrapProfile.imageUrl,
+    );
+
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
   }
 
@@ -3024,6 +3037,422 @@ function toClientUser(
   };
 }
 
+type AccountDeletionIdentity = {
+  userId: string;
+  clerkUserId: string;
+  legacyUserId: string;
+  email: string;
+};
+
+function getAccountDeletionIdentity(
+  user: D1User | null,
+  claims: ClerkClaims,
+): AccountDeletionIdentity {
+  return {
+    userId: user?.id || claims.userId,
+    clerkUserId: claims.userId,
+    legacyUserId: normalizeLegacyBase44UserId(
+      user?.legacy_base44_user_id || null,
+    ) || "",
+    email: normalizeEmail(user?.email || claims.email) || "",
+  };
+}
+
+function accountIdentityPredicate(
+  idColumn: string,
+  clerkColumn: string,
+  legacyColumn: string,
+  emailColumn?: string,
+): string {
+  const predicates = [
+    `${idColumn} = ?`,
+    `${clerkColumn} = ?`,
+    `(? <> '' AND ${legacyColumn} = ?)`,
+  ];
+
+  if (emailColumn) {
+    predicates.push(
+      `(? <> '' AND lower(TRIM(COALESCE(${emailColumn}, ''))) = ?)`,
+    );
+  }
+
+  return predicates.join(" OR ");
+}
+
+function accountIdentityParams(
+  identity: AccountDeletionIdentity,
+  includeEmail = false,
+): string[] {
+  const params = [
+    identity.userId,
+    identity.clerkUserId,
+    identity.legacyUserId,
+    identity.legacyUserId,
+  ];
+
+  if (includeEmail) {
+    params.push(identity.email, identity.email);
+  }
+
+  return params;
+}
+
+function ownedPlaylistPredicate(): string {
+  return [
+    "creator_id = ?",
+    "creator_clerk_user_id = ?",
+    "(? <> '' AND creator_legacy_base44_user_id = ?)",
+    "(? <> '' AND lower(TRIM(COALESCE(creator_email, ''))) = ?)",
+  ].join(" OR ");
+}
+
+function ownedPlaylistParams(
+  identity: AccountDeletionIdentity,
+): string[] {
+  return [
+    identity.userId,
+    identity.clerkUserId,
+    identity.legacyUserId,
+    identity.legacyUserId,
+    identity.email,
+    identity.email,
+  ];
+}
+
+function prepareAccountDeletionStatements(
+  env: Env,
+  identity: AccountDeletionIdentity,
+): D1PreparedStatement[] {
+  const playlistPredicate = ownedPlaylistPredicate();
+  const playlistParams = ownedPlaylistParams(identity);
+
+  const playlistLikeUserPredicate = accountIdentityPredicate(
+    "user_id",
+    "clerk_user_id",
+    "legacy_base44_user_id",
+    "user_email",
+  );
+
+  const podcastLikeUserPredicate = accountIdentityPredicate(
+    "user_id",
+    "clerk_user_id",
+    "legacy_base44_user_id",
+    "user_email",
+  );
+
+  const podcastPlayUserPredicate = accountIdentityPredicate(
+    "user_id",
+    "clerk_user_id",
+    "legacy_base44_user_id",
+  );
+
+  const episodeProgressUserPredicate = accountIdentityPredicate(
+    "user_id",
+    "clerk_user_id",
+    "legacy_base44_user_id",
+  );
+
+  const followerPredicate = accountIdentityPredicate(
+    "follower_id",
+    "follower_clerk_user_id",
+    "follower_legacy_base44_user_id",
+    "follower_email",
+  );
+
+  const followingPredicate = accountIdentityPredicate(
+    "following_id",
+    "following_clerk_user_id",
+    "following_legacy_base44_user_id",
+    "following_email",
+  );
+
+  const blockerPredicate = accountIdentityPredicate(
+    "blocker_id",
+    "blocker_clerk_user_id",
+    "blocker_legacy_base44_user_id",
+    "blocker_email",
+  );
+
+  const blockedPredicate = accountIdentityPredicate(
+    "blocked_id",
+    "blocked_clerk_user_id",
+    "blocked_legacy_base44_user_id",
+    "blocked_email",
+  );
+
+  const reporterPredicate = accountIdentityPredicate(
+    "reporter_id",
+    "reporter_clerk_user_id",
+    "reporter_legacy_base44_user_id",
+    "reporter_email",
+  );
+
+  const inviterPredicate = accountIdentityPredicate(
+    "inviter_id",
+    "inviter_clerk_user_id",
+    "inviter_legacy_base44_user_id",
+    "inviter_email",
+  );
+
+  const inviteePredicate = accountIdentityPredicate(
+    "invitee_user_id",
+    "invitee_clerk_user_id",
+    "invitee_legacy_base44_user_id",
+    "invitee_email",
+  );
+
+  return [
+    env.DB.prepare(
+      `DELETE FROM playlist_episodes_cache
+       WHERE playlist_id IN (
+         SELECT id FROM playlists
+         WHERE ${playlistPredicate}
+       )`,
+    ).bind(...playlistParams),
+
+    env.DB.prepare(
+      `DELETE FROM playlist_likes
+       WHERE playlist_id IN (
+         SELECT id FROM playlists
+         WHERE ${playlistPredicate}
+       )`,
+    ).bind(...playlistParams),
+
+    env.DB.prepare(
+      `DELETE FROM reports
+       WHERE reported_playlist_id IN (
+         SELECT id FROM playlists
+         WHERE ${playlistPredicate}
+       )
+          OR (
+            content_type = 'playlist'
+            AND content_id IN (
+              SELECT id FROM playlists
+              WHERE ${playlistPredicate}
+            )
+          )`,
+    ).bind(...playlistParams, ...playlistParams),
+
+    env.DB.prepare(
+      `DELETE FROM referrals
+       WHERE playlist_id IN (
+         SELECT id FROM playlists
+         WHERE ${playlistPredicate}
+       )`,
+    ).bind(...playlistParams),
+
+    env.DB.prepare(
+      `DELETE FROM playlist_likes
+       WHERE ${playlistLikeUserPredicate}`,
+    ).bind(...accountIdentityParams(identity, true)),
+
+    env.DB.prepare(
+      `DELETE FROM podcast_likes
+       WHERE ${podcastLikeUserPredicate}`,
+    ).bind(...accountIdentityParams(identity, true)),
+
+    env.DB.prepare(
+      `DELETE FROM podcast_plays
+       WHERE ${podcastPlayUserPredicate}`,
+    ).bind(...accountIdentityParams(identity)),
+
+    env.DB.prepare(
+      `DELETE FROM episode_progress
+       WHERE ${episodeProgressUserPredicate}`,
+    ).bind(...accountIdentityParams(identity)),
+
+    env.DB.prepare(
+      `DELETE FROM follows
+       WHERE (${followerPredicate})
+          OR (${followingPredicate})`,
+    ).bind(
+      ...accountIdentityParams(identity, true),
+      ...accountIdentityParams(identity, true),
+    ),
+
+    env.DB.prepare(
+      `DELETE FROM blocks
+       WHERE (${blockerPredicate})
+          OR (${blockedPredicate})`,
+    ).bind(
+      ...accountIdentityParams(identity, true),
+      ...accountIdentityParams(identity, true),
+    ),
+
+    env.DB.prepare(
+      `DELETE FROM reports
+       WHERE (${reporterPredicate})
+          OR reported_user_id = ?
+          OR (? <> '' AND lower(TRIM(COALESCE(reported_user_email, ''))) = ?)`,
+    ).bind(
+      ...accountIdentityParams(identity, true),
+      identity.userId,
+      identity.email,
+      identity.email,
+    ),
+
+    env.DB.prepare(
+      `DELETE FROM referrals
+       WHERE (${inviterPredicate})
+          OR (${inviteePredicate})`,
+    ).bind(
+      ...accountIdentityParams(identity, true),
+      ...accountIdentityParams(identity, true),
+    ),
+
+    env.DB.prepare(
+      `DELETE FROM playlists
+       WHERE ${playlistPredicate}`,
+    ).bind(...playlistParams),
+
+    env.DB.prepare(
+      `DELETE FROM users
+       WHERE id = ?
+          OR clerk_user_id = ?
+          OR (? <> '' AND legacy_base44_user_id = ?)`,
+    ).bind(
+      identity.userId,
+      identity.clerkUserId,
+      identity.legacyUserId,
+      identity.legacyUserId,
+    ),
+  ];
+}
+
+async function deleteAccountProfileMedia(
+  env: Env,
+  clerkUserId: string,
+): Promise<void> {
+  const prefix = `profiles/${clerkUserId}/`;
+  let cursor: string | undefined;
+
+  do {
+    const page = await env.VOXYL_MEDIA.list({
+      prefix,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    const keys = page.objects.map((object) => object.key);
+
+    if (keys.length > 0) {
+      await env.VOXYL_MEDIA.delete(keys);
+    }
+
+    if (!page.truncated) {
+      cursor = undefined;
+      continue;
+    }
+
+    if (!page.cursor) {
+      throw new Error("R2 pagination cursor is missing");
+    }
+
+    cursor = page.cursor;
+  } while (cursor);
+}
+
+async function deleteClerkAccount(
+  env: Env,
+  clerkUserId: string,
+): Promise<void> {
+  const response = await fetch(
+    `https://api.clerk.com/v1/users/${encodeURIComponent(clerkUserId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${env.CLERK_SECRET_KEY}`,
+        accept: "application/json",
+      },
+    },
+  );
+
+  if (response.ok || response.status === 404) {
+    return;
+  }
+
+  throw new Error(`Clerk deletion failed with HTTP ${response.status}`);
+}
+
+async function deleteMeResponse(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await getUserByClerkUserId(env, claims.userId);
+  const identity = getAccountDeletionIdentity(user, claims);
+
+  try {
+    await deleteAccountProfileMedia(env, claims.userId);
+  } catch (error) {
+    console.error("Account deletion R2 cleanup failed", error);
+
+    return jsonResponse(
+      {
+        ok: false,
+        deleted: false,
+        stage: "r2",
+        error: "Account deletion could not remove profile media",
+      },
+      500,
+      corsHeaders,
+    );
+  }
+
+  try {
+    const results = await env.DB.batch(
+      prepareAccountDeletionStatements(env, identity),
+    );
+
+    if (results.some((result) => result.success === false)) {
+      throw new Error("D1 deletion batch reported failure");
+    }
+  } catch (error) {
+    console.error("Account deletion D1 cleanup failed", error);
+
+    return jsonResponse(
+      {
+        ok: false,
+        deleted: false,
+        stage: "d1",
+        error: "Account deletion could not remove Voxyl data",
+      },
+      500,
+      corsHeaders,
+    );
+  }
+
+  try {
+    await deleteClerkAccount(env, claims.userId);
+  } catch (error) {
+    console.error("Account deletion Clerk cleanup failed", error);
+
+    return jsonResponse(
+      {
+        ok: false,
+        deleted: false,
+        stage: "clerk",
+        error: "Voxyl data was removed, but identity deletion is incomplete",
+      },
+      502,
+      corsHeaders,
+    );
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      deleted: true,
+    },
+    200,
+    corsHeaders,
+  );
+}
 async function meResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -6503,6 +6932,10 @@ export default {
       if (request.method === "PATCH" && isMeRoute(pathname)) {
         return withCors(await updateMeResponse(request, env), request, env);
       }
+if (request.method === "DELETE" && isMeRoute(pathname)) {
+        return withCors(await deleteMeResponse(request, env), request, env);
+      }
+
 
       if (request.method === "GET" && (isPlaylistsRoute(pathname) || isEntityPlaylistRoute(pathname))) {
         return withCors(await playlistsResponse(request, env), request, env);
