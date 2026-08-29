@@ -209,11 +209,13 @@ function installFetchMock(
   jwk,
   {
     clerkDeleteStatus = 200,
+    clerkGetStatus = 200,
     events = [],
   } = {},
 ) {
   const state = {
     clerkDeleteCalls: [],
+    clerkGetCalls: [],
     events,
   };
 
@@ -248,6 +250,41 @@ function installFetchMock(
       );
     }
 
+
+    if (
+      requestedUrl ===
+        'https://api.clerk.com/v1/users/clerk-user-1' &&
+      String(options.method || 'GET').toUpperCase() === 'GET'
+    ) {
+      state.events.push('clerk:get');
+      state.clerkGetCalls.push({
+        url: requestedUrl,
+        authorization:
+          new Headers(options.headers).get('authorization'),
+      });
+
+      if (clerkGetStatus !== 200) {
+        return new Response(null, {
+          status: clerkGetStatus,
+        });
+      }
+
+      return Response.json({
+        id: 'clerk-user-1',
+        first_name: 'Real',
+        last_name: 'User',
+        full_name: 'Real User',
+        primary_email_address_id: 'email-1',
+        email_addresses: [
+          {
+            id: 'email-1',
+            email_address: 'real@example.com',
+          },
+        ],
+        image_url: null,
+        has_image: false,
+      });
+    }
     throw new Error('Unexpected fetch URL: ' + requestedUrl);
   });
 
@@ -561,6 +598,104 @@ describe('account deletion worker contract', () => {
     assert.equal(clerk.clerkDeleteCalls.length, 1);
   });
 
+  it('does not recreate a D1 user from a stale JWT after Clerk deletion', async () => {
+    const auth = createJwt();
+
+    let userInsertAttempts = 0;
+    let currentUser = null;
+
+    const createdUser = {
+      id: 'clerk-user-1',
+      clerk_user_id: 'clerk-user-1',
+      legacy_base44_user_id: null,
+      email: 'real@example.com',
+      name: 'Real User',
+      username: null,
+      role: 'user',
+      profile_picture: null,
+      clerk_profile_picture: null,
+      profile_hidden: 0,
+      imported_at: null,
+      created_at: '2026-08-29T00:00:00.000Z',
+      updated_at: '2026-08-29T00:00:00.000Z',
+    };
+
+    const db = {
+      prepare(sql) {
+        return {
+          bind(...params) {
+            return {
+              sql,
+              params,
+
+              async first() {
+                if (/FROM users\s+WHERE clerk_user_id = \?/s.test(sql)) {
+                  return currentUser;
+                }
+
+                throw new Error('Unhandled first SQL: ' + sql);
+              },
+
+              async all() {
+                if (
+                  /FROM users\s+WHERE lower\(TRIM\(email\)\) = lower\(TRIM\(\?\)\)/s
+                    .test(sql)
+                ) {
+                  return { results: [] };
+                }
+
+                throw new Error('Unhandled all SQL: ' + sql);
+              },
+
+              async run() {
+                if (/INSERT INTO users/s.test(sql)) {
+                  userInsertAttempts += 1;
+                  currentUser = createdUser;
+
+                  return {
+                    success: true,
+                    meta: { changes: 1 },
+                  };
+                }
+
+                throw new Error('Unhandled run SQL: ' + sql);
+              },
+            };
+          },
+        };
+      },
+    };
+
+    const r2 = createR2();
+
+    const clerk = installFetchMock(
+      auth.jwk,
+      {
+        clerkGetStatus: 404,
+      },
+    );
+
+    const env = createEnv({ db, r2 });
+
+    const response = await worker.fetch(
+      request('/api/me', {
+        token: auth.token,
+        method: 'GET',
+      }),
+      env,
+    );
+
+    if (userInsertAttempts !== 0) {
+      throw new Error(
+        'STALE_JWT_RESURRECTION_DETECTED ' +
+        `insertAttempts=${userInsertAttempts} status=${response.status}`,
+      );
+    }
+
+    assert.notEqual(response.status, 200);
+    assert.equal(userInsertAttempts, 0);
+    assert.equal(clerk.clerkGetCalls.length, 1);
+  });
   it('allows a safe retry after Voxyl data is already gone', async () => {
     const events = [];
     const auth = createJwt();

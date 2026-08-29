@@ -2983,7 +2983,20 @@ async function resolveD1UserFromClerkClaims(
   }
 
   if (!user) {
-    await createUserFromClerkClaims(env, enrichedClaims, profile.imageUrl);
+    const bootstrapProfile = shouldFetchClerkProfile
+      ? profile
+      : await getClerkProfile(env, enrichedClaims.userId);
+
+    if (!bootstrapProfile.fetched) {
+      return null;
+    }
+
+    await createUserFromClerkClaims(
+      env,
+      enrichedClaims,
+      bootstrapProfile.imageUrl,
+    );
+
     user = await getUserByClerkUserId(env, enrichedClaims.userId);
   }
 
