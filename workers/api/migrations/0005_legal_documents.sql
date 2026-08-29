@@ -1,0 +1,114 @@
+PRAGMA foreign_keys = ON;
+
+-- 0005_legal_documents.sql
+--
+-- Adds a versioned legal-document ledger to D1 and archives the privacy policy
+-- presented by the Voxyl application for Google Play readiness.
+--
+-- Runtime availability note:
+-- The public /privacy page intentionally renders the version-controlled
+-- src/data/privacy-policy.json bundle so the legal page does not depend on
+-- authentication or Worker/D1 availability. This table preserves the same
+-- published content as an auditable database record. tests/privacy-policy.test.mjs
+-- verifies that the bundled and seeded payloads remain byte-equivalent JSON.
+--
+-- Rollback note:
+-- D1 migrations are forward-only in normal operation. Do not destructively
+-- remove legal-document history from production; supersede a document with a
+-- later version instead.
+
+CREATE TABLE IF NOT EXISTS legal_documents (
+  id TEXT PRIMARY KEY,
+  document_type TEXT NOT NULL,
+  locale TEXT NOT NULL,
+  version TEXT NOT NULL,
+  title TEXT NOT NULL,
+  effective_date TEXT NOT NULL,
+  public_url TEXT NOT NULL,
+  operator_name TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  is_current INTEGER NOT NULL DEFAULT 0 CHECK (is_current IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (document_type, locale, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_legal_documents_lookup
+  ON legal_documents (document_type, locale, is_current, effective_date DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_documents_one_current
+  ON legal_documents (document_type, locale)
+  WHERE is_current = 1;
+
+UPDATE legal_documents
+SET is_current = 0,
+    updated_at = CURRENT_TIMESTAMP
+WHERE document_type = 'privacy_policy'
+  AND locale IN ('en-US', 'pt-BR')
+  AND is_current = 1;
+
+INSERT INTO legal_documents (
+  id,
+  document_type,
+  locale,
+  version,
+  title,
+  effective_date,
+  public_url,
+  operator_name,
+  content_json,
+  is_current
+)
+VALUES (
+  'privacy-policy-en-us-2026-08-29',
+  'privacy_policy',
+  'en-US',
+  '2026-08-29',
+  'Privacy Policy',
+  '2026-08-29',
+  'https://v.renbrant.com/privacy',
+  'Renbrant',
+  '{"title":"Privacy Policy","intro":["This Privacy Policy explains how Voxyl handles information when you use the Voxyl web or Android application.","Voxyl is currently a beta service published by Renbrant. This policy reflects the current production architecture and is intended to stay aligned with the data practices declared to Google Play."],"sections":[{"title":"1. Information we process","items":["Account and identity data: Clerk user identifier, email address, name, username, and authentication-provider profile image when available.","Profile and user content: custom profile images, playlist titles and descriptions, playlist artwork, RSS feed references, visibility settings, likes or saved content, social relationships, blocks, reports, and referral information.","Listening and playback activity: podcast and feed metadata, episodes played, playback timestamps, listening history, playback position, duration, and completion state.","Technical and service data: standard network and request information such as IP address, user agent, request timing, and security signals may be processed by our infrastructure providers when delivering and protecting the service.","Local app data: language, theme, cache, playback, and other runtime preferences may be stored locally on your device or browser."]},{"title":"2. How we use information","items":["Authenticate users and maintain Voxyl accounts.","Provide playlists, podcast discovery, playback, saved content, listening progress, and personalized listening surfaces.","Provide social features such as profiles, follows, follow requests, blocking, and community moderation.","Protect the service, investigate abuse, enforce access controls, and respond to reports.","Operate, troubleshoot, secure, and improve the reliability of Voxyl."]},{"title":"3. Public information and sharing choices","paragraphs":["Information you intentionally make public can be visible to other Voxyl users. This may include your username, profile image, public profile information, public playlists, playlist metadata, and social context.","Playlist and profile visibility controls are used to limit content that is private or restricted to the intended audience. Do not place sensitive personal information in content that you choose to publish publicly."]},{"title":"4. Service providers and external content","items":["Clerk provides authentication and identity services.","Cloudflare provides hosting and infrastructure services, including Pages, Workers, D1, R2, and KV.","Podcast Index may be used for podcast discovery when configured.","Podcast publishers, RSS servers, and media hosts provide third-party podcast content. When your device streams media or accesses external content, those providers may receive standard network information needed to deliver it."],"paragraphs":["Voxyl does not sell or rent personal information as part of the current product, and the current product does not use third-party behavioral advertising SDKs."]},{"title":"5. Android permissions and device access","paragraphs":["The current Android application uses Internet access and Android foreground media-playback capabilities so audio can continue playing with system media controls when appropriate. Wake-lock capability may be used to support reliable playback.","The current Voxyl Android manifest does not request camera, microphone, contacts, or precise-location permissions."]},{"title":"6. Data retention","paragraphs":["We retain account and application data for as long as reasonably necessary to provide Voxyl, maintain user-requested content and history, protect the service, and meet applicable legal obligations.","Some cache data is temporary. When account deletion is completed, associated personal data is deleted or anonymized according to the deletion process, except for limited information that may need to be retained for legal, security, fraud-prevention, or dispute purposes."]},{"title":"7. Security","paragraphs":["Voxyl uses authenticated access controls for protected operations and HTTPS for production web and API traffic. Infrastructure and authentication are provided through established third-party services.","No internet service can guarantee absolute security. We review the application and its dependencies as part of the release process."]},{"title":"8. Your choices and privacy rights","items":["You can update supported profile information and content in the app.","You can use profile and playlist visibility controls to manage what other users can see.","You can block users and use available reporting or moderation controls.","You may request access, correction, or deletion of personal information, subject to applicable law."]},{"title":"9. Account deletion","paragraphs":["You may request deletion of your Voxyl account and associated personal data through the account-deletion options published with Voxyl in the application and on its Google Play listing.","Deletion is not the same as signing out or disabling a session. The deletion process is intended to remove or anonymize applicable account-linked data across Voxyl services, subject only to documented legal or security retention needs."]},{"title":"10. International processing","paragraphs":["Voxyl uses service providers that may process information in countries other than the country where you live. Those providers apply their own contractual, technical, and legal safeguards to the services they provide."]},{"title":"11. Changes to this policy","paragraphs":["We may update this policy when Voxyl features, service providers, or legal requirements change. The version and effective date shown on this page identify the policy currently presented by the application."]},{"title":"12. Contact","paragraphs":["For privacy questions, data requests, or complaints, use the developer support contact published for Voxyl in Google Play. The public Privacy Policy is available at https://v.renbrant.com/privacy."]}]}' ,
+  1
+)
+ON CONFLICT(document_type, locale, version) DO UPDATE SET
+  title = excluded.title,
+  effective_date = excluded.effective_date,
+  public_url = excluded.public_url,
+  operator_name = excluded.operator_name,
+  content_json = excluded.content_json,
+  is_current = excluded.is_current,
+  updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO legal_documents (
+  id,
+  document_type,
+  locale,
+  version,
+  title,
+  effective_date,
+  public_url,
+  operator_name,
+  content_json,
+  is_current
+)
+VALUES (
+  'privacy-policy-pt-br-2026-08-29',
+  'privacy_policy',
+  'pt-BR',
+  '2026-08-29',
+  'Política de Privacidade',
+  '2026-08-29',
+  'https://v.renbrant.com/privacy',
+  'Renbrant',
+  '{"title":"Política de Privacidade","intro":["Esta Política de Privacidade explica como o Voxyl trata informações quando você utiliza o aplicativo Voxyl na web ou no Android.","O Voxyl é atualmente um serviço beta publicado por Renbrant. Esta política reflete a arquitetura de produção atual e deve permanecer alinhada às práticas de dados declaradas ao Google Play."],"sections":[{"title":"1. Informações que processamos","items":["Dados de conta e identidade: identificador de usuário do Clerk, endereço de e-mail, nome, nome de usuário e imagem de perfil do provedor de autenticação quando disponível.","Perfil e conteúdo do usuário: imagens de perfil personalizadas, títulos e descrições de playlists, capas, referências a feeds RSS, configurações de visibilidade, curtidas ou conteúdo salvo, relacionamentos sociais, bloqueios, denúncias e informações de indicação.","Atividade de escuta e reprodução: metadados de podcasts e feeds, episódios reproduzidos, horários de reprodução, histórico de escuta, posição, duração e estado de conclusão.","Dados técnicos e do serviço: informações padrão de rede e requisição, como endereço IP, user agent, tempo de requisição e sinais de segurança, podem ser processadas pelos nossos provedores de infraestrutura para entregar e proteger o serviço.","Dados locais do app: idioma, tema, cache, reprodução e outras preferências de execução podem ser armazenados localmente no dispositivo ou navegador."]},{"title":"2. Como usamos as informações","items":["Autenticar usuários e manter contas do Voxyl.","Fornecer playlists, descoberta de podcasts, reprodução, conteúdo salvo, progresso de escuta e experiências personalizadas.","Fornecer recursos sociais como perfis, seguidores, solicitações para seguir, bloqueios e moderação da comunidade.","Proteger o serviço, investigar abusos, aplicar controles de acesso e responder a denúncias.","Operar, diagnosticar, proteger e melhorar a confiabilidade do Voxyl."]},{"title":"3. Informações públicas e escolhas de compartilhamento","paragraphs":["Informações que você torna públicas intencionalmente podem ficar visíveis para outros usuários do Voxyl. Isso pode incluir seu nome de usuário, imagem de perfil, informações públicas do perfil, playlists públicas, metadados das playlists e contexto social.","Os controles de visibilidade de perfil e playlists são usados para limitar conteúdo privado ou restrito ao público pretendido. Não inclua informações pessoais sensíveis em conteúdo que você escolher publicar."]},{"title":"4. Prestadores de serviço e conteúdo externo","items":["Clerk fornece serviços de autenticação e identidade.","Cloudflare fornece hospedagem e infraestrutura, incluindo Pages, Workers, D1, R2 e KV.","Podcast Index pode ser utilizado para descoberta de podcasts quando configurado.","Publicadores de podcasts, servidores RSS e hosts de mídia fornecem conteúdo de terceiros. Quando o dispositivo transmite mídia ou acessa conteúdo externo, esses provedores podem receber informações padrão de rede necessárias para entregar o conteúdo."],"paragraphs":["O Voxyl não vende nem aluga informações pessoais como parte do produto atual, e o produto atual não utiliza SDKs de publicidade comportamental de terceiros."]},{"title":"5. Permissões do Android e acesso ao dispositivo","paragraphs":["O aplicativo Android atual usa acesso à Internet e recursos de reprodução de mídia em foreground do Android para que o áudio possa continuar com os controles de mídia do sistema quando apropriado. A capacidade de wake lock pode ser usada para dar suporte à reprodução confiável.","O manifesto Android atual do Voxyl não solicita permissões de câmera, microfone, contatos ou localização precisa."]},{"title":"6. Retenção de dados","paragraphs":["Mantemos dados da conta e do aplicativo pelo tempo razoavelmente necessário para fornecer o Voxyl, manter conteúdo e histórico solicitados pelo usuário, proteger o serviço e cumprir obrigações legais aplicáveis.","Alguns dados de cache são temporários. Quando a exclusão da conta é concluída, dados pessoais associados são excluídos ou anonimizados conforme o processo de exclusão, exceto informações limitadas que precisem ser mantidas por motivos legais, de segurança, prevenção de fraude ou resolução de disputas."]},{"title":"7. Segurança","paragraphs":["O Voxyl usa controles de acesso autenticados para operações protegidas e HTTPS para o tráfego de produção da web e da API. A infraestrutura e a autenticação são fornecidas por serviços de terceiros estabelecidos.","Nenhum serviço de Internet pode garantir segurança absoluta. Revisamos o aplicativo e suas dependências como parte do processo de release."]},{"title":"8. Suas escolhas e direitos de privacidade","items":["Você pode atualizar informações de perfil e conteúdo compatíveis diretamente no aplicativo.","Você pode usar os controles de visibilidade do perfil e das playlists para gerenciar o que outros usuários podem ver.","Você pode bloquear usuários e usar os controles disponíveis de denúncia ou moderação.","Você pode solicitar acesso, correção ou exclusão de informações pessoais, sujeito à legislação aplicável."]},{"title":"9. Exclusão da conta","paragraphs":["Você pode solicitar a exclusão da sua conta Voxyl e dos dados pessoais associados pelas opções de exclusão de conta publicadas com o Voxyl no aplicativo e na sua página do Google Play.","Excluir a conta não é o mesmo que sair do aplicativo ou encerrar uma sessão. O processo de exclusão deve remover ou anonimizar os dados aplicáveis vinculados à conta nos serviços do Voxyl, sujeito apenas a necessidades documentadas de retenção legal ou de segurança."]},{"title":"10. Processamento internacional","paragraphs":["O Voxyl utiliza prestadores de serviço que podem processar informações em países diferentes daquele em que você vive. Esses prestadores aplicam suas próprias salvaguardas contratuais, técnicas e legais aos serviços que fornecem."]},{"title":"11. Alterações nesta política","paragraphs":["Podemos atualizar esta política quando os recursos do Voxyl, prestadores de serviço ou requisitos legais mudarem. A versão e a data de vigência exibidas nesta página identificam a política atualmente apresentada pelo aplicativo."]},{"title":"12. Contato","paragraphs":["Para dúvidas sobre privacidade, solicitações de dados ou reclamações, use o contato de suporte do desenvolvedor publicado para o Voxyl no Google Play. A Política de Privacidade pública está disponível em https://v.renbrant.com/privacy."]}]}' ,
+  1
+)
+ON CONFLICT(document_type, locale, version) DO UPDATE SET
+  title = excluded.title,
+  effective_date = excluded.effective_date,
+  public_url = excluded.public_url,
+  operator_name = excluded.operator_name,
+  content_json = excluded.content_json,
+  is_current = excluded.is_current,
+  updated_at = CURRENT_TIMESTAMP;
