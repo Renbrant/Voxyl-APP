@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { lang } from '@/lib/i18n';
 import PageTransition from '@/components/common/PageTransition';
 import privacyPolicy from '@/data/privacy-policy.json';
+import supportContact from '@/data/support-contact.json';
 
 function getLocale() {
   return lang === 'pt' ? 'pt-BR' : 'en-US';
@@ -29,12 +30,14 @@ export default function PrivacyPolicy() {
         effective: 'Vigente desde',
         version: 'Versão',
         operator: 'Publicado por',
+        contact: 'Contato de suporte e privacidade',
       }
     : {
         publicPolicy: 'Public Voxyl policy',
         effective: 'Effective',
         version: 'Version',
         operator: 'Published by',
+        contact: 'Support and privacy contact',
       };
 
   const handleBack = () => {
@@ -117,6 +120,18 @@ export default function PrivacyPolicy() {
               </section>
             ))}
           </div>
+
+          <section className="mt-8 rounded-2xl border border-border bg-secondary/40 p-4">
+            <h2 className="font-grotesk font-semibold text-base text-foreground mb-2">
+              {labels.contact}
+            </h2>
+            <a
+              href={`mailto:${supportContact.supportEmail}`}
+              className="text-sm text-primary underline underline-offset-4 break-all"
+            >
+              {supportContact.supportEmail}
+            </a>
+          </section>
 
           <div className="mt-10 pt-6 border-t border-border text-xs text-muted-foreground leading-relaxed">
             <p>{privacyPolicy.publicUrl}</p>

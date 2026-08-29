@@ -7,8 +7,12 @@ const settingsSource = fs.readFileSync(new URL('../src/pages/Settings.jsx', impo
 const privacyPageSource = fs.readFileSync(new URL('../src/pages/PrivacyPolicy.jsx', import.meta.url), 'utf8');
 const manifestSource = fs.readFileSync(new URL('../android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 const migrationSource = fs.readFileSync(new URL('../workers/api/migrations/0005_legal_documents.sql', import.meta.url), 'utf8');
+const supportMigrationSource = fs.readFileSync(new URL('../workers/api/migrations/0006_legal_document_support_email.sql', import.meta.url), 'utf8');
 const privacyPolicy = JSON.parse(
   fs.readFileSync(new URL('../src/data/privacy-policy.json', import.meta.url), 'utf8'),
+);
+const supportContact = JSON.parse(
+  fs.readFileSync(new URL('../src/data/support-contact.json', import.meta.url), 'utf8'),
 );
 
 describe('Google Play privacy policy contract', () => {
@@ -35,6 +39,17 @@ describe('Google Play privacy policy contract', () => {
     assert.match(portuguese, /Clerk/);
     assert.match(portuguese, /Cloudflare/);
     assert.match(portuguese, /Exclusão da conta/);
+  });
+
+  it('uses the official Voxyl support and privacy email in the public policy and D1 ledger', () => {
+    assert.equal(supportContact.supportEmail, 'voxyl.app@gmail.com');
+    assert.equal(supportContact.effectiveDate, '2026-08-29');
+    assert.match(privacyPageSource, /@\/data\/support-contact\.json/);
+    assert.match(privacyPageSource, /mailto:\$\{supportContact\.supportEmail\}/);
+    assert.match(supportMigrationSource, /ADD COLUMN support_email TEXT/);
+    assert.match(supportMigrationSource, /voxyl\.app@gmail\.com/);
+    assert.match(supportMigrationSource, /document_type = 'privacy_policy'/);
+    assert.match(supportMigrationSource, /version = '2026-08-29'/);
   });
 
   it('describes Android permissions from the current manifest instead of stale camera claims', () => {
