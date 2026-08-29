@@ -46,6 +46,13 @@ describe('Google Play privacy policy contract', () => {
     assert.equal(supportContact.effectiveDate, '2026-08-29');
     assert.match(privacyPageSource, /@\/data\/support-contact\.json/);
     assert.match(privacyPageSource, /mailto:\$\{supportContact\.supportEmail\}/);
+
+    const english = JSON.stringify(privacyPolicy.locales['en-US']);
+    const portuguese = JSON.stringify(privacyPolicy.locales['pt-BR']);
+    assert.match(english, /voxyl\.app@gmail\.com/);
+    assert.match(portuguese, /voxyl\.app@gmail\.com/);
+
+    assert.match(migrationSource, /voxyl\.app@gmail\.com/);
     assert.match(supportMigrationSource, /ADD COLUMN support_email TEXT/);
     assert.match(supportMigrationSource, /voxyl\.app@gmail\.com/);
     assert.match(supportMigrationSource, /document_type = 'privacy_policy'/);
