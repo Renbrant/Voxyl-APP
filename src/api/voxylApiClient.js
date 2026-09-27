@@ -216,7 +216,6 @@ export const voxylApi = {
     logout(redirectUrl) {
       return window.Clerk?.signOut?.({ redirectUrl: redirectUrl || "/" }) || Promise.resolve();
     },
-    setToken() {},
   },
   entities: Object.fromEntries(entityNames.map((name) => [name, createEntityClient(name)])),
   blocks: {

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
+import { clearLegacyAuthCredentials } from '@/lib/legacyAuthCleanup';
 import { X, Trash2, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -58,6 +59,8 @@ export default function DeleteAccountModal({ user, onClose }) {
       if (!result?.deleted) {
         throw new Error('Account deletion did not complete');
       }
+
+      await clearLegacyAuthCredentials();
 
       try {
         await voxylApi.auth.logout('/');

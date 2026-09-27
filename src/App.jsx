@@ -22,8 +22,6 @@ import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
 import AccountDeletion from '@/pages/AccountDeletion';
 import PodcastDetail from '@/pages/PodcastDetail';
-import AuthCallback from '@/pages/AuthCallback';
-import ClerkTest from '@/pages/ClerkTest';
 
 const AppErrorScreen = ({ title, message }) => (
   <div className="fixed inset-0 flex items-center justify-center bg-[#0f0d0b] px-6 text-white">
@@ -145,8 +143,6 @@ const AuthenticatedApp = () => {
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/account-deletion" element={<AccountDeletion />} />
       <Route path="/podcast/:feedUrl" element={<PodcastDetail />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
-      <Route path="/clerk-test" element={<ClerkTest />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
     </>

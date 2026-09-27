@@ -148,6 +148,12 @@ Before release, verify:
 - no Clerk secret key is present in source or APK configuration
 - release builds use a `pk_live_` Clerk publishable key
 - JWTs are not logged
+- upgrading an existing installation clears `voxyl_access_token` from
+  Capacitor Preferences and localStorage while preserving the Clerk session
+- an obsolete token callback cannot activate or replace a Clerk session
+- the merged manifest contains Clerk's hosted-login receiver but not the old
+  `com.renbrant.voxyl://auth/callback` intent filter
+- Android backup and device transfer exclude `CapacitorStorage.xml`
 - JWTs are not passed through the callback URL
 - locally generated APK files are not committed
 - the release APK is signed with the expected production certificate
