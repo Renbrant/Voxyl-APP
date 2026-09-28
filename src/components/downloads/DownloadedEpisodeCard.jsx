@@ -2,10 +2,12 @@ import { Play, Pause, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlayer } from '@/lib/PlayerContext';
 import { removeDownload } from '@/lib/downloads';
+import { useAuth } from '@/lib/AuthContext';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 export default function DownloadedEpisodeCard({ episode, onRemoved }) {
+  const { apiUser } = useAuth();
   const { play, currentEpisode, isPlaying, togglePlay } = usePlayer();
   const isActive = currentEpisode?.audioUrl === episode.audioUrl;
   const isCurrentlyPlaying = isActive && isPlaying;
@@ -17,7 +19,7 @@ export default function DownloadedEpisodeCard({ episode, onRemoved }) {
 
   const handleRemove = (e) => {
     e.stopPropagation();
-    removeDownload(episode.audioUrl);
+    removeDownload(episode.audioUrl, apiUser?.id);
     onRemoved();
   };
 

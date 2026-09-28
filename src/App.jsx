@@ -2,9 +2,10 @@ import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { Component, useEffect } from 'react';
+import { Component, useEffect, useRef } from 'react';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { clearAccountClientData } from '@/lib/accountCache';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import { PlayerProvider } from '@/lib/PlayerContext';
 import Layout from '@/components/Layout';
@@ -78,6 +79,23 @@ const BackButtonHandler = () => {
   }, [location.pathname, navigate]);
 
   return null;
+};
+
+const AccountCacheBoundary = ({ children }) => {
+  const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
+  const previous = useRef(undefined);
+  const current = !authChecked || isLoadingAuth || (isAuthenticated && (!apiUser?.id || (clerkUser && apiUser.clerk_user_id !== clerkUser.id)))
+    ? null : (isAuthenticated ? apiUser.id : 'guest');
+  useEffect(() => {
+    if (!current) return;
+    if (previous.current !== undefined && previous.current !== current) {
+      queryClientInstance.cancelQueries();
+      queryClientInstance.clear();
+      if (previous.current !== 'guest') clearAccountClientData(previous.current);
+    }
+    previous.current = current;
+  }, [current]);
+  return children;
 };
 
 const LegacyRouteRedirect = ({ to }) => {
@@ -154,12 +172,14 @@ function App() {
     <AppErrorBoundary>
       <AuthProvider>
         <QueryClientProvider client={queryClientInstance}>
+          <AccountCacheBoundary>
           <PlayerProvider>
             <Router>
               <AuthenticatedApp />
             </Router>
             <Toaster />
           </PlayerProvider>
+          </AccountCacheBoundary>
         </QueryClientProvider>
       </AuthProvider>
     </AppErrorBoundary>
