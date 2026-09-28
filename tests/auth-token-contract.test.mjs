@@ -99,6 +99,9 @@ describe('Clerk session token contract', () => {
     const fetchCount = serveJwks();
     const localEnv = { ...env, CLERK_JWT_KEY: pair.publicKey.export({ format: 'pem', type: 'spki' }) };
     assert.equal(await status(signedToken(), localEnv), 200);
+    assert.equal(await status(signedToken({ azp: undefined }), localEnv), 200);
+    assert.equal(await status(signedToken({ azp: 'https://attacker.test' }), localEnv), 401);
+    assert.equal(await status(signedToken({ azp: null }), localEnv), 401);
     assert.equal(await status(signedToken({ exp: undefined }), localEnv), 401);
     assert.equal(await status(signedToken({ sid: undefined }), localEnv), 401);
     assert.equal(await status(signedToken({ iss: 'https://wrong.test' }), localEnv), 401);

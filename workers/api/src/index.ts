@@ -2136,10 +2136,11 @@ async function getVerifiedClerkClaims(request: Request, env: Env): Promise<Clerk
   try {
     if (env.CLERK_JWT_KEY) {
       // A semantic SDK rejection must never be retried under a weaker verifier.
+      // Native sessions may omit azp. hasValidSessionClaims checks azp after
+      // signature verification, with the same policy as the pinned JWKS path.
       verifiedToken = await verifyToken(token, {
         jwtKey: env.CLERK_JWT_KEY,
         secretKey: env.CLERK_SECRET_KEY,
-        authorizedParties: getAuthorizedParties(env),
       });
     } else {
       // Explicitly configured JWKS mode is only used when no local JWT key exists.
