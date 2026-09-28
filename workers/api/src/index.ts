@@ -2963,11 +2963,15 @@ async function resolveD1UserFromClerkClaims(
   }
 
   if (user) {
-    await linkClerkUserToLegacyData(env, user, enrichedClaims, emailResolution.orphanPlaceholderUserId);
-    user = await getUserByClerkUserId(env, enrichedClaims.userId);
+    // The migration batch rewrites the user and every related table. A normal
+    // /me request must be read-only once this Clerk ID owns the D1 account.
+    if (user.clerk_user_id !== enrichedClaims.userId || emailResolution.orphanPlaceholderUserId) {
+      await linkClerkUserToLegacyData(env, user, enrichedClaims, emailResolution.orphanPlaceholderUserId);
+      user = await getUserByClerkUserId(env, enrichedClaims.userId);
 
-    if (!user || user.id !== expectedUserId) {
-      throw identityConflict();
+      if (!user || user.id !== expectedUserId) {
+        throw identityConflict();
+      }
     }
   }
 
