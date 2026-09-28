@@ -84,9 +84,9 @@ const BackButtonHandler = () => {
 };
 
 const AccountCacheBoundary = ({ children }) => {
-  const { apiUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
+  const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
   const previous = useRef(undefined);
-  const current = !authChecked || isLoadingAuth || (isAuthenticated && !apiUser?.id)
+  const current = !authChecked || isLoadingAuth || (isAuthenticated && (!apiUser?.id || (clerkUser && apiUser.clerk_user_id !== clerkUser.id)))
     ? null : (isAuthenticated ? apiUser.id : 'guest');
   useEffect(() => {
     if (!current) return;

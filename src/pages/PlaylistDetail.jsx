@@ -49,8 +49,8 @@ const GRADIENT_COLORS = [
 
 export default function PlaylistDetail() {
   const { id } = useParams();
-  const { apiUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
-  if (!authChecked || isLoadingAuth || (isAuthenticated && !apiUser?.id)) return null;
+  const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
+  if (!authChecked || isLoadingAuth || (isAuthenticated && (!apiUser?.id || (clerkUser && apiUser.clerk_user_id !== clerkUser.id)))) return null;
   const viewer = isAuthenticated ? `user:${apiUser.id}` : 'guest';
   return <AuthorizedPlaylistDetail key={`${id}:${viewer}`} id={id} viewer={viewer} user={apiUser} />;
 }
