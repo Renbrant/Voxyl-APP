@@ -7,6 +7,7 @@ const CACHE_PREFIX = 'playlist_episodes_';
 const CACHE_HASH_PREFIX = 'playlist_hash_';
 const CACHE_TIMESTAMP_PREFIX = 'playlist_timestamp_';
 const CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const cacheKey = (prefix, playlistId, viewer = 'guest') => `${prefix}v2_${encodeURIComponent(viewer)}_${playlistId}`;
 
 // Simple hash function for episodes
 function hashEpisodes(episodes) {
@@ -15,11 +16,11 @@ function hashEpisodes(episodes) {
 }
 
 // Get local cache
-export function getLocalCache(playlistId) {
+export function getLocalCache(playlistId, viewer = 'guest') {
   try {
-    const cached = localStorage.getItem(CACHE_PREFIX + playlistId);
-    const hash = localStorage.getItem(CACHE_HASH_PREFIX + playlistId);
-    const timestamp = localStorage.getItem(CACHE_TIMESTAMP_PREFIX + playlistId);
+    const cached = localStorage.getItem(cacheKey(CACHE_PREFIX, playlistId, viewer));
+    const hash = localStorage.getItem(cacheKey(CACHE_HASH_PREFIX, playlistId, viewer));
+    const timestamp = localStorage.getItem(cacheKey(CACHE_TIMESTAMP_PREFIX, playlistId, viewer));
     
     if (!cached) return null;
     
@@ -34,14 +35,14 @@ export function getLocalCache(playlistId) {
 }
 
 // Save local cache
-export function saveLocalCache(playlistId, episodes) {
+export function saveLocalCache(playlistId, episodes, viewer = 'guest') {
   try {
     const hash = hashEpisodes(episodes);
     const timestamp = Date.now();
     
-    localStorage.setItem(CACHE_PREFIX + playlistId, JSON.stringify(episodes));
-    localStorage.setItem(CACHE_HASH_PREFIX + playlistId, hash);
-    localStorage.setItem(CACHE_TIMESTAMP_PREFIX + playlistId, timestamp.toString());
+    localStorage.setItem(cacheKey(CACHE_PREFIX, playlistId, viewer), JSON.stringify(episodes));
+    localStorage.setItem(cacheKey(CACHE_HASH_PREFIX, playlistId, viewer), hash);
+    localStorage.setItem(cacheKey(CACHE_TIMESTAMP_PREFIX, playlistId, viewer), timestamp.toString());
     
     return { episodes, hash, timestamp };
   } catch {
@@ -139,8 +140,8 @@ export function processPlaylistEpisodes(rawEpisodes, playlist) {
 }
 
 // Get initial playlist episodes (fast load from local cache)
-export async function getInitialPlaylistEpisodes(playlistId) {
-  const localCache = getLocalCache(playlistId);
+export async function getInitialPlaylistEpisodes(playlistId, viewer = 'guest', isCurrent = () => true) {
+  const localCache = getLocalCache(playlistId, viewer);
   if (localCache?.episodes?.length) {
     return {
       episodes: localCache.episodes,
@@ -152,7 +153,7 @@ export async function getInitialPlaylistEpisodes(playlistId) {
   // Fallback to cloud if no local cache
   const cloudCache = await getCloudCache(playlistId);
   if (cloudCache?.episodes?.length) {
-    saveLocalCache(playlistId, cloudCache.episodes);
+    if (isCurrent()) saveLocalCache(playlistId, cloudCache.episodes, viewer);
     return {
       episodes: cloudCache.episodes,
       source: 'cloud',
@@ -169,14 +170,14 @@ export async function getInitialPlaylistEpisodes(playlistId) {
 
 // Refresh and sync episodes (background sync with cloud and RSS feeds)
 export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, options = {}) {
-  const { onProgress } = options;
+  const { onProgress, viewer = 'guest', isCurrent = () => true } = options;
   const rssFeeds = playlist.rss_feeds || [];
   const settledFeeds = new Array(rssFeeds.length).fill(null);
   let completedFeeds = 0;
   let failedFeeds = 0;
 
   const emitProgress = (extra = {}) => {
-    if (!onProgress) return;
+    if (!onProgress || !isCurrent()) return;
     const successfulFeeds = settledFeeds.filter(Boolean);
     onProgress({
       playlistId,
@@ -196,7 +197,7 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
       try {
           const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 100 });
           const fresh = res.data;
-          if (fresh?.items?.length) {
+          if (fresh?.items?.length && isCurrent()) {
             saveFeedToCache(f.url, fresh);
           }
           if (fresh?.items?.length) {
@@ -229,7 +230,7 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
     const processedFeeds = settledFeeds.filter(Boolean);
 
     // Get current local cache
-    const localCache = getLocalCache(playlistId);
+    const localCache = getLocalCache(playlistId, viewer);
 
     // Determine which data to use (fresh RSS, cloud, or local)
     let episodesToUse = [];
@@ -260,9 +261,9 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
     const sortedEpisodes = sortPlaylistEpisodes(episodesToUse, playlist);
 
     // Update both caches if we have new data
-    if (sortedEpisodes.length > 0) {
-      saveLocalCache(playlistId, sortedEpisodes);
-      await updateCloudCache(playlistId, sortedEpisodes);
+    if (sortedEpisodes.length > 0 && isCurrent()) {
+      saveLocalCache(playlistId, sortedEpisodes, viewer);
+      if (isCurrent()) await updateCloudCache(playlistId, sortedEpisodes);
     }
 
     return {
@@ -277,7 +278,7 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
   } catch (error) {
     console.error('Error refreshing playlist episodes:', error);
     // Return local cache as fallback
-    const localCache = getLocalCache(playlistId);
+    const localCache = getLocalCache(playlistId, viewer);
     return {
       playlistId,
       episodes: localCache?.episodes || [],
@@ -291,10 +292,11 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
 }
 
 // Clear cache
-export function clearCache(playlistId) {
-  localStorage.removeItem(CACHE_PREFIX + playlistId);
-  localStorage.removeItem(CACHE_HASH_PREFIX + playlistId);
-  localStorage.removeItem(CACHE_TIMESTAMP_PREFIX + playlistId);
+export function clearCache(playlistId, viewer = 'guest') {
+  for (const prefix of [CACHE_PREFIX, CACHE_HASH_PREFIX, CACHE_TIMESTAMP_PREFIX]) {
+    localStorage.removeItem(cacheKey(prefix, playlistId, viewer));
+    localStorage.removeItem(prefix + playlistId); // Discard legacy data with no known owner.
+  }
 }
 
 export function mergeAndSortPlaylistEpisodes(feeds, playlist) {

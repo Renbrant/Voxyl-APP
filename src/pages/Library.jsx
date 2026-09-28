@@ -129,7 +129,7 @@ export default function Library() {
     },
   });
 
-  const downloadsCount = useMemo(() => getDownloads().length, []);
+  const downloadsCount = useMemo(() => getDownloads(user?.id).length, [user?.id]);
   const followedLoading = playlistLikesQuery.isLoading || (
     likedPlaylistIds.length > 0 && followedPlaylistsQuery.isLoading
   );

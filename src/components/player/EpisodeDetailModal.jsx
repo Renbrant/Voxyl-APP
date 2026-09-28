@@ -1,6 +1,7 @@
 import { Calendar, Clock, ArrowLeft, List, Download, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
 import { saveDownload, isDownloaded } from '@/lib/downloads';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -9,11 +10,13 @@ import { ptBR } from 'date-fns/locale';
 
 export default function EpisodeDetailModal({ episode, isActive, isPlaying, onPlay, onClose, gradient }) {
   const navigate = useNavigate();
-  const [downloaded, setDownloaded] = useState(() => isDownloaded(episode?.audioUrl));
+  const { apiUser } = useAuth();
+  const [downloaded, setDownloaded] = useState(false);
+  const isSaved = downloaded || isDownloaded(episode?.audioUrl, apiUser?.id);
 
   const handleDownload = () => {
-    if (downloaded) return;
-    saveDownload(episode);
+    if (isSaved || !apiUser?.id) return;
+    saveDownload(episode, apiUser.id);
     setDownloaded(true);
   };
   const formattedDate = episode.pubDate
@@ -74,11 +77,11 @@ export default function EpisodeDetailModal({ episode, isActive, isPlaying, onPla
         <button
           onClick={handleDownload}
           className={`flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-semibold transition-all ${
-            downloaded ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-secondary text-foreground border border-border'
+            isSaved ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-secondary text-foreground border border-border'
           }`}
         >
-          {downloaded ? <Check size={16} /> : <Download size={16} />}
-          {downloaded ? 'Salvo' : 'Baixar'}
+          {isSaved ? <Check size={16} /> : <Download size={16} />}
+          {isSaved ? 'Salvo' : 'Baixar'}
         </button>
       </div>
 
