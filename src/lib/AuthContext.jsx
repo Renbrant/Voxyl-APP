@@ -3,7 +3,7 @@ import { useAuth as useClerkAuth, useUser as useClerkUser } from '@clerk/clerk-r
 import { voxylApi, setAuthTokenGetter } from '@/api/voxylApiClient';
 import { redirectToLogin } from '@/lib/authRedirect';
 import { isClerkConfigured } from '@/lib/clerkConfig';
-import { clearStoredNativeToken, getStoredNativeToken, isNativePlatform, restoreNativeAuthSession } from '@/lib/nativeAuthSession';
+import { clearLegacyAuthCredentials } from '@/lib/legacyAuthCleanup';
 import {
   getNativeClerkToken,
   isAndroidNative,
@@ -49,29 +49,6 @@ const FallbackAuthProvider = ({ children }) => {
       setIsLoadingPublicSettings(true);
       setAuthError(null);
 
-      // On native platforms, attempt to restore session from stored token BEFORE
-      // hitting the server. This ensures cold-start logins survive app restarts.
-      if (isNativePlatform()) {
-        const hasToken = !!(await getStoredNativeToken());
-        console.log('[AUTH] startup token exists:', hasToken);
-        if (hasToken) {
-          const restoredUser = await restoreNativeAuthSession();
-          if (restoredUser) {
-            setUser(restoredUser);
-            setIsAuthenticated(true);
-            setIsLoadingAuth(false);
-            setIsLoadingPublicSettings(false);
-            setAuthChecked(true);
-            // processReferral is defined later in the component but is in the same
-            // closure scope — safe to call here after all hooks are initialized.
-            setTimeout(() => processReferral(restoredUser).catch(() => {}), 0);
-            return;
-          }
-          // Token was invalid (401/403) — clearStoredNativeToken already called inside restoreNativeAuthSession.
-          // Fall through to normal auth check.
-        }
-      }
-      
       setAppPublicSettings({ public_settings: {} });
       setIsLoadingPublicSettings(false);
 
@@ -136,11 +113,6 @@ const FallbackAuthProvider = ({ children }) => {
       
       const status = error?.status || error?.response?.status;
       if (status === 401 || status === 403) {
-        // Definitively invalid token — clear it so we don't retry forever.
-        if (isNativePlatform()) {
-          console.log('[AUTH] stored token invalid, clearing session');
-          await clearStoredNativeToken();
-        }
         setAuthError({
           type: 'auth_required',
           message: 'Authentication required'
@@ -152,13 +124,9 @@ const FallbackAuthProvider = ({ children }) => {
   };
 
   const logout = async (shouldRedirect = true) => {
-    console.log('[AUTH] logout requested, clearing stored token');
     setUser(null);
     setIsAuthenticated(false);
-    // Clear the persisted native token so the next cold start doesn't restore it.
-    if (isNativePlatform()) {
-      await clearStoredNativeToken();
-    }
+    await clearLegacyAuthCredentials();
     if (shouldRedirect) {
       voxylApi.auth.logout(window.location.href);
     } else {
@@ -276,7 +244,6 @@ const NativeClerkAuthProvider = ({ children }) => {
       devAuthLog('native clerk state', {
         initialized: clerkInitialized,
         signedIn: clerkSignedIn,
-        sessionId: state.sessionId || null,
       });
 
       if (!clerkInitialized) {
@@ -415,6 +382,7 @@ const NativeClerkAuthProvider = ({ children }) => {
 
     try {
       const result = await signOutNativeClerk();
+      await clearLegacyAuthCredentials();
 
       setUser(null);
       setNativeLoaded(true);

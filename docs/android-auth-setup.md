@@ -150,8 +150,13 @@ On Android:
 3. Settings redirects to Home.
 4. A cold start must remain signed out.
 
-## Legacy authentication code
+## Retired token callback
 
-Some Base44-era callback helpers and intent filters may remain temporarily for migration compatibility or later cleanup.
+The Base44-era callback and custom-scheme intent filters have been removed.
+On startup, Voxyl removes obsolete localStorage and Capacitor Preferences
+token copies without touching Clerk Android's native session. The legacy
+Capacitor Preferences group is excluded from Android backup and device transfer.
 
-They are not the active Clerk Android authentication path and should not be used as the reference architecture for new work.
+Do not register `com.renbrant.voxyl://auth/callback` or send a JWT in a URL.
+The Clerk SDK's `clerk://com.renbrant.voxyl.callback` receiver remains the
+supported hosted-login return path; verify it in the merged manifest.
