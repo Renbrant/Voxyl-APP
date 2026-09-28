@@ -1012,6 +1012,11 @@ describe('Clerk production identity migration', () => {
     assert.equal(data.user.id, 'd1-real-user');
     assert.equal(data.user.clerk_user_id, 'clerk-dev-user');
     assert.equal(db.state.users.length, 2);
+    assert.equal(db.state.calls.filter((call) => call.kind === 'run' || call.kind === 'batch').length, 0);
+
+    const again = await worker.fetch(request('/me', { token }), { ...baseEnv, DB: db });
+    assert.equal(again.status, 200);
+    assert.equal(db.state.calls.filter((call) => call.kind === 'run' || call.kind === 'batch').length, 0);
   });
 
   it('keeps the brand-new user bootstrap path working', async () => {
