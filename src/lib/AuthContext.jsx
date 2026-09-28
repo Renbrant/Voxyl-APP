@@ -18,10 +18,16 @@ const AuthContext = createContext();
 const LOGIN_UNAVAILABLE_MESSAGE = 'Sign-in is temporarily unavailable. Please try again shortly.';
 
 function notifyLoginRedirectFailed(error) {
-  console.error('Login redirect failed:', error);
+  // Capacitor errors may contain URLs or session data in their message. Show
+  // only a short diagnostic code, never the SDK's raw error message.
+  const diagnosticCode = typeof error?.code === 'string' &&
+    /^[A-Z][A-Z0-9_]{2,80}$/.test(error.code)
+      ? error.code
+      : 'LOGIN_REDIRECT_FAILED';
+  console.error('Login redirect failed:', diagnosticCode);
   toast({
     title: 'Unable to start sign-in',
-    description: LOGIN_UNAVAILABLE_MESSAGE,
+    description: `${LOGIN_UNAVAILABLE_MESSAGE} (${diagnosticCode})`,
     variant: 'destructive',
   });
 }
