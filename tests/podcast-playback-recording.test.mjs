@@ -10,7 +10,7 @@ const baseEnv = {
   CLERK_AUTHORIZED_PARTIES: 'https://v.renbrant.com,http://localhost:5173',
   CLERK_ISSUER: issuer,
   CLERK_SECRET_KEY: 'sk_test_unused',
-  CLERK_JWT_KEY: 'invalid-test-key-to-force-pinned-jwks-fallback',
+  CLERK_JWT_KEY: '',
 };
 
 const validPayload = {

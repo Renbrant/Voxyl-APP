@@ -1947,22 +1947,6 @@ function getStringClaim(claims: Record<string, unknown>, names: string[]): strin
   return null;
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const payload = token.split(".")[1];
-
-    if (!payload) {
-      return null;
-    }
-
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    return JSON.parse(atob(padded)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
 function decodeJwtPart(part: string): Uint8Array {
   const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
@@ -1996,28 +1980,33 @@ function isExpectedIssuer(issuer: string | null, env: Env): boolean {
 function hasValidAuthorizedParty(claims: Record<string, unknown>, env: Env): boolean {
   const azp = claims.azp;
 
-  if (typeof azp !== "string") {
+  // Clerk omits azp when the native client has no Origin.
+  if (azp === undefined) {
     return true;
   }
 
-  return getAuthorizedParties(env).includes(azp);
+  return typeof azp === "string" && getAuthorizedParties(env).includes(azp);
 }
 
-function hasValidTimeClaims(claims: Record<string, unknown>): boolean {
+function hasValidSessionClaims(claims: Record<string, unknown>, env: Env): boolean {
   const now = Math.floor(Date.now() / 1000);
-  const exp = typeof claims.exp === "number" ? claims.exp : null;
-  const nbf = typeof claims.nbf === "number" ? claims.nbf : null;
+  const validTimestamp = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-  if (exp !== null && exp <= now) {
-    return false;
-  }
-
-  if (nbf !== null && nbf > now) {
-    return false;
-  }
-
-  return true;
+  return isExpectedIssuer(getStringClaim(claims, ["iss"]), env)
+    && Boolean(getStringClaim(claims, ["sub"]))
+    && Boolean(getStringClaim(claims, ["sid"]))
+    && validTimestamp(claims.exp) && claims.exp > now
+    && validTimestamp(claims.nbf) && claims.nbf <= now
+    && validTimestamp(claims.iat) && claims.iat <= now
+    && claims.exp > claims.iat
+    && hasValidAuthorizedParty(claims, env);
 }
+
+const JWKS_TIMEOUT_MS = 3000;
+const JWKS_CACHE_TTL_MS = 5 * 60 * 1000;
+const JWKS_CACHE_MAX_KEYS = 32;
+const pinnedJwksKeys = new Map<string, { key: CryptoKey; expiresAt: number }>();
 
 async function verifyTokenWithPinnedIssuerJwks(token: string, env: Env): Promise<Record<string, unknown> | null> {
   const parts = token.split(".");
@@ -2034,65 +2023,58 @@ async function verifyTokenWithPinnedIssuerJwks(token: string, env: Env): Promise
     return null;
   }
 
-  if (header.alg !== "RS256" || typeof header.kid !== "string") {
+  if (header.alg !== "RS256" || header.typ !== "JWT" || typeof header.kid !== "string" || !header.kid) {
     return null;
   }
 
-  if (!hasValidAuthorizedParty(claims, env) || !hasValidTimeClaims(claims)) {
+  if (!hasValidSessionClaims(claims, env)) {
     return null;
   }
 
-  const jwksResponse = await fetch(`${issuer}/.well-known/jwks.json`, {
-    headers: {
-      accept: "application/json",
-    },
-  });
-
-  if (!jwksResponse.ok) {
+  // The issuer is configured by the Worker, never chosen from an untrusted token.
+  const jwksUrl = new URL("/.well-known/jwks.json", issuer);
+  if (jwksUrl.protocol !== "https:" || jwksUrl.username || jwksUrl.password) {
     return null;
   }
 
-  const jwks = (await jwksResponse.json()) as { keys?: JsonWebKey[] };
-  const jwk = jwks.keys?.find((key) => key.kid === header.kid);
-
-  if (!jwk) {
-    return null;
+  const cacheId = `${issuer}|${header.kid}`;
+  let cached = pinnedJwksKeys.get(cacheId);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    const jwksResponse = await fetch(jwksUrl.toString(), {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(JWKS_TIMEOUT_MS),
+    });
+    if (!jwksResponse.ok) return null;
+    const jwks = (await jwksResponse.json()) as { keys?: JsonWebKey[] };
+    if (!Array.isArray(jwks.keys)) return null;
+    const jwk = jwks.keys.find((key) => key.kid === header.kid
+      && key.kty === "RSA" && (key.use === undefined || key.use === "sig")
+      && (key.alg === undefined || key.alg === "RS256"));
+    if (!jwk) return null;
+    const key = await crypto.subtle.importKey(
+      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
+    );
+    cached = { key, expiresAt: Date.now() + JWKS_CACHE_TTL_MS };
   }
-
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      hash: "SHA-256",
-    },
-    false,
-    ["verify"],
-  );
   const signature = decodeJwtPart(parts[2]);
   const signedData = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
-  const verified = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, signedData);
-
-  return verified ? claims : null;
+  const verified = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cached.key, signature, signedData);
+  if (!verified) return null;
+  pinnedJwksKeys.delete(cacheId);
+  pinnedJwksKeys.set(cacheId, cached);
+  if (pinnedJwksKeys.size > JWKS_CACHE_MAX_KEYS) {
+    pinnedJwksKeys.delete(pinnedJwksKeys.keys().next().value!);
+  }
+  return claims;
 }
 
-function logAuthVerification(request: Request, env: Env, message: string, error?: unknown): void {
-  const token = getBearerToken(request);
-  const payload = token ? decodeJwtPayload(token) : null;
-  const issuer = typeof payload?.iss === "string" ? payload.iss : null;
-  const authorizedParties = getAuthorizedParties(env);
-
+function logAuthVerification(request: Request, env: Env, message: string): void {
   console.warn("Clerk auth verification", {
     message,
     hasAuthorizationHeader: Boolean(request.headers.get("authorization")),
-    hasBearerToken: Boolean(token),
-    tokenIssuer: issuer,
-    expectedIssuer: env.CLERK_ISSUER || null,
-    allowedOrigin: request.headers.get("origin"),
-    authorizedParties,
+    hasBearerToken: Boolean(getBearerToken(request)),
     hasSecretKey: Boolean(env.CLERK_SECRET_KEY),
     hasJwtKey: Boolean(env.CLERK_JWT_KEY),
-    error: error instanceof Error ? error.message : error ? String(error) : null,
   });
 }
 
@@ -2146,23 +2128,29 @@ async function getVerifiedClerkClaims(request: Request, env: Env): Promise<Clerk
     return null;
   }
 
-  let verifiedToken: unknown;
+  const parts = token.split(".");
+  const header = parts.length === 3 ? decodeJwtJsonPart(parts[0]) : null;
+  if (header?.typ !== "JWT" || header.alg !== "RS256") return null;
 
+  let verifiedToken: Record<string, unknown> | null = null;
   try {
-    verifiedToken = await verifyToken(token, {
-      jwtKey: env.CLERK_JWT_KEY,
-      secretKey: env.CLERK_SECRET_KEY,
-      authorizedParties: getAuthorizedParties(env),
-    });
-  } catch (error) {
-    logAuthVerification(request, env, "primary token verification failed, trying pinned issuer JWKS", error);
-    verifiedToken = await verifyTokenWithPinnedIssuerJwks(token, env);
-
-    if (!verifiedToken) {
-      logAuthVerification(request, env, "pinned issuer JWKS verification failed");
-      return null;
+    if (env.CLERK_JWT_KEY) {
+      // A semantic SDK rejection must never be retried under a weaker verifier.
+      verifiedToken = await verifyToken(token, {
+        jwtKey: env.CLERK_JWT_KEY,
+        secretKey: env.CLERK_SECRET_KEY,
+        authorizedParties: getAuthorizedParties(env),
+      });
+    } else {
+      // Explicitly configured JWKS mode is only used when no local JWT key exists.
+      verifiedToken = await verifyTokenWithPinnedIssuerJwks(token, env);
     }
+  } catch {
+    logAuthVerification(request, env, "token verification failed");
+    return null;
   }
+
+  if (!verifiedToken || !hasValidSessionClaims(verifiedToken, env)) return null;
 
   try {
     const claims = verifiedToken as Record<string, unknown>;
@@ -2178,8 +2166,8 @@ async function getVerifiedClerkClaims(request: Request, env: Env): Promise<Clerk
       email: getStringClaim(claims, ["email", "primary_email", "primary_email_address"]),
       name: getStringClaim(claims, ["name", "full_name"]),
     };
-  } catch (error) {
-    logAuthVerification(request, env, "verified token claims parsing failed", error);
+  } catch {
+    logAuthVerification(request, env, "verified token claims parsing failed");
     return null;
   }
 }
