@@ -833,6 +833,24 @@ describe('saved-content frontend regressions', () => {
     assert.equal(console.warn.mock.calls[0].arguments[1].playlistId, 'missing');
   });
 
+  it('keeps transferred private listener copies visible in Saved', async () => {
+    mock.method(voxylApi.entities.Playlist, 'get', async (id) => ({ id, name: id }));
+
+    const owned = [
+      { id: 'saved-like-a', name: 'Saved playlist like-a', visibility: 'private' },
+      { id: 'ordinary-owned', name: 'My own playlist' },
+    ];
+    const records = [
+      { playlist_id: 'saved-like-a' },
+      { playlist_id: 'ordinary-owned' },
+      { playlist_id: 'public-from-other-user' },
+    ];
+    const result = await loadLikedPlaylistsForRecords(records, owned);
+
+    assert.deepEqual(result.map(({ id }) => id), ['saved-like-a', 'public-from-other-user']);
+    assert.equal(voxylApi.entities.Playlist.get.mock.calls.length, 1);
+  });
+
   it('rejects liked playlist metadata loading on non-404 item failures', async () => {
     mock.method(voxylApi.entities.Playlist, 'get', async (id) => {
       if (id === 'server-error') {

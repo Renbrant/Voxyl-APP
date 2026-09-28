@@ -126,7 +126,7 @@ No Google Play Data safety answer should be finalized solely from this list. Dep
 
 Issue #104 tracks a separate release-blocking finding.
 
-The current frontend has an account-deletion modal, but it calls a `deleteAccount` function route that is not implemented by the current production Worker router. The existing UI must therefore not be used as evidence that complete account deletion already works.
+The original audit found a modal calling an unimplemented `deleteAccount` route. PR #107 replaced it with authenticated `DELETE /me` and a public `/account-deletion` request page. Full production account-deletion behavior has not yet been validated with disposable web and Android accounts.
 
 Issue #104 must define and validate:
 
@@ -138,6 +138,24 @@ Issue #104 must define and validate:
 - real web and Android validation.
 
 The Google Play account-deletion declaration and final Privacy Policy deletion wording must be revalidated against the completed #104 behavior before beta submission.
+
+### Public playlists saved by other listeners
+
+The proposed #104 deletion flow removes each original playlist and its old
+share link. A listener who saved a **public** playlist receives their own
+private copy with only its RSS feed URLs and playback filters. Each copy uses a
+unique generic display label; the creator's original title, description,
+cover, identifiers, name, and image are not copied. Private and followers-only
+playlists are removed without a copy. The listener's like is transferred to
+their copy, so it remains accessible from saved content. The listener can
+rename or delete their own copy. Feed URLs are retained because they are
+necessary to load those subscriptions; review URLs for embedded personal data
+and revise the public deletion policy before shipping this flow.
+
+Apple's account-deletion guidance calls for deletion of associated user-generated
+content, including shared content. This copy behavior requires store-policy
+review before treating #104 or iOS release readiness as complete. No production
+account has been deleted to validate this behavior.
 
 ## Google Play Data safety workflow
 

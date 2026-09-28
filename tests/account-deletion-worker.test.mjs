@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, it, mock } from 'node:test';
 import worker from '../workers/api/src/index.ts';
 
@@ -148,6 +150,93 @@ function createDb({
       }));
     },
   };
+}
+
+function createSqliteDb({ failAfterStatement = 0 } = {}) {
+  const sqlite = new DatabaseSync(':memory:');
+
+  for (const migration of [
+    '0001_initial_schema.sql',
+    '0002_base44_compat_schema.sql',
+    '0004_clerk_profile_picture.sql',
+  ]) {
+    sqlite.exec(readFileSync(new URL(`../workers/api/migrations/${migration}`, import.meta.url), 'utf8'));
+  }
+
+  const db = {
+    prepare(sql) {
+      return {
+        bind(...params) {
+          return {
+            sql,
+            params,
+            async first() {
+              return sqlite.prepare(sql).get(...params) || null;
+            },
+          };
+        },
+      };
+    },
+    async batch(statements) {
+      sqlite.exec('BEGIN');
+
+      try {
+        const results = statements.map((statement, index) => {
+          if (failAfterStatement === index + 1) {
+            throw new Error('Simulated transactional D1 failure');
+          }
+
+          sqlite.prepare(statement.sql).run(...statement.params);
+          return { success: true };
+        });
+
+        sqlite.exec('COMMIT');
+        return results;
+      } catch (error) {
+        sqlite.exec('ROLLBACK');
+        throw error;
+      }
+    },
+  };
+
+  sqlite.prepare(`INSERT INTO users (id, clerk_user_id, email, name)
+    VALUES (?, ?, ?, ?)`).run('d1-real-user', 'clerk-user-1', 'real@example.com', 'Real User');
+
+  for (const id of ['listener-1', 'listener-2', 'other-creator']) {
+    sqlite.prepare('INSERT INTO users (id, clerk_user_id) VALUES (?, ?)').run(id, `clerk-${id}`);
+  }
+
+  const addPlaylist = sqlite.prepare(`INSERT INTO playlists (
+    id, creator_id, creator_clerk_user_id, creator_email, creator_name,
+    title, description, cover_image, visibility, rss_feeds, creator_username,
+    creator_picture, likes_count
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const feedUrls = JSON.stringify([
+    { url: 'https://podcasts.test/feed.xml', secret: 'real@example.com', skip_start_seconds: 5 },
+    { feed_url: 'https://podcasts.test/another.xml', name: 'Real User' },
+  ]);
+  for (const [id, visibility, owner] of [
+    ['public-saved', 'public', 'd1-real-user'],
+    ['public-unsaved', 'public', 'd1-real-user'],
+    ['private-saved', 'private', 'd1-real-user'],
+    ['other-public', 'public', 'other-creator'],
+  ]) {
+    const departing = owner === 'd1-real-user';
+    addPlaylist.run(id, owner, departing ? 'clerk-user-1' : 'clerk-other-creator',
+      departing ? 'real@example.com' : null, departing ? 'Real User' : null,
+      `Personal title ${id}`, 'real@example.com private description',
+      'https://images.test/creator.jpg', visibility, feedUrls,
+      departing ? 'real-user' : 'other-user', 'https://images.test/avatar.jpg', 2);
+  }
+
+  const addLike = sqlite.prepare('INSERT INTO playlist_likes (id, playlist_id, user_id) VALUES (?, ?, ?)');
+  addLike.run('like-listener-1', 'public-saved', 'listener-1');
+  addLike.run('like-listener-2', 'public-saved', 'listener-2');
+  addLike.run('like-private', 'private-saved', 'listener-1');
+  addLike.run('like-other', 'other-public', 'listener-1');
+  addLike.run('like-creator', 'public-saved', 'd1-real-user');
+
+  return { db, sqlite };
 }
 
 function createR2({
@@ -333,6 +422,81 @@ afterEach(() => {
 });
 
 describe('account deletion worker contract', () => {
+  it('transfers saved public feeds into distinct private listener copies without creator metadata', async () => {
+    const auth = createJwt();
+    const { db, sqlite } = createSqliteDb();
+    const clerk = installFetchMock(auth.jwk);
+
+    try {
+      const response = await worker.fetch(
+        request('/api/me', { token: auth.token }),
+        createEnv({ db, r2: createR2() }),
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(clerk.clerkDeleteCalls.length, 1);
+      assert.equal(sqlite.prepare('SELECT id FROM users WHERE id = ?').get('d1-real-user'), undefined);
+      assert.deepEqual(sqlite.prepare('SELECT id FROM playlists ORDER BY id').all().map(({ id }) => id), [
+        'other-public', 'saved-like-listener-1', 'saved-like-listener-2',
+      ]);
+
+      for (const [likeId, listenerId] of [
+        ['like-listener-1', 'listener-1'],
+        ['like-listener-2', 'listener-2'],
+      ]) {
+        const copy = sqlite.prepare('SELECT * FROM playlists WHERE id = ?').get(`saved-${likeId}`);
+        assert.equal(copy.creator_id, listenerId);
+        assert.equal(copy.creator_username, `saved-${likeId}`);
+        assert.equal(copy.title, `Saved playlist ${likeId}`);
+        assert.equal(copy.visibility, 'private');
+        assert.equal(copy.creator_hidden, 1);
+        assert.deepEqual(JSON.parse(copy.rss_feeds), [
+          { url: 'https://podcasts.test/feed.xml' },
+          { url: 'https://podcasts.test/another.xml' },
+        ]);
+
+        for (const field of [
+          'description', 'cover_image', 'creator_name', 'creator_email',
+          'creator_picture', 'creator_clerk_user_id', 'creator_legacy_base44_user_id',
+          'legacy_base44_playlist_id', 'share_token',
+        ]) {
+          assert.equal(copy[field], null, field);
+        }
+
+        assert.equal(sqlite.prepare('SELECT playlist_id FROM playlist_likes WHERE id = ?').get(likeId).playlist_id, copy.id);
+      }
+
+      assert.equal(sqlite.prepare('SELECT id FROM playlist_likes WHERE id = ?').get('like-private'), undefined);
+      assert.equal(sqlite.prepare('SELECT id FROM playlist_likes WHERE id = ?').get('like-creator'), undefined);
+      assert.equal(sqlite.prepare('SELECT playlist_id FROM playlist_likes WHERE id = ?').get('like-other').playlist_id, 'other-public');
+      assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('rolls back the new listener copies along with the deletion on a D1 error', async () => {
+    const auth = createJwt();
+    const { db, sqlite } = createSqliteDb({ failAfterStatement: 3 });
+    const clerk = installFetchMock(auth.jwk);
+
+    try {
+      const response = await worker.fetch(
+        request('/api/me', { token: auth.token }),
+        createEnv({ db, r2: createR2() }),
+      );
+
+      assert.equal(response.status, 500);
+      assert.equal((await response.json()).stage, 'd1');
+      assert.equal(clerk.clerkDeleteCalls.length, 0);
+      assert.equal(sqlite.prepare('SELECT id FROM users WHERE id = ?').get('d1-real-user').id, 'd1-real-user');
+      assert.equal(sqlite.prepare("SELECT count(*) AS total FROM playlists WHERE id LIKE 'saved-%'").get().total, 0);
+      assert.equal(sqlite.prepare('SELECT playlist_id FROM playlist_likes WHERE id = ?').get('like-listener-1').playlist_id, 'public-saved');
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it('rejects unauthenticated DELETE /me without mutating data', async () => {
     const events = [];
     const db = createDb({ events });
