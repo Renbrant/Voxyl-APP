@@ -133,6 +133,36 @@ describe('playlist episode route isolation', () => {
 });
 
 describe('playlist episode progressive synchronization', () => {
+  it('does not expose an old viewer cache to another account or a guest', async () => {
+    const manager = await loadPlaylistCacheManager();
+    manager.saveLocalCache('private', [episode('secret', 'private-feed')], 'user:a');
+    localStorage.setItem('playlist_episodes_private', JSON.stringify([episode('legacy-secret', 'private-feed')]));
+    assert.equal(manager.getLocalCache('private', 'user:b'), null);
+    assert.equal(manager.getLocalCache('private', 'guest'), null);
+    assert.deepEqual(manager.getLocalCache('private', 'user:a').episodes.map(ep => ep.title), ['secret']);
+    manager.clearCache('private', 'user:a');
+    assert.equal(manager.getLocalCache('private', 'user:a'), null);
+    assert.equal(localStorage.getItem('playlist_episodes_private'), null);
+  });
+
+  it('discards a completed fetch after the viewer changes', async () => {
+    const pending = deferred();
+    const manager = await loadPlaylistCacheManager({
+      invoke: () => pending.promise,
+    });
+    let current = true;
+    const progress = [];
+    const request = manager.refreshAndSyncPlaylistEpisodes('private', {
+      rss_feeds: [{ url: 'private-feed' }],
+    }, { viewer: 'user:a', isCurrent: () => current, onProgress: value => progress.push(value) });
+    current = false;
+    pending.resolve({ data: { items: [episode('secret', 'private-feed')] } });
+    await request;
+    assert.deepEqual(progress, []);
+    assert.equal(manager.getLocalCache('private', 'user:a'), null);
+    assert.equal(manager.getLocalCache('private', 'user:b'), null);
+  });
+
   it('emits fast feed episodes while another feed is still pending', async () => {
     const fastFeed = deferred();
     const slowFeed = deferred();

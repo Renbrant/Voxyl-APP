@@ -52,12 +52,12 @@ export default function Playlists({ view = 'mine' }) {
       refreshPlaylistLikeQuery(queryClient, user.id);
       refreshPodcastLikeQuery(queryClient, user.id);
     }
-    setDownloads(getDownloads());
+    setDownloads(getDownloads(user?.id));
   }, containerRef);
 
   useEffect(() => {
-    setDownloads(getDownloads());
-  }, [view]);
+    setDownloads(getDownloads(user?.id));
+  }, [view, user?.id]);
 
   const { data: myPlaylists = [], refetch: refetchMine } = useQuery({
     queryKey: ['my-playlists', user?.id],
@@ -346,7 +346,7 @@ export default function Playlists({ view = 'mine' }) {
               <motion.div key={episode.audioUrl} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.03 }}>
                 <DownloadedEpisodeCard
                   episode={episode}
-                  onRemoved={() => setDownloads(getDownloads())}
+                  onRemoved={() => setDownloads(getDownloads(user?.id))}
                 />
               </motion.div>
             ))

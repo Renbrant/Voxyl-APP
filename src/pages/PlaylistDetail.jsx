@@ -4,7 +4,8 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
 import { getPlaylistCoverImage } from '@/lib/playlistCoverHelper';
-import { getInitialPlaylistEpisodes, mergePlaylistEpisodeLists, refreshAndSyncPlaylistEpisodes } from '@/lib/playlistCacheManager';
+import { clearCache, getInitialPlaylistEpisodes, mergePlaylistEpisodeLists, refreshAndSyncPlaylistEpisodes } from '@/lib/playlistCacheManager';
+import { useAuth } from '@/lib/AuthContext';
 import { usePlayer } from '@/lib/PlayerContext';
 import { ArrowLeft, Share2, Play, Clock, Loader2, ListMusic, SkipForward, Pencil, Heart, UserPlus, UserCheck } from 'lucide-react';
 import { t } from '@/lib/i18n';
@@ -48,8 +49,14 @@ const GRADIENT_COLORS = [
 
 export default function PlaylistDetail() {
   const { id } = useParams();
+  const { apiUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
+  if (!authChecked || isLoadingAuth || (isAuthenticated && !apiUser?.id)) return null;
+  const viewer = isAuthenticated ? `user:${apiUser.id}` : 'guest';
+  return <AuthorizedPlaylistDetail key={`${id}:${viewer}`} id={id} viewer={viewer} user={apiUser} />;
+}
+
+function AuthorizedPlaylistDetail({ id, viewer, user }) {
   const navigate = useNavigate();
-  const [user, setUser] = useState(null);
   const [episodes, setEpisodes] = useState([]);
   const [cacheLookupStatus, setCacheLookupStatus] = useState('idle');
   const [syncState, setSyncState] = useState(INITIAL_PLAYLIST_SYNC_STATE);
@@ -73,6 +80,10 @@ export default function PlaylistDetail() {
   if (!syncRequestGuardRef.current) {
     syncRequestGuardRef.current = createPlaylistRequestGuard(() => currentPlaylistIdRef.current);
   }
+  useEffect(() => () => {
+    cacheRequestGuardRef.current.reset(null);
+    syncRequestGuardRef.current.reset(null);
+  }, []);
 
   const {
     data: playlistLikeRecords = [],
@@ -120,9 +131,9 @@ export default function PlaylistDetail() {
   });
 
   useEffect(() => {
-    voxylApi.auth.me().then(u => {
-      setUser(u);
-      // Check if this is the pending playlist the user signed up for
+    if (!user) return;
+    const u = user;
+    // Check if this is the pending playlist the user signed up for
       const pending = localStorage.getItem('voxyl_pending_playlist');
       const pendingCreatorId = localStorage.getItem('voxyl_pending_creator_id');
       if (pending === id) {
@@ -153,8 +164,7 @@ export default function PlaylistDetail() {
           voxylApi.functions.invoke('requestFollow', { targetUserId: pendingCreatorId }).catch(() => {});
         }
       }
-    }).catch(() => {});
-  }, [id, queryClient]);
+  }, [id, queryClient, user]);
 
   const {
     data: playlist,
@@ -162,13 +172,17 @@ export default function PlaylistDetail() {
     isLoading: isPlaylistLoading,
     isError: isPlaylistError,
   } = useQuery({
-    queryKey: ['playlist', id],
+    queryKey: ['playlist', id, viewer],
     queryFn: () => voxylApi.entities.Playlist.get(id),
     enabled: Boolean(id),
     retry: false,
   });
 
   const isOwner = user && playlist && user.id === playlist.creator_id;
+
+  useEffect(() => {
+    if (isPlaylistError) clearCache(id, viewer);
+  }, [id, viewer, isPlaylistError]);
 
   const handleFollowCreator = requireAuth(async (e) => {
     e?.preventDefault?.();
@@ -209,7 +223,8 @@ export default function PlaylistDetail() {
     setCacheLookupStatus(resetState.cacheLookupStatus);
     setSyncState(resetState.syncState);
 
-    getInitialPlaylistEpisodes(id).then(result => {
+    if (!playlist || isPlaylistError) return;
+    getInitialPlaylistEpisodes(id, viewer, () => cacheRequestGuardRef.current.isCurrent(cacheToken)).then(result => {
       if (!cacheRequestGuardRef.current.isCurrent(cacheToken)) return;
       setEpisodes(result.episodes);
       setBackgroundSyncSource(result.source);
@@ -218,12 +233,12 @@ export default function PlaylistDetail() {
       if (!cacheRequestGuardRef.current.isCurrent(cacheToken)) return;
       setCacheLookupStatus('done');
     });
-  }, [id]);
+  }, [id, viewer, playlist, isPlaylistError]);
 
   // Refresh and sync in background
   useEffect(() => {
     if (!id) return;
-    if (!playlist) {
+    if (!playlist || isPlaylistError) {
       loadEpisodesRef.current = null;
       return;
     }
@@ -249,6 +264,8 @@ export default function PlaylistDetail() {
       );
 
       const result = await refreshAndSyncPlaylistEpisodes(id, playlist, {
+        viewer,
+        isCurrent: () => isCurrentRequest(),
         onProgress: (progress) => {
           if (!isCurrentRequest(progress.playlistId)) return;
           if (progress.episodes.length > 0) {
@@ -283,7 +300,7 @@ export default function PlaylistDetail() {
 
     // Start background sync immediately
     loadEpisodesRef.current();
-  }, [playlist, id]);
+  }, [playlist, id, viewer, isPlaylistError]);
 
   const handleShare = async () => {
     const url = `${window.location.origin}/share/${id}`;

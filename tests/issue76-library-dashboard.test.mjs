@@ -57,7 +57,7 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
     assert.match(librarySource, /loadPlaylistLikeRecords\(user\.id\)/);
     assert.match(librarySource, /loadLikedPlaylistsForRecords/);
     assert.match(librarySource, /loadPodcastLikeRecords\(user\.id\)/);
-    assert.match(librarySource, /getDownloads\(\)\.length/);
+    assert.match(librarySource, /getDownloads\(user\?\.id\)\.length/);
     assert.match(savedContentSource, /entities\.PlaylistLike\.filter/);
     assert.match(savedContentSource, /entities\.PodcastLike\.filter/);
     assert.match(downloadsSource, /voxyl_downloads/);
@@ -81,7 +81,7 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
     const i18nSource = fs.readFileSync(new URL('../src/lib/i18n.js', import.meta.url), 'utf8');
     assert.match(librarySource, /path: '\/library\/downloads'/);
     assert.match(collectionsSource, /<DownloadedEpisodeCard/);
-    assert.match(collectionsSource, /getDownloads\(\)/);
+    assert.match(collectionsSource, /getDownloads\(user\?\.id\)/);
     assert.doesNotMatch(librarySource, /SavedEpisode/);
     assert.doesNotMatch(collectionsSource, /entities\.SavedEpisode/);
     assert.doesNotMatch(i18nSource, /Feature not yet implemented\./);
