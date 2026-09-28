@@ -56,6 +56,23 @@ Protected operations derive the caller from the validated Clerk token.
 
 Client-provided user IDs are not authoritative for ownership.
 
+`CLERK_ISSUER` must match the exact Clerk instance issuer. Session tokens
+must carry `iss`, `sub`, `sid`, and finite numeric `iat`, `nbf`, and `exp`
+claims. A present `azp` must match `CLERK_AUTHORIZED_PARTIES`; a native token
+may omit `azp` when no Origin was sent. Malformed claims fail closed after
+signature verification. Keep the production `CLERK_JWT_KEY` current: when it
+is set, the Worker uses Clerk's SDK and never retries a rejected token against
+another verifier. If it is absent, the Worker uses only the configured HTTPS
+issuer's JWKS with a 3-second fetch timeout and a bounded 5-minute in-memory
+key cache. A JWKS outage in this mode rejects uncached tokens.
+
+Both modes verify JWTs locally and do not query Clerk for live session status
+on every request. A recently revoked session token may therefore remain
+usable until its `exp`. Before deploying, confirm the configured token lifetime
+in Clerk and whether destructive operations such as account deletion need a
+separate live-session check. Do not assume that logging out revokes an already
+issued JWT immediately at this Worker.
+
 ## Profile Avatar Model
 
 D1 fields:
