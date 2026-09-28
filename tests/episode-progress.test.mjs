@@ -1279,6 +1279,12 @@ describe('EpisodeProgress Worker routes', () => {
 });
 
 describe('EpisodeProgress frontend cache helpers', () => {
+  // Only the historical cross-device fixtures need this clock. Node restores
+  // each test's mock automatically, leaving TTL tests on their own clock.
+  const useHistoricalFixtureClock = (t) => {
+    t.mock.method(Date, 'now', () => Date.parse('2026-08-29T12:00:00.000Z'));
+  };
+
   beforeEach(() => {
     const store = new Map();
     globalThis.localStorage = {
@@ -1300,6 +1306,21 @@ describe('EpisodeProgress frontend cache helpers', () => {
       clear: () => { store.clear(); },
     };
   }
+
+  it('keeps the exact TTL boundary, rejects expired rows, and retains future timestamps', (t) => {
+    const now = Date.parse('2031-01-01T12:00:00.000Z');
+    t.mock.method(Date, 'now', () => now);
+    activateProgressCacheScope('user-a');
+    const records = [
+      { audio_url: 'https://cdn.example.com/boundary.mp3', position_seconds: 10, last_played_at: new Date(now - TTL_MS).toISOString() },
+      { audio_url: 'https://cdn.example.com/expired.mp3', position_seconds: 10, last_played_at: new Date(now - TTL_MS - 1).toISOString() },
+      { audio_url: 'https://cdn.example.com/future.mp3', position_seconds: 10, last_played_at: new Date(now + 1000).toISOString() },
+    ];
+    mergeProgressRecords(records);
+    assert.ok(getCachedProgress(records[0].audio_url));
+    assert.equal(getCachedProgress(records[1].audio_url), null);
+    assert.ok(getCachedProgress(records[2].audio_url));
+  });
 
   it('keeps unresolved auth provisional and does not consume legacy migration', () => {
     localStorage.setItem('voxyl_ep_progress', JSON.stringify({
@@ -1949,7 +1970,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getCachedProgress('https://cdn.example.com/old.mp3'), null);
   });
 
-  it('requires a refreshed resume transition for paused stale same-episode progress', () => {
+  it('requires a refreshed resume transition for paused stale same-episode progress', (t) => {
+    useHistoricalFixtureClock(t);
     const audioUrl = 'https://cdn.example.com/cross-device.mp3';
     activateProgressCacheScope('user-a');
     mergeProgressRecords([{
@@ -2010,7 +2032,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     }), false);
   });
 
-  it('uses the furthest valid position instead of server revision alone', () => {
+  it('uses the furthest valid position instead of server revision alone', (t) => {
+    useHistoricalFixtureClock(t);
     const newerLowerPosition = {
       position_seconds: 30,
       last_played_at: '2026-07-17T12:05:00.000Z',
@@ -2059,7 +2082,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getCachedProgress(audioUrl).server_updated_at, newerLowerPosition.server_updated_at);
   });
 
-  it('merges furthest position and newest revision metadata independently', () => {
+  it('merges furthest position and newest revision metadata independently', (t) => {
+    useHistoricalFixtureClock(t);
     const audioUrl = 'https://cdn.example.com/revision-merge.mp3';
     const t1 = '2026-07-17T12:00:01.000Z';
     const t2 = '2026-07-17T12:00:02.000Z';
@@ -2384,7 +2408,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getEpisodeResumeState(episode).resumeAt, 140);
   });
 
-  it('adopts canonical stale-save responses and refreshes the next base revision', async () => {
+  it('adopts canonical stale-save responses and refreshes the next base revision', async (t) => {
+    useHistoricalFixtureClock(t);
     activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/stale-response.mp3';
     const payloads = [];
@@ -2442,7 +2467,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getCachedProgress(audioUrl).server_updated_at, '2026-07-17T12:00:30.000Z');
   });
 
-  it('blocks stale prehydration playback from overwriting canonical retry progress until catch-up', async () => {
+  it('blocks stale prehydration playback from overwriting canonical retry progress until catch-up', async (t) => {
+    useHistoricalFixtureClock(t);
     activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/prehydration-stale.mp3';
     const payloads = [];
@@ -2537,7 +2563,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(shouldBlockProgressSaveForGuard(null, episodeA, 120), false);
   });
 
-  it('allows active playback already ahead of canonical retry progress to save with the reconciled revision', async () => {
+  it('allows active playback already ahead of canonical retry progress to save with the reconciled revision', async (t) => {
+    useHistoricalFixtureClock(t);
     activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/prehydration-ahead.mp3';
     const payloads = [];
@@ -2584,7 +2611,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     assert.equal(getCachedProgress(audioUrl).position_seconds, 255);
   });
 
-  it('restarts exhausted hydration recovery and protects stale active playback behind the canonical floor', async () => {
+  it('restarts exhausted hydration recovery and protects stale active playback behind the canonical floor', async (t) => {
+    useHistoricalFixtureClock(t);
     const { scope } = activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/recovery-stale.mp3';
     const payloads = [];
@@ -2699,7 +2727,8 @@ describe('EpisodeProgress frontend cache helpers', () => {
     );
   });
 
-  it('recovers hydration after retry exhaustion without regressing farther active playback', async () => {
+  it('recovers hydration after retry exhaustion without regressing farther active playback', async (t) => {
+    useHistoricalFixtureClock(t);
     const { scope } = activateProgressCacheScope('user-a');
     const audioUrl = 'https://cdn.example.com/recovery-ahead.mp3';
     const payloads = [];
