@@ -633,8 +633,8 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current documented Android release:
 
 ```text
-Voxyl 0.4.8
-versionCode 408
+Voxyl 0.4.9
+versionCode 409
 ```
 
-The v0.4.8 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, and live Cloudflare daily quota reset countdown telemetry in the Admin dashboard, with full version and platform alignment, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
+The v0.4.9 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, with full version and platform alignment, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.

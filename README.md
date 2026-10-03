@@ -133,7 +133,8 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.5** | Phase 6 | Library dashboard, focused saved-content destinations, and content organization |
 | **v0.4.6** | Hardening | Google Play compliance, account deletion, cache isolation, and D1 optimization |
 | **v0.4.7** | Maintenance | Home feed Continue Listening optimization to 2 episodes and responsive grid |
-| **v0.4.8** | Player | Playlist skip visualization, outro skip completion recording, and quota countdown |
+| **v0.4.8** | Telemetry | Cloudflare quota reset countdown timer and reset telemetry |
+| **v0.4.9** | Player | Playlist skip visualization and outro skip completion recording |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -436,12 +437,12 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.8 — Beta**
+**Voxyl 0.4.9 — Beta**
 
-Android versionCode: **408**
+Android versionCode: **409**
 
-The v0.4.8 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, and live Cloudflare daily quota reset countdown telemetry in the Admin dashboard, with full version and platform alignment.
+The v0.4.9 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, with full version and platform alignment.
 
-**[View the v0.4.8 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.8)**
+**[View the v0.4.9 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.9)**
 
 Thank you for helping shape the future of social podcasting.
