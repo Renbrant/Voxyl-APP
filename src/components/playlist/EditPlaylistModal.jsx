@@ -3,6 +3,7 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Trash2, GripVertical, Loader2, Clock, Save, Image as ImageIcon, Lock, Globe, Users, ChevronDown, ChevronUp, Timer, ArrowDown, ArrowUp, AlertCircle } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 const DURATION_OPTIONS = [
   { label: 'Sem limite', value: 0 },
@@ -143,7 +144,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
       <div className="w-full max-w-md bg-card border-t border-border rounded-t-3xl flex flex-col max-h-[92vh] animate-slide-up">
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3 flex-shrink-0">
-          <h2 className="text-base font-grotesk font-bold">Editar Playlist</h2>
+          <h2 className="text-base font-grotesk font-bold">{t('playlistEditTitle')}</h2>
           <button onClick={onClose} className="p-1.5 rounded-full bg-secondary text-muted-foreground">
             <X size={18} />
           </button>
@@ -152,7 +153,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
         <div className="overflow-y-auto flex-1 px-5 pb-24 space-y-5">
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1.5">Nome</label>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1.5">{t('playlistName')}</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
@@ -162,7 +163,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
 
           {/* Description */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1.5">Descrição</label>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1.5">{t('playlistDescription')}</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
@@ -389,10 +390,10 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
                             </div>
                             {expandedFeedIdx === idx && (
                               <div className="px-3 pb-3 space-y-2 border-t border-border pt-2">
-                                <p className="text-xs text-muted-foreground font-medium flex items-center gap-1"><Timer size={10} /> Cortar silêncio / vinheta</p>
+                                <p className="text-xs text-muted-foreground font-medium flex items-center gap-1"><Timer size={10} /> {t('playlistSkipSection')}</p>
                                 <div className="flex gap-3">
                                   <div className="flex-1">
-                                    <label className="text-xs text-muted-foreground block mb-1">Pular início (seg)</label>
+                                    <label className="text-xs text-muted-foreground block mb-1">{t('playlistSkipStart')}</label>
                                     <input
                                       type="number"
                                       min={0}
@@ -402,7 +403,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
                                     />
                                   </div>
                                   <div className="flex-1">
-                                    <label className="text-xs text-muted-foreground block mb-1">Pular fim (seg)</label>
+                                    <label className="text-xs text-muted-foreground block mb-1">{t('playlistSkipEnd')}</label>
                                     <input
                                       type="number"
                                       min={0}
@@ -445,7 +446,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
             className="w-full py-3.5 rounded-2xl gradient-primary text-white font-semibold flex items-center justify-center gap-2"
           >
             {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            {saving ? 'Salvando...' : 'Salvar alterações'}
+            {saving ? t('playlistSaving') : t('playlistSave')}
           </button>
 
           {!confirmDelete ? (
@@ -454,7 +455,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
               disabled={saving || deleting}
               className="w-full py-3 rounded-2xl bg-destructive/10 text-destructive font-semibold text-sm flex items-center justify-center gap-2"
             >
-              <Trash2 size={15} /> Excluir playlist
+              <Trash2 size={15} /> {t('playlistDelete')}
             </button>
           ) : (
             <div className="flex gap-2">
@@ -462,7 +463,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
                 onClick={() => setConfirmDelete(false)}
                 className="flex-1 py-3 rounded-2xl bg-secondary text-muted-foreground font-semibold text-sm"
               >
-                Cancelar
+                {t('cancel')}
               </button>
               <button
                 onClick={handleDelete}
@@ -470,7 +471,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
                 className="flex-1 py-3 rounded-2xl bg-destructive text-white font-semibold text-sm flex items-center justify-center gap-2"
               >
                 {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                {deleting ? 'Excluindo...' : 'Confirmar'}
+                {deleting ? t('playlistDeleting') : t('playlistConfirmDelete')}
               </button>
             </div>
           )}

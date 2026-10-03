@@ -135,6 +135,7 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.7** | Maintenance | Home feed Continue Listening optimization to 2 episodes and responsive grid |
 | **v0.4.8** | Telemetry | Cloudflare quota reset countdown timer and reset telemetry |
 | **v0.4.9** | Player | Playlist skip visualization and outro skip completion recording |
+| **v0.4.10** | Player | Audio player close control with playback stop and progress persistence |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -437,12 +438,12 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.9 — Beta**
+**Voxyl 0.4.10 — Beta**
 
-Android versionCode: **409**
+Android versionCode: **410**
 
-The v0.4.9 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, with full version and platform alignment.
+The v0.4.10 release adds a dedicated close option to the audio player (both expanded and minimized), allowing users to immediately stop playback and dismiss the player while reliably saving listening progress.
 
-**[View the v0.4.9 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.9)**
+**[View the v0.4.10 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.10)**
 
 Thank you for helping shape the future of social podcasting.

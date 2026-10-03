@@ -8,7 +8,7 @@ import { clearCache, getInitialPlaylistEpisodes, mergePlaylistEpisodeLists, refr
 import { useAuth } from '@/lib/AuthContext';
 import { usePlayer } from '@/lib/PlayerContext';
 import { ArrowLeft, Share2, Play, Clock, Loader2, ListMusic, SkipForward, Pencil, Heart, UserPlus, UserCheck } from 'lucide-react';
-import { t } from '@/lib/i18n';
+import { t, isEn } from '@/lib/i18n';
 import { useRequireAuth } from '@/hooks/useRequireAuth';
 import { Link } from 'react-router-dom';
 import PageTransition from '@/components/common/PageTransition';
@@ -30,7 +30,7 @@ import {
 
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
 import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import { ptBR, enUS } from 'date-fns/locale';
 import BottomNav from '@/components/common/BottomNav';
 import {
   loadPlaylistLikeRecords,
@@ -591,7 +591,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                         {ep.duration && <span className="text-xs text-muted-foreground">• {ep.duration}</span>}
                         {ep.pubDate && !isNaN(new Date(ep.pubDate).getTime()) && (
                           <span className="text-xs text-muted-foreground">
-                            • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
+                            • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: isEn ? enUS : ptBR })}
                           </span>
                         )}
                         {hasBeenPlayed && (
@@ -716,7 +716,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                             {ep.duration && <span className="text-xs text-muted-foreground">• {ep.duration}</span>}
                             {ep.pubDate && !isNaN(new Date(ep.pubDate).getTime()) && (
                               <span className="text-xs text-muted-foreground">
-                                • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
+                                • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: isEn ? enUS : ptBR })}
                               </span>
                             )}
                             {hasBeenPlayed && (
@@ -773,14 +773,14 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                               <div
                                 className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
                                 style={{ width: `${activeSkipStartPct}%` }}
-                                title={`Início pulado: ${epSkipStart}s`}
+                                title={`${t('detailSkipStartTitle')}: ${epSkipStart}s`}
                               />
                             )}
                             {activeSkipEndPct > 0 && (
                               <div
                                 className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
                                 style={{ width: `${activeSkipEndPct}%` }}
-                                title={`Final pulado: ${epSkipEnd}s`}
+                                title={`${t('detailSkipEndTitle')}: ${epSkipEnd}s`}
                               />
                             )}
                             <div
@@ -797,9 +797,9 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                             {hasActiveSkip && (
                               <span
                                 className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
-                                title="Pular intro/fim ativo nesta playlist"
+                                title={t('detailSkipBadgeTitle')}
                               >
-                                ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                                ⚡ {epSkipStart > 0 ? `-${epSkipStart}s ${t('detailIntro')}` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s ${t('detailOutro')}` : ''}
                               </span>
                             )}
                             <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>

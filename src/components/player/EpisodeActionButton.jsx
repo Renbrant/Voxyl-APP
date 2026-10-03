@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { Play, Pause, CheckCircle2, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlayer } from '@/lib/PlayerContext';
+import { t } from '@/lib/i18n';
 
 export default function EpisodeActionButton({ ep, isActive, isCurrentlyPlaying, isFinished, isOutroSkipped = false, onShortPress, onMarkFinished, onMarkUnfinished, progressPct = 0 }) {
   const { isLoading } = usePlayer();
@@ -77,7 +78,7 @@ export default function EpisodeActionButton({ ep, isActive, isCurrentlyPlaying, 
           {isOutroSkipped && (
             <span
               className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-card shadow-sm z-20"
-              title="Ouvido (final pulado pela playlist)"
+              title={t('playerHeardOutroSkipped')}
             />
           )}
         </div>

@@ -39,7 +39,7 @@ describe('Podcast Index auth', () => {
     assert.equal(headers['X-Auth-Date'], '1700000000');
     assert.equal(headers['X-Auth-Key'], 'key');
     assert.equal(headers.Authorization, 'abaf71c02050c31e4d4e6b08c1625173af0445ba');
-    assert.match(headers['User-Agent'], /^Voxyl\/0\.4\.9/);
+    assert.match(headers['User-Agent'], /^Voxyl\/0\.4\.10/);
   });
 });
 

@@ -1,11 +1,12 @@
 import { usePlayer } from '@/lib/PlayerContext';
 import { useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { formatDuration } from '@/lib/rssUtils';
+import { t } from '@/lib/i18n';
 
 export default function AudioPlayer() {
   const navigate = useNavigate();
-  const { currentEpisode, isPlaying, isLoading, currentTime, duration, togglePlay, seek, playNext, playPrev, playerMinimized: minimized, setPlayerMinimized: setMinimized, episodeSource } = usePlayer();
+  const { currentEpisode, isPlaying, isLoading, currentTime, duration, togglePlay, seek, playNext, playPrev, playerMinimized: minimized, setPlayerMinimized: setMinimized, episodeSource, closePlayer } = usePlayer();
 
   const handlePlayerClick = (e) => {
     // Don't navigate if clicking on buttons
@@ -65,8 +66,21 @@ export default function AudioPlayer() {
             <button onClick={(e) => { e.stopPropagation(); togglePlay(); }} className="w-7 h-7 rounded-full gradient-primary flex items-center justify-center flex-shrink-0">
               {isPlaying ? <Pause size={13} fill="white" className="text-white" /> : <Play size={13} fill="white" className="text-white ml-0.5" />}
             </button>
-            <button onClick={(e) => { e.stopPropagation(); setMinimized(false); }} className="p-1 text-muted-foreground">
+            <button
+              onClick={(e) => { e.stopPropagation(); setMinimized(false); }}
+              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              title={t('playerExpand')}
+              aria-label={t('playerExpandAria')}
+            >
               <ChevronUp size={16} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); closePlayer(); }}
+              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              title={t('playerClose')}
+              aria-label={t('playerCloseAria')}
+            >
+              <X size={16} />
             </button>
           </div>
         ) : (
@@ -103,14 +117,14 @@ export default function AudioPlayer() {
                           <div
                             className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300/80 pointer-events-none"
                             style={{ width: `${skipStartPct}%` }}
-                            title={`Início pulado pela playlist: ${skipStart}s`}
+                            title={`${t('playerSkipStartTitle')}: ${skipStart}s`}
                           />
                         )}
                         {skipEndPct > 0 && (
                           <div
                             className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300/80 pointer-events-none"
                             style={{ width: `${skipEndPct}%` }}
-                            title={`Final pulado pela playlist: ${skipEnd}s`}
+                            title={`${t('playerSkipEndTitle')}: ${skipEnd}s`}
                           />
                         )}
                         <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all z-0" style={{ width: `${progress}%` }} />
@@ -123,9 +137,9 @@ export default function AudioPlayer() {
                   {hasSkip && (
                     <span
                       className="text-[10px] text-amber-500 font-medium tracking-tight px-1.5 py-0.2 rounded bg-amber-500/10 border border-amber-500/20 flex items-center gap-1"
-                      title="Pular intro/fim ativo nesta playlist"
+                      title={t('playerSkipBadgeTitle')}
                     >
-                      ⚡ {skipStart > 0 ? `-${skipStart}s início` : ''}{skipStart > 0 && skipEnd > 0 ? ' • ' : ''}{skipEnd > 0 ? `-${skipEnd}s fim` : ''}
+                      ⚡ {skipStart > 0 ? `-${skipStart}s ${t('detailIntro')}` : ''}{skipStart > 0 && skipEnd > 0 ? ' • ' : ''}{skipEnd > 0 ? `-${skipEnd}s ${t('detailOutro')}` : ''}
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">-{formatDuration(Math.max(0, Math.floor(duration - currentTime)))}</span>
@@ -135,8 +149,21 @@ export default function AudioPlayer() {
               <div className="flex flex-col items-end gap-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-semibold text-foreground tabular-nums">{formatDuration(Math.floor(currentTime))}</span>
-                  <button onClick={() => setMinimized(true)} className="p-1 text-muted-foreground">
+                  <button
+                    onClick={() => setMinimized(true)}
+                    className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                    title={t('playerMinimize')}
+                    aria-label={t('playerMinimizeAria')}
+                  >
                     <ChevronDown size={16} />
+                  </button>
+                  <button
+                    onClick={() => closePlayer()}
+                    className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                    title={t('playerClose')}
+                    aria-label={t('playerCloseAria')}
+                  >
+                    <X size={16} />
                   </button>
                 </div>
                 <div className="flex items-center gap-1">

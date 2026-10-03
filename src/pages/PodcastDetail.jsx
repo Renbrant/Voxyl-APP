@@ -13,7 +13,7 @@ import {
   refreshPodcastLikeQuery,
   savedContentQueryKeys,
 } from '@/lib/savedContentQueries';
-import { t } from '@/lib/i18n';
+import { t, isEn } from '@/lib/i18n';
 import { ArrowLeft, Play, Loader2, ListMusic, Heart, Info, X } from 'lucide-react';
 import PageTransition from '@/components/common/PageTransition';
 import { cn } from '@/lib/utils';
@@ -23,7 +23,7 @@ import EpisodeActionButton from '@/components/player/EpisodeActionButton';
 import SwipeableEpisodeRow from '@/components/player/SwipeableEpisodeRow';
 
 import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import { ptBR, enUS } from 'date-fns/locale';
 
 export default function PodcastDetail() {
   const { feedUrl: encodedFeedUrl } = useParams();
@@ -316,7 +316,7 @@ export default function PodcastDetail() {
                               {ep.duration && <span className="text-xs text-muted-foreground">{ep.duration}</span>}
                               {ep.pubDate && (
                                 <span className="text-xs text-muted-foreground">
-                                  • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
+                                  • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: isEn ? enUS : ptBR })}
                                 </span>
                               )}
                             </div>
@@ -367,14 +367,14 @@ export default function PodcastDetail() {
                                  <div
                                    className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
                                    style={{ width: `${activeSkipStartPct}%` }}
-                                   title={`Início pulado: ${epSkipStart}s`}
+                                   title={`${t('detailSkipStartTitle')}: ${epSkipStart}s`}
                                  />
                                )}
                                {activeSkipEndPct > 0 && (
                                  <div
                                    className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
                                    style={{ width: `${activeSkipEndPct}%` }}
-                                   title={`Final pulado: ${epSkipEnd}s`}
+                                   title={`${t('detailSkipEndTitle')}: ${epSkipEnd}s`}
                                  />
                                )}
                                <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
@@ -388,9 +388,9 @@ export default function PodcastDetail() {
                                {hasActiveSkip && (
                                  <span
                                    className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
-                                   title="Pular intro/fim ativo"
+                                   title={t('detailSkipBadgePodcastTitle')}
                                  >
-                                   ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                                   ⚡ {epSkipStart > 0 ? `-${epSkipStart}s ${t('detailIntro')}` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s ${t('detailOutro')}` : ''}
                                  </span>
                                )}
                                <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>
@@ -478,14 +478,14 @@ export default function PodcastDetail() {
                                      <div
                                        className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
                                        style={{ width: `${activeSkipStartPct}%` }}
-                                       title={`Início pulado: ${epSkipStart}s`}
+                                       title={`${t('detailSkipStartTitle')}: ${epSkipStart}s`}
                                      />
                                    )}
                                    {activeSkipEndPct > 0 && (
                                      <div
                                        className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
                                        style={{ width: `${activeSkipEndPct}%` }}
-                                       title={`Final pulado: ${epSkipEnd}s`}
+                                       title={`${t('detailSkipEndTitle')}: ${epSkipEnd}s`}
                                      />
                                    )}
                                    <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
@@ -499,9 +499,9 @@ export default function PodcastDetail() {
                                    {hasActiveSkip && (
                                      <span
                                        className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
-                                       title="Pular intro/fim ativo"
+                                       title={t('detailSkipBadgePodcastTitle')}
                                      >
-                                       ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                                       ⚡ {epSkipStart > 0 ? `-${epSkipStart}s ${t('detailIntro')}` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s ${t('detailOutro')}` : ''}
                                      </span>
                                    )}
                                    <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>

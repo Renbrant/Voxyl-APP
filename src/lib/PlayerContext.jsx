@@ -389,6 +389,7 @@ export function PlayerProvider({ children }) {
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
+    setPlayerMinimized(false);
     setEpisodeSource(null);
   }, [clearLoadingState, clearPodcastPlayRetry, invalidateWebResumeRequest, stopSaveTimers]);
 
@@ -464,6 +465,57 @@ export function PlayerProvider({ children }) {
       wakeLockRef.current = null;
     }
   }, []);
+
+  const closePlayer = useCallback(() => {
+    saveCurrentProgress(true);
+    const currentSession = podcastPlaySessionRef.current;
+    if (!isNative) invalidateWebResumeRequest();
+    webPlaybackTransitionRef.current.cancel();
+    if (isNative && nativeAudioPlayer.isReady()) {
+      nativeAudioPlayer.clearNativeQueue().catch(() => {});
+      nativeAudioPlayer.stop().catch(() => {});
+    } else {
+      audioRef.current?.pause();
+      if (audioRef.current) audioRef.current.src = '';
+    }
+
+    if (!isNative && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      } catch (_) {}
+    }
+
+    stopSaveTimers();
+    void releaseWakeLock();
+    pausePodcastSession(currentSession);
+    clearPodcastPlayRetry(currentSession);
+    podcastPlaySessionRef.current = null;
+    currentEpisodeRef.current = null;
+    activeProgressRegressionGuardRef.current = null;
+    pendingWebSeekRef.current = null;
+    currentIndexRef.current = -1;
+    queueRef.current = [];
+    nativeCurrentTimeRef.current = 0;
+    nativeDurationRef.current = 0;
+    transitioningRef.current = false;
+    currentPlaybackSourceRef.current = null;
+    clearLoadingState();
+    setCurrentEpisode(null);
+    setQueue([]);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setPlayerMinimized(false);
+    setEpisodeSource(null);
+  }, [
+    clearLoadingState,
+    clearPodcastPlayRetry,
+    invalidateWebResumeRequest,
+    releaseWakeLock,
+    saveCurrentProgress,
+    stopSaveTimers,
+  ]);
 
   const cleanupFailedWebTransition = useCallback((transition) => {
     if (isNative || !transition || !webPlaybackTransitionRef.current.isCurrent(transition)) return false;
@@ -1570,6 +1622,7 @@ export function PlayerProvider({ children }) {
       markFinished,
       getCachedProgress,
       episodeSource, setEpisodeSource,
+      closePlayer,
     }}>
       {children}
     </PlayerContext.Provider>

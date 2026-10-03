@@ -125,9 +125,21 @@ describe('Playlist Skip Scrubber Representation and Outro Skip Completion', () =
       assert.match(playlistDetailSource, /detailHeardOutroSkipped/);
     });
 
-    it('provides i18n translation keys for outro-skipped heard state', () => {
+    it('provides i18n translation keys for outro-skipped heard state and skip badges', () => {
       assert.match(i18nSource, /detailHeardOutroSkipped/);
       assert.match(i18nSource, /ouvido \(final pulado\)/);
+      assert.match(i18nSource, /played \(outro skipped\)/);
+      assert.match(i18nSource, /playerSkipStartTitle/);
+      assert.match(i18nSource, /playerSkipEndTitle/);
+      assert.match(i18nSource, /playerSkipBadgeTitle/);
+      assert.match(i18nSource, /playerHeardOutroSkipped/);
+      assert.match(i18nSource, /detailIntro/);
+      assert.match(i18nSource, /detailOutro/);
+      assert.match(audioPlayerSource, /t\('detailIntro'\)/);
+      assert.match(audioPlayerSource, /t\('detailOutro'\)/);
+      assert.match(playlistDetailSource, /t\('detailIntro'\)/);
+      assert.match(playlistDetailSource, /t\('detailOutro'\)/);
+      assert.match(episodeActionButtonSource, /t\('playerHeardOutroSkipped'\)/);
     });
   });
 

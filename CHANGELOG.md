@@ -6,6 +6,16 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.10 - October 2026
+
+### Audio Player Close Control and Safe Playback Termination
+
+- **Audio Player Close Action**: Added a close button (`X`) to both the full and minimized floating audio players, allowing users to stop playback and dismiss the player on demand.
+- **Reliable Progress Persistence**: Ensured that triggering close immediately flushes and persists current episode listening progress to cache and database before tearing down playback.
+- **Complete Playback Cleanup**: Clears active audio streams, releases screen wake locks, resets media session states, cancels in-flight transition guards, and resets playback queues cleanly on web and native Android runtimes.
+- **Player and Skip Localization**: Localized audio player controls (minimize/close tooltips and accessibility labels), playlist skip indicators, timeline badges, publication date formats, and playlist skip management modals according to selected language preference (English and Portuguese).
+- Synchronized release version metadata across web, Android (`versionCode 410`), API Worker, and test suites.
+
 ## v0.4.9 - October 2026
 
 ### Playlist Skip Visualization and Outro Skip Completion

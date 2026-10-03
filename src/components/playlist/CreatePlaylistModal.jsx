@@ -389,14 +389,14 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
                     <p className="text-xs text-green-500 px-3 pb-2">✓ Feed RSS válido</p>
                   )}
                   {validation === 'invalid' && feed.url.trim() && (
-                    <p className="text-xs text-destructive px-3 pb-2">Feed inválido ou inacessível</p>
+                    <p className="text-xs text-destructive px-3 pb-2">{t('playlistInvalidFeed')}</p>
                   )}
                   {expandedFeedIdx === i && (
                     <div className="px-3 pb-3 space-y-2 border-t border-border pt-2">
-                      <p className="text-xs text-muted-foreground font-medium flex items-center gap-1"><Timer size={10} /> Pular vinheta / silêncio</p>
+                      <p className="text-xs text-muted-foreground font-medium flex items-center gap-1"><Timer size={10} /> {t('playlistSkipSection')}</p>
                       <div className="flex gap-3">
                         <div className="flex-1">
-                          <label className="text-xs text-muted-foreground block mb-1">Início (seg)</label>
+                          <label className="text-xs text-muted-foreground block mb-1">{t('playlistIntroLabel')}</label>
                           <input
                             type="number"
                             min={0}
@@ -406,7 +406,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
                           />
                         </div>
                         <div className="flex-1">
-                          <label className="text-xs text-muted-foreground block mb-1">Fim (seg)</label>
+                          <label className="text-xs text-muted-foreground block mb-1">{t('playlistOutroLabel')}</label>
                           <input
                             type="number"
                             min={0}
@@ -422,7 +422,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
                 );
               })}
               <button onClick={addFeed} className="text-xs text-primary flex items-center gap-1 mt-2">
-                <Plus size={12} /> Adicionar manualmente
+                <Plus size={12} /> {t('playlistAddManual')}
               </button>
             </div>
           </div>

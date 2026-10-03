@@ -633,8 +633,8 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current documented Android release:
 
 ```text
-Voxyl 0.4.9
-versionCode 409
+Voxyl 0.4.10
+versionCode 410
 ```
 
-The v0.4.9 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, with full version and platform alignment, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
+The v0.4.10 release adds a dedicated close option to the audio player (both expanded and minimized), allowing users to immediately stop playback and dismiss the player while reliably saving listening progress, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
