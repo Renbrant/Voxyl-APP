@@ -82,8 +82,8 @@ export function buildD1AnalyticsQuery(days = 3) {
             sum {
               rowsWritten
               rowsRead
-              queryCount
-              queryDurationMs
+              readQueries
+              writeQueries
             }
           }
         }

@@ -6955,7 +6955,7 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
               orderBy: [date_DESC]
             ) {
               dimensions { date }
-              sum { rowsWritten rowsRead queryCount queryDurationMs }
+              sum { rowsWritten rowsRead readQueries writeQueries }
             }
           }
         }
@@ -7008,7 +7008,7 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
     const todayGroup = groups.find((g: any) => g.dimensions?.date === today) || groups[0];
     const writes = todayGroup?.sum?.rowsWritten || 0;
     const reads = todayGroup?.sum?.rowsRead || 0;
-    const queries = todayGroup?.sum?.queryCount || 0;
+    const queries = (todayGroup?.sum?.readQueries || 0) + (todayGroup?.sum?.writeQueries || 0);
 
     const result = {
       configured: true,
@@ -7022,7 +7022,7 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
         date: g.dimensions?.date,
         rowsWritten: g.sum?.rowsWritten || 0,
         rowsRead: g.sum?.rowsRead || 0,
-        queryCount: g.sum?.queryCount || 0,
+        queryCount: (g.sum?.readQueries || 0) + (g.sum?.writeQueries || 0),
       })),
     };
 
