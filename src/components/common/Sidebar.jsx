@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
-import { Home, Compass, Users, Heart, User, LogOut } from 'lucide-react';
+import { Home, Compass, Users, Heart, User, LogOut, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { t } from '@/lib/i18n';
@@ -37,6 +37,10 @@ export default function Sidebar({ peopleRequestsCount = 0 }) {
       accountSyncPending: Boolean(user?.account_sync_pending),
     });
   }, [clerkLoaded, isAuthenticated, isLoadingAuth, user]);
+
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.email?.toLowerCase() === 'renatobrant@gmail.com';
 
   return (
     <aside
@@ -104,7 +108,22 @@ export default function Sidebar({ peopleRequestsCount = 0 }) {
       </nav>
 
       {isAuthenticated && (
-        <div className="mt-auto px-3 pb-5">
+        <div className="mt-auto px-3 pb-5 space-y-1">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => navigate('/admin')}
+              className={cn(
+                "flex w-full items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all",
+                location.pathname === '/admin'
+                  ? "bg-secondary text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+              )}
+            >
+              <ShieldCheck size={20} strokeWidth={1.8} className="text-primary" />
+              <span>Painel Admin</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => logout()}

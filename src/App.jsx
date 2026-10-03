@@ -24,6 +24,7 @@ import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
 import AccountDeletion from '@/pages/AccountDeletion';
 import PodcastDetail from '@/pages/PodcastDetail';
+import Admin from '@/pages/Admin';
 
 const AppErrorScreen = ({ title, message }) => (
   <div className="fixed inset-0 flex items-center justify-center bg-[#0f0d0b] px-6 text-white">
@@ -165,6 +166,7 @@ const AuthenticatedApp = () => {
         <Route path="/playlists" element={<LegacyRouteRedirect to="/library" />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/admin" element={<Admin />} />
       </Route>
       <Route path="/playlist/:id" element={<PlaylistDetail />} />
       <Route path="/share/:id" element={<PlaylistPreview />} />

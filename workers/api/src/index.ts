@@ -34,6 +34,9 @@ interface Env {
   CLERK_ISSUER?: string;
   PODCAST_INDEX_API_KEY?: string;
   PODCAST_INDEX_API_SECRET?: string;
+  ADMIN_EMAILS?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
@@ -343,6 +346,10 @@ function optionsResponse(request: Request, env: Env): Response {
 
 function isAuthDiagnosticsRoute(pathname: string): boolean {
   return pathname === "/auth/diagnostics" || pathname === "/api/auth/diagnostics";
+}
+
+function isAdminMetricsRoute(pathname: string): boolean {
+  return pathname === "/admin/metrics" || pathname === "/api/admin/metrics";
 }
 
 function isMeRoute(pathname: string): boolean {
@@ -6885,6 +6892,233 @@ async function topPlaylistsByPlaybackResponse(request: Request, env: Env): Promi
   );
 }
 
+function isUserAdmin(user: D1User, env: Env): boolean {
+  if (user.role === "admin") return true;
+  const email = (user.email || "").trim().toLowerCase();
+  if (email === "renatobrant@gmail.com") return true;
+  if (env.ADMIN_EMAILS) {
+    const list = env.ADMIN_EMAILS.split(",").map((e) => e.trim().toLowerCase());
+    if (list.includes(email)) return true;
+  }
+  return false;
+}
+
+async function fetchCloudflareD1Telemetry(env: Env): Promise<{
+  configured: boolean;
+  rowsWritten?: number;
+  rowsWrittenPct?: number;
+  rowsRead?: number;
+  queryCount?: number;
+  date?: string;
+  limits: { d1Writes: number; d1Reads: number; workerRequests: number };
+  notice?: string;
+}> {
+  const limits = {
+    d1Writes: 100000,
+    d1Reads: 5000000,
+    workerRequests: 100000,
+  };
+
+  const token = env.CLOUDFLARE_API_TOKEN;
+  const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+
+  if (!token || !accountId) {
+    return {
+      configured: false,
+      limits,
+      notice: "Configure CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID no Worker para telemetria em tempo real.",
+    };
+  }
+
+  const cacheKey = "admin:cf_telemetry";
+  try {
+    const cached = await env.VOXYL_CACHE?.get(cacheKey, "json");
+    if (cached) return cached as any;
+  } catch {}
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const query = `
+      query GetD1Usage($accountTag: String!, $databaseId: String!, $dateGte: String!) {
+        viewer {
+          accounts(filter: { accountTag: $accountTag }) {
+            d1AnalyticsAdaptiveGroups(
+              limit: 5,
+              filter: { databaseId: $databaseId, date_geq: $dateGte }
+            ) {
+              dimensions { date }
+              sum { rowsWritten rowsRead queryCount queryDurationMs }
+            }
+          }
+        }
+      }
+    `.trim();
+
+    const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          accountTag: accountId,
+          databaseId: "7f54b56f-9df1-4c12-b685-9fc7af29f094",
+          dateGte: today,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return { configured: false, limits, notice: `Cloudflare API error ${response.status}` };
+    }
+
+    const json: any = await response.json();
+    const groups = json?.data?.viewer?.accounts?.[0]?.d1AnalyticsAdaptiveGroups || [];
+    const latest = groups[0] || {};
+    const writes = latest.sum?.rowsWritten || 0;
+    const reads = latest.sum?.rowsRead || 0;
+    const queries = latest.sum?.queryCount || 0;
+
+    const result = {
+      configured: true,
+      date: latest.dimensions?.date || today,
+      rowsWritten: writes,
+      rowsWrittenPct: Number(((writes / limits.d1Writes) * 100).toFixed(1)),
+      rowsRead: reads,
+      queryCount: queries,
+      limits,
+    };
+
+    try {
+      await env.VOXYL_CACHE?.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 });
+    } catch {}
+
+    return result;
+  } catch (error) {
+    return {
+      configured: false,
+      limits,
+      notice: error instanceof Error ? error.message : "Erro ao consultar telemetria",
+    };
+  }
+}
+
+async function adminMetricsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+  if (!user) {
+    return jsonResponse({ ok: false, error: "Usuário não encontrado" }, 404, corsHeaders);
+  }
+
+  if (!isUserAdmin(user, env)) {
+    return jsonResponse({ ok: false, error: "Acesso negado: privilégios de administrador necessários." }, 403, corsHeaders);
+  }
+
+  const [
+    usersTotalRow,
+    users7dRow,
+    active7dRow,
+    playlistsTotalRow,
+    playlistsPublicRow,
+    playlistsPrivateRow,
+    playlistLikesRow,
+    podcastLikesRow,
+    playsTotalRow,
+    plays7dRow,
+    recentUsersResult,
+    recentPlaylistsResult,
+    dailyPlaysResult,
+    dailyUsersResult,
+  ] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE datetime(created_at) >= datetime('now', '-7 days')").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS count FROM episode_progress WHERE datetime(updated_at) >= datetime('now', '-7 days')").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM playlists").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM playlists WHERE visibility = 'public'").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM playlists WHERE visibility = 'private'").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM playlist_likes").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM podcast_likes").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM podcast_plays").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM podcast_plays WHERE datetime(COALESCE(NULLIF(TRIM(played_at), ''), created_at)) >= datetime('now', '-7 days')").first<{ count: number }>(),
+    env.DB.prepare(
+      `SELECT id, name, username, email, role, profile_picture, created_at
+       FROM users
+       ORDER BY created_at DESC
+       LIMIT 10`,
+    ).all<{ id: string; name: string | null; username: string | null; email: string | null; role: string; profile_picture: string | null; created_at: string }>(),
+    env.DB.prepare(
+      `SELECT id, title, creator_username, visibility, likes_count, plays_count, created_at
+       FROM playlists
+       ORDER BY created_at DESC
+       LIMIT 10`,
+    ).all<{ id: string; title: string; creator_username: string | null; visibility: string; likes_count: number; plays_count: number; created_at: string }>(),
+    env.DB.prepare(
+      `SELECT date(COALESCE(NULLIF(TRIM(played_at), ''), created_at)) AS day, COUNT(*) AS count
+       FROM podcast_plays
+       WHERE datetime(COALESCE(NULLIF(TRIM(played_at), ''), created_at)) >= datetime('now', '-7 days')
+       GROUP BY day
+       ORDER BY day ASC`,
+    ).all<{ day: string; count: number }>(),
+    env.DB.prepare(
+      `SELECT date(created_at) AS day, COUNT(*) AS count
+       FROM users
+       WHERE datetime(created_at) >= datetime('now', '-7 days')
+       GROUP BY day
+       ORDER BY day ASC`,
+    ).all<{ day: string; count: number }>(),
+  ]);
+
+  const cloudflareTelemetry = await fetchCloudflareD1Telemetry(env);
+
+  return jsonResponse(
+    {
+      ok: true,
+      currentUser: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      stats: {
+        users: {
+          total: usersTotalRow?.count || 0,
+          new7d: users7dRow?.count || 0,
+          active7d: active7dRow?.count || 0,
+        },
+        playlists: {
+          total: playlistsTotalRow?.count || 0,
+          public: playlistsPublicRow?.count || 0,
+          private: playlistsPrivateRow?.count || 0,
+        },
+        engagement: {
+          totalPlays: playsTotalRow?.count || 0,
+          plays7d: plays7dRow?.count || 0,
+          playlistLikes: playlistLikesRow?.count || 0,
+          podcastLikes: podcastLikesRow?.count || 0,
+        },
+        recentUsers: recentUsersResult?.results || [],
+        recentPlaylists: recentPlaylistsResult?.results || [],
+        charts: {
+          dailyPlays: dailyPlaysResult?.results || [],
+          dailyUsers: dailyUsersResult?.results || [],
+        },
+      },
+      cloudflare: cloudflareTelemetry,
+      timestamp: new Date().toISOString(),
+    },
+    200,
+    corsHeaders,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -6916,6 +7150,10 @@ export default {
 
       if (request.method === "GET" && isAuthDiagnosticsRoute(pathname)) {
         return withCors(await authDiagnosticsResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isAdminMetricsRoute(pathname)) {
+        return withCors(await adminMetricsResponse(request, env), request, env);
       }
 
       if (request.method === "GET" && isMeRoute(pathname)) {

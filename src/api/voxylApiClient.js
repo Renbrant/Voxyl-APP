@@ -267,4 +267,9 @@ export const voxylApi = {
       return apiFetch("/users/invite", { method: "POST", body: { email, role } });
     },
   },
+  admin: {
+    metrics() {
+      return apiFetch("/admin/metrics");
+    },
+  },
 };

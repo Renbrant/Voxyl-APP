@@ -3,7 +3,7 @@ import { t, setLanguage, lang } from '@/lib/i18n';
 import { voxylApi } from '@/api/voxylApiClient';
 import { useAuth } from '@/lib/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Moon, Sun, Globe, Eye, Ban, LogOut, Trash2, Shield, Monitor } from 'lucide-react';
+import { ChevronLeft, Moon, Sun, Globe, Eye, Ban, LogOut, Trash2, Shield, Monitor, ShieldCheck } from 'lucide-react';
 import VoxylHeader from '@/components/common/VoxylHeader';
 import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import BlockedUsersModal from '@/components/profile/BlockedUsersModal';
@@ -71,7 +71,18 @@ export default function Settings() {
   const themeOption = themeOptions.find(o => o.key === theme) || themeOptions[0];
   const ThemeIcon = themeOption.icon;
 
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.email?.toLowerCase() === 'renatobrant@gmail.com';
+
   const menuItems = [
+    ...(isAdmin ? [{
+      icon: ShieldCheck,
+      label: 'Painel de Administração',
+      description: 'Monitoramento de cotas do Cloudflare e métricas',
+      action: () => navigate('/admin'),
+      badge: 'Admin',
+    }] : []),
     {
       icon: Globe,
       label: t('settingsLanguage'),
