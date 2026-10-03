@@ -22,6 +22,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -35,6 +36,7 @@ export default function Admin() {
   const navigate = useNavigate();
   const { apiUser, user, isLoadingAuth } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
+  const [cfMetricTab, setCfMetricTab] = useState('writes');
 
   const currentUser = apiUser || user;
   const isAdmin =
@@ -253,6 +255,169 @@ export default function Admin() {
             </div>
           )}
         </div>
+
+        {/* Histórico Cloudflare D1 dos Últimos 30 Dias */}
+        {isConfigured && (
+          <div className="rounded-2xl border border-border bg-card p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <Database size={16} className="text-primary" />
+                  Histórico Cloudflare D1 (Últimos 30 dias)
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Consumo diário real para acompanhamento de picos e controle da cota gratuita
+                </p>
+              </div>
+
+              {/* Metric Tabs */}
+              <div className="flex items-center gap-1.5 bg-secondary/80 p-1 rounded-xl self-start sm:self-auto border border-border/60">
+                <button
+                  type="button"
+                  onClick={() => setCfMetricTab('writes')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cfMetricTab === 'writes'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Escritas (Writes)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCfMetricTab('reads')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cfMetricTab === 'reads'
+                      ? 'bg-sky-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Leituras (Reads)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCfMetricTab('queries')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cfMetricTab === 'queries'
+                      ? 'bg-violet-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Consultas (Queries)
+                </button>
+              </div>
+            </div>
+
+            {/* Metric Info subtitle / Legend */}
+            <div className="flex items-center gap-4 text-xs text-muted-foreground mb-3 px-1">
+              {cfMetricTab === 'writes' && (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-primary inline-block" />
+                    Escritas por dia
+                  </span>
+                  <span className="flex items-center gap-1.5 text-rose-400 font-medium">
+                    <span className="w-4 border-b-2 border-dashed border-rose-500 inline-block" />
+                    Limite Diário (100.000)
+                  </span>
+                </>
+              )}
+              {cfMetricTab === 'reads' && (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block" />
+                    Linhas lidas por dia
+                  </span>
+                  <span className="text-muted-foreground">
+                    Cota: 5.000.000 / dia
+                  </span>
+                </>
+              )}
+              {cfMetricTab === 'queries' && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-400 inline-block" />
+                  Total de consultas SQL (Read + Write)
+                </span>
+              )}
+            </div>
+
+            <div className="h-60 w-full">
+              {cf?.history?.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  {cfMetricTab === 'writes' ? (
+                    <BarChart data={cf.history}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                      <XAxis dataKey="day" stroke="#737373" fontSize={11} tickLine={false} />
+                      <YAxis
+                        stroke="#737373"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v)}
+                      />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: '#171717', borderColor: '#404040', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                        labelFormatter={(label, items) => {
+                          const item = items?.[0]?.payload;
+                          return item?.date ? `Data: ${item.date}` : label;
+                        }}
+                        formatter={(value) => [`${Number(value).toLocaleString('pt-BR')} escritas`, 'D1 Writes']}
+                      />
+                      <ReferenceLine y={100000} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'Limite 100k', fill: '#ef4444', fontSize: 10, position: 'top' }} />
+                      <Bar dataKey="rowsWritten" fill="#F97415" radius={[4, 4, 0, 0]} name="Escritas" />
+                    </BarChart>
+                  ) : cfMetricTab === 'reads' ? (
+                    <BarChart data={cf.history}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                      <XAxis dataKey="day" stroke="#737373" fontSize={11} tickLine={false} />
+                      <YAxis
+                        stroke="#737373"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v) => (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v)}
+                      />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: '#171717', borderColor: '#404040', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                        labelFormatter={(label, items) => {
+                          const item = items?.[0]?.payload;
+                          return item?.date ? `Data: ${item.date}` : label;
+                        }}
+                        formatter={(value) => [`${Number(value).toLocaleString('pt-BR')} linhas lidas`, 'D1 Reads']}
+                      />
+                      <Bar dataKey="rowsRead" fill="#38bdf8" radius={[4, 4, 0, 0]} name="Leituras" />
+                    </BarChart>
+                  ) : (
+                    <BarChart data={cf.history}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                      <XAxis dataKey="day" stroke="#737373" fontSize={11} tickLine={false} />
+                      <YAxis
+                        stroke="#737373"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v)}
+                      />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: '#171717', borderColor: '#404040', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                        labelFormatter={(label, items) => {
+                          const item = items?.[0]?.payload;
+                          return item?.date ? `Data: ${item.date}` : label;
+                        }}
+                        formatter={(value) => [`${Number(value).toLocaleString('pt-BR')} consultas`, 'Queries SQL']}
+                      />
+                      <Bar dataKey="totalQueries" fill="#a78bfa" radius={[4, 4, 0, 0]} name="Consultas" />
+                    </BarChart>
+                  )}
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+                  Nenhum dado histórico retornado para os últimos 30 dias.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
 
         {/* KPIs de Usuários e Conteúdo */}
