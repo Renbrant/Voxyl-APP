@@ -88,6 +88,11 @@ Resolution:
 
 `GET /api/me` may synchronize the provider image without overwriting the custom image.
 
+Once the verified Clerk ID is linked to its D1 user, normal `GET /api/me`
+requests are read-only. Identity migration writes run only when a real account
+link or orphan reconciliation is required. This protects the D1 rows-written
+budget from recurring account-sync batches.
+
 `PATCH /api/me` updates the authenticated user's Voxyl profile.
 
 Owned playlist `creator_picture` values are synchronized server-side when the resolved avatar changes.
@@ -102,6 +107,8 @@ Current migration sequence:
     0002_base44_compat_schema.sql
     0003_podcast_play_idempotency.sql
     0004_clerk_profile_picture.sql
+    0005_legal_documents.sql
+    0006_legal_document_support_email.sql
 
 Migration directory:
 

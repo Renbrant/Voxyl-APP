@@ -49,10 +49,10 @@ Use `npm ci` in clean validation/release worktrees when reproducibility from `pa
 
 ## Current Automated Baseline
 
-The v0.4.4 release candidate completed:
+The v0.4.6 release candidate completed:
 
 ```text
-447 / 447 automated tests
+490 / 490 automated tests
 ESLint: PASS
 Production build: PASS
 ```

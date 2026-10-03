@@ -130,6 +130,8 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.2** | Phase 3 | Discover focused on Playlists and Podcasts |
 | **v0.4.3** | Phase 4 | Dedicated People social dashboard and people search |
 | **v0.4.4** | Phase 5 | People detail flows, relationship-aware public profiles, and social interactions |
+| **v0.4.5** | Phase 6 | Library dashboard, focused saved-content destinations, and content organization |
+| **v0.4.6** | Hardening | Google Play compliance, account deletion, cache isolation, and D1 optimization |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -284,7 +286,7 @@ git status
 git diff --check
 ```
 
-The v0.4.4 release candidate completed **447/447 automated tests**, ESLint, and the production build before Android packaging and physical-device validation.
+The v0.4.6 release candidate completed **490/490 automated tests**, ESLint, and the production build before Android packaging and physical-device validation.
 
 For the current testing model, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
@@ -432,16 +434,12 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.4 — Beta**
+**Voxyl 0.4.6 — Beta**
 
-Android versionCode: **404**
+Android versionCode: **406**
 
-The v0.4.4 milestone completes UX Phase 5 with detailed **Following**, **Followers**, **Requests**, and **Suggestions** flows, relationship-aware public profiles, direct people search/profile navigation, and explicit follow-request actions.
+The v0.4.6 release incorporates Google Play readiness (secure account deletion and versioned privacy policy), account-scoped private caches, tightened Clerk session validation, and protection against recurring D1 writes during normal account synchronization.
 
-Release source: `bc3a47c77c1b8a50939c267904b5dbcd00fe3c56`
-
-Release APK SHA-256: `6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8`
-
-**[View the v0.4.4 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.4)**
+**[View the v0.4.6 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.6)**
 
 Thank you for helping shape the future of social podcasting.

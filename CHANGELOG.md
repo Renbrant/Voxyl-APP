@@ -6,6 +6,32 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.6 - October 2026
+
+### Google Play Readiness, Security, and Production Hardening
+
+- Added public Voxyl landing page, configured application entry routing under `/app`, and updated primary navigation.
+- Added secure account deletion for Google Play compliance (`/account-deletion` route and settings modal).
+- Published and versioned bilingual (`en-US` and `pt-BR`) Privacy Policy at `/privacy` with D1 audit records.
+- Isolated private playlist and download caches per authenticated account.
+- Retired persisted legacy authentication credentials and tightened Clerk session-token validation in the Cloudflare Worker.
+- Fixed recurring D1 writes during account synchronization: read-only `GET /api/me` execution once an identity is linked.
+- Synchronized release version metadata across web, Android (`versionCode 406`), API Worker, and regression suites.
+
+## v0.4.5 - August 2026
+
+### UX Phase 6 - Library Dashboard and Content Organization
+
+- Added the Library dashboard with focused destinations for owned playlists, liked playlists, liked podcasts, and downloads.
+- Preserved playlist management and existing create, update, and delete flows.
+- Polished liked-podcast presentation and description rendering.
+
+### Android Release
+
+- Published Android version `0.4.5` / versionCode `405` from source commit `5a9922a301ba1272d1cae8707f0834c2e2f343d9`.
+- Published `Voxyl-v0.4.5-release.apk` at 11,884,417 bytes with SHA-256 `644981A20FBC7E1E9A7A623930C7AB3373429860EFCA6B26A73F62E219D0DB67`.
+- Completed 455/455 release tests, ESLint, production web build, Android build/alignment/signing, signer continuity, a true `0.4.4 / 404 -> 0.4.5 / 405` physical-device upgrade, and authenticated Library smoke validation.
+
 ## v0.4.4 - August 2026
 
 ### UX Phase 5 - People Detail Flows and Social Interactions

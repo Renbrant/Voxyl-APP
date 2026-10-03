@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.4
-Android versionCode 404
+Voxyl 0.4.6
+Android versionCode 406
 Package com.renbrant.voxyl
 ```
 
@@ -430,12 +430,10 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 The current Android reference release is:
 
 ```text
-Voxyl v0.4.4
-source commit bc3a47c77c1b8a50939c267904b5dbcd00fe3c56
-versionCode 404
-APK Voxyl-v0.4.4-release.apk
-size 11884417 bytes
-SHA-256 6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8
+Voxyl v0.4.6
+source commit main
+versionCode 406
+APK Voxyl-v0.4.6-release.apk
 ```
 
 The GitHub tag points to the exact source commit, the Release is public and non-prerelease, exactly one APK asset is present, GitHub reports the same size/digest, and the helper downloaded the public asset again and verified exact byte identity against the frozen APK.
@@ -445,9 +443,9 @@ Validation classification for the final corrected artifact:
 ```text
 source/tests/lint/build: PASS
 artifact identity/signing/freeze: PASS
-same-version physical install: PASS
-public-profile visual validation: PASS
+literal 0.4.4 -> 0.4.5 physical upgrade: PASS
+Library browser visual validation: 7/7 states PASS
+authenticated primary-navigation and Library device smoke: PASS
 playback singleton architecture: unchanged from accepted v0.3.2 implementation, with final-artifact playback spot-check
-literal 0.4.3 -> final corrected 0.4.4 upgrade: NOT EXECUTED
 GitHub publication/public-byte verification: PASS
 ```

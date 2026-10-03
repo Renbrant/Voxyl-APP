@@ -633,10 +633,8 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current documented Android release:
 
 ```text
-Voxyl 0.4.4
-versionCode 404
-source bc3a47c77c1b8a50939c267904b5dbcd00fe3c56
-APK SHA-256 6C82DDD58D46CD8C73336D1D427EB9DA4951C7E984A558C3B292DA3792DD4DE8
+Voxyl 0.4.6
+versionCode 406
 ```
 
-The v0.4.4 milestone completes UX Phase 5 with People detail flows and social interactions while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
+The v0.4.6 release incorporates Google Play readiness (secure account deletion and versioned privacy policy), account-scoped private caches, tightened Clerk session validation, and protection against recurring D1 writes during normal account synchronization, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
