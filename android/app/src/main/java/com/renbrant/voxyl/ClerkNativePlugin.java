@@ -18,6 +18,7 @@ import kotlin.coroutines.Continuation;
 import kotlin.coroutines.CoroutineContext;
 import kotlin.coroutines.EmptyCoroutineContext;
 import kotlin.coroutines.intrinsics.IntrinsicsKt;
+import java.util.Locale;
 
 /**
  * Capacitor bridge between the Voxyl React application and Clerk Android.
@@ -101,7 +102,7 @@ public class ClerkNativePlugin extends Plugin {
                     } catch (Throwable error) {
                         rejectNativeError(
                             call,
-                            "CLERK_HOSTED_AUTH_EXCEPTION",
+                            diagnosticCode("CLERK_HOSTED_AUTH_EXCEPTION", error),
                             error
                         );
                     }
@@ -128,7 +129,7 @@ public class ClerkNativePlugin extends Plugin {
         } catch (Throwable error) {
             rejectNativeError(
                 call,
-                "CLERK_HOSTED_AUTH_EXCEPTION",
+                diagnosticCode("CLERK_HOSTED_AUTH_EXCEPTION", error),
                 error
             );
         }
@@ -323,7 +324,10 @@ public class ClerkNativePlugin extends Plugin {
                     failure,
                     "Clerk hosted authentication failed."
                 ),
-                "CLERK_HOSTED_AUTH_FAILED"
+                diagnosticCode(
+                    "CLERK_HOSTED_AUTH_FAILED",
+                    failure.getThrowable()
+                )
             );
             return;
         }
@@ -436,6 +440,22 @@ public class ClerkNativePlugin extends Plugin {
         }
 
         return fallback;
+    }
+
+    private String diagnosticCode(String prefix, Throwable error) {
+        if (error == null) {
+            return prefix;
+        }
+
+        // Throwable messages can contain redirect URLs, codes, or account data.
+        // The exception's class name distinguishes failure types without them.
+        String kind = error.getClass().getSimpleName()
+            .replaceAll("[^A-Za-z0-9]", "")
+            .toUpperCase(Locale.ROOT);
+
+        return kind.isEmpty()
+            ? prefix
+            : prefix + "_" + kind.substring(0, Math.min(kind.length(), 40));
     }
 
     private void rejectNativeError(
