@@ -6903,7 +6903,7 @@ function isUserAdmin(user: D1User, env: Env): boolean {
   return false;
 }
 
-async function fetchCloudflareD1Telemetry(env: Env): Promise<{
+async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
   configured: boolean;
   rowsWritten?: number;
   rowsWrittenPct?: number;
@@ -6912,6 +6912,7 @@ async function fetchCloudflareD1Telemetry(env: Env): Promise<{
   date?: string;
   limits: { d1Writes: number; d1Reads: number; workerRequests: number };
   notice?: string;
+  groups?: Array<{ date: string; rowsWritten: number; rowsRead: number; queryCount: number }>;
 }> {
   const limits = {
     d1Writes: 100000,
@@ -6930,21 +6931,28 @@ async function fetchCloudflareD1Telemetry(env: Env): Promise<{
     };
   }
 
-  const cacheKey = "admin:cf_telemetry";
-  try {
-    const cached = await env.VOXYL_CACHE?.get(cacheKey, "json");
-    if (cached) return cached as any;
-  } catch {}
+  const cacheKey = "admin:cf_telemetry_v2";
+  if (!fresh) {
+    try {
+      const cached = await env.VOXYL_CACHE?.get(cacheKey, "json");
+      if (cached) return cached as any;
+    } catch {}
+  }
 
   try {
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() - 3);
+    const dateGte = targetDate.toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
+
     const query = `
       query GetD1Usage($accountTag: String!, $databaseId: String!, $dateGte: String!) {
         viewer {
           accounts(filter: { accountTag: $accountTag }) {
             d1AnalyticsAdaptiveGroups(
-              limit: 5,
-              filter: { databaseId: $databaseId, date_geq: $dateGte }
+              limit: 10,
+              filter: { databaseId: $databaseId, date_geq: $dateGte },
+              orderBy: [date_DESC]
             ) {
               dimensions { date }
               sum { rowsWritten rowsRead queryCount queryDurationMs }
@@ -6965,30 +6973,57 @@ async function fetchCloudflareD1Telemetry(env: Env): Promise<{
         variables: {
           accountTag: accountId,
           databaseId: "7f54b56f-9df1-4c12-b685-9fc7af29f094",
-          dateGte: today,
+          dateGte,
         },
       }),
     });
 
     if (!response.ok) {
-      return { configured: false, limits, notice: `Cloudflare API error ${response.status}` };
+      return {
+        configured: false,
+        limits,
+        notice: `Cloudflare API HTTP error: ${response.status} ${response.statusText}`,
+      };
     }
 
     const json: any = await response.json();
+    if (json?.errors && json.errors.length > 0) {
+      const errMsgs = json.errors.map((e: any) => e.message).join("; ");
+      return {
+        configured: false,
+        limits,
+        notice: `Cloudflare GraphQL error: ${errMsgs}`,
+      };
+    }
+
     const groups = json?.data?.viewer?.accounts?.[0]?.d1AnalyticsAdaptiveGroups || [];
-    const latest = groups[0] || {};
-    const writes = latest.sum?.rowsWritten || 0;
-    const reads = latest.sum?.rowsRead || 0;
-    const queries = latest.sum?.queryCount || 0;
+    if (!groups.length) {
+      return {
+        configured: false,
+        limits,
+        notice: `Cloudflare API não retornou grupos de métricas para o banco desde ${dateGte}. Verifique as permissões do token.`,
+      };
+    }
+
+    const todayGroup = groups.find((g: any) => g.dimensions?.date === today) || groups[0];
+    const writes = todayGroup?.sum?.rowsWritten || 0;
+    const reads = todayGroup?.sum?.rowsRead || 0;
+    const queries = todayGroup?.sum?.queryCount || 0;
 
     const result = {
       configured: true,
-      date: latest.dimensions?.date || today,
+      date: todayGroup?.dimensions?.date || today,
       rowsWritten: writes,
       rowsWrittenPct: Number(((writes / limits.d1Writes) * 100).toFixed(1)),
       rowsRead: reads,
       queryCount: queries,
       limits,
+      groups: groups.map((g: any) => ({
+        date: g.dimensions?.date,
+        rowsWritten: g.sum?.rowsWritten || 0,
+        rowsRead: g.sum?.rowsRead || 0,
+        queryCount: g.sum?.queryCount || 0,
+      })),
     };
 
     try {
@@ -7004,6 +7039,7 @@ async function fetchCloudflareD1Telemetry(env: Env): Promise<{
     };
   }
 }
+
 
 async function adminMetricsResponse(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
@@ -7076,7 +7112,9 @@ async function adminMetricsResponse(request: Request, env: Env): Promise<Respons
     ).all<{ day: string; count: number }>(),
   ]);
 
-  const cloudflareTelemetry = await fetchCloudflareD1Telemetry(env);
+  const url = new URL(request.url);
+  const fresh = url.searchParams.get("fresh") === "1" || url.searchParams.get("nocache") === "1";
+  const cloudflareTelemetry = await fetchCloudflareD1Telemetry(env, fresh);
 
   return jsonResponse(
     {

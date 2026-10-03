@@ -268,8 +268,9 @@ export const voxylApi = {
     },
   },
   admin: {
-    metrics() {
-      return apiFetch("/admin/metrics");
+    metrics(options = {}) {
+      const query = options?.fresh ? "?fresh=1" : "";
+      return apiFetch(`/admin/metrics${query}`);
     },
   },
 };

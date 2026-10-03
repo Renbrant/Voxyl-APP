@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
   CheckCircle2,
@@ -42,7 +43,7 @@ export default function Admin() {
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['admin-metrics'],
-    queryFn: () => voxylApi.admin.metrics(),
+    queryFn: () => voxylApi.admin.metrics({ fresh: true }),
     enabled: Boolean(isAdmin),
     refetchInterval: 60000,
   });
@@ -78,18 +79,23 @@ export default function Admin() {
 
   const stats = data?.stats || {};
   const cf = data?.cloudflare || {};
+  const isConfigured = Boolean(cf?.configured);
   const cfLimits = cf?.limits || { d1Writes: 100000, d1Reads: 5000000, workerRequests: 100000 };
 
   const d1Writes = cf?.rowsWritten || 0;
-  const d1WritesPct = cf?.rowsWrittenPct || Number(((d1Writes / cfLimits.d1Writes) * 100).toFixed(1));
+  const d1WritesPct = cf?.rowsWrittenPct ?? (isConfigured ? Number(((d1Writes / cfLimits.d1Writes) * 100).toFixed(1)) : 0);
   const d1Reads = cf?.rowsRead || 0;
-  const d1ReadsPct = Number(((d1Reads / cfLimits.d1Reads) * 100).toFixed(1));
+  const d1ReadsPct = isConfigured ? Number(((d1Reads / cfLimits.d1Reads) * 100).toFixed(1)) : 0;
 
   let healthBadge = { label: 'Saúde Normal', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
-  if (d1WritesPct >= 80) {
-    healthBadge = { label: 'Risco de Cota (>80%)', color: 'bg-red-500/10 text-red-400 border-red-500/20' };
+  if (!isConfigured) {
+    healthBadge = { label: 'Aguardando API Token', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+  } else if (d1WritesPct >= 100) {
+    healthBadge = { label: `Cota Excedida (${d1WritesPct}%)`, color: 'bg-red-500/10 text-red-400 border-red-500/20' };
+  } else if (d1WritesPct >= 80) {
+    healthBadge = { label: `Risco de Cota (${d1WritesPct}%)`, color: 'bg-red-500/10 text-red-400 border-red-500/20' };
   } else if (d1WritesPct >= 50) {
-    healthBadge = { label: 'Atenção (>50%)', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+    healthBadge = { label: `Atenção (${d1WritesPct}%)`, color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
   }
 
   return (
@@ -158,18 +164,22 @@ export default function Admin() {
                 <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                   <Database size={13} className="text-primary" /> D1 Row Writes
                 </span>
-                <span className="text-xs font-bold text-foreground">{d1WritesPct}%</span>
+                <span className={`text-xs font-bold ${!isConfigured ? 'text-amber-400' : d1WritesPct >= 100 ? 'text-red-400' : 'text-foreground'}`}>
+                  {isConfigured ? `${d1WritesPct}%` : 'Pendente Token'}
+                </span>
               </div>
               <div className="w-full bg-secondary h-2 rounded-full overflow-hidden mb-2">
                 <div
                   className={`h-full rounded-full transition-all ${
-                    d1WritesPct >= 80 ? 'bg-red-500' : d1WritesPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'
+                    !isConfigured ? 'bg-muted-foreground/30' : d1WritesPct >= 80 ? 'bg-red-500' : d1WritesPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'
                   }`}
-                  style={{ width: `${Math.min(d1WritesPct, 100)}%` }}
+                  style={{ width: `${Math.min(isConfigured ? d1WritesPct : 0, 100)}%` }}
                 />
               </div>
               <div className="flex items-baseline justify-between text-xs">
-                <span className="font-semibold text-foreground">{d1Writes.toLocaleString()}</span>
+                <span className="font-semibold text-foreground">
+                  {isConfigured ? d1Writes.toLocaleString('pt-BR') : '-'}
+                </span>
                 <span className="text-muted-foreground">de 100.000 / dia</span>
               </div>
             </div>
@@ -180,16 +190,20 @@ export default function Admin() {
                 <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                   <Database size={13} className="text-sky-400" /> D1 Row Reads
                 </span>
-                <span className="text-xs font-bold text-foreground">{d1ReadsPct}%</span>
+                <span className={`text-xs font-bold ${!isConfigured ? 'text-amber-400' : 'text-foreground'}`}>
+                  {isConfigured ? `${d1ReadsPct}%` : 'Pendente Token'}
+                </span>
               </div>
               <div className="w-full bg-secondary h-2 rounded-full overflow-hidden mb-2">
                 <div
                   className="h-full bg-sky-500 rounded-full transition-all"
-                  style={{ width: `${Math.min(d1ReadsPct, 100)}%` }}
+                  style={{ width: `${Math.min(isConfigured ? d1ReadsPct : 0, 100)}%` }}
                 />
               </div>
               <div className="flex items-baseline justify-between text-xs">
-                <span className="font-semibold text-foreground">{d1Reads.toLocaleString()}</span>
+                <span className="font-semibold text-foreground">
+                  {isConfigured ? d1Reads.toLocaleString('pt-BR') : '-'}
+                </span>
                 <span className="text-muted-foreground">de 5.000.000 / dia</span>
               </div>
             </div>
@@ -201,32 +215,45 @@ export default function Admin() {
                   <Activity size={13} className="text-violet-400" /> Worker Requests
                 </span>
                 <span className="text-xs font-bold text-foreground">
-                  {cf?.queryCount ? `${((cf.queryCount / cfLimits.workerRequests) * 100).toFixed(1)}%` : 'Ativo'}
+                  {isConfigured && cf?.queryCount ? `${((cf.queryCount / cfLimits.workerRequests) * 100).toFixed(1)}%` : 'Ativo'}
                 </span>
               </div>
               <div className="w-full bg-secondary h-2 rounded-full overflow-hidden mb-2">
                 <div
                   className="h-full bg-violet-500 rounded-full transition-all"
-                  style={{ width: `${Math.min(((cf?.queryCount || 0) / cfLimits.workerRequests) * 100, 100)}%` }}
+                  style={{ width: `${Math.min(isConfigured ? (((cf?.queryCount || 0) / cfLimits.workerRequests) * 100) : 10, 100)}%` }}
                 />
               </div>
               <div className="flex items-baseline justify-between text-xs">
-                <span className="font-semibold text-foreground">{(cf?.queryCount || 0).toLocaleString()}</span>
+                <span className="font-semibold text-foreground">
+                  {isConfigured ? (cf?.queryCount || 0).toLocaleString('pt-BR') : '-'}
+                </span>
                 <span className="text-muted-foreground">de 100.000 / dia</span>
               </div>
             </div>
           </div>
 
-          {!cf?.configured && (
+          {cf?.notice && (
+            <div className="mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200 flex items-start gap-2.5">
+              <AlertTriangle size={15} className="mt-0.5 flex-shrink-0 text-amber-400" />
+              <div>
+                <p className="font-semibold text-amber-300">Aviso de Telemetria Cloudflare:</p>
+                <p className="mt-0.5 text-amber-200/90 leading-relaxed">{cf.notice}</p>
+              </div>
+            </div>
+          )}
+
+          {!isConfigured && !cf?.notice && (
             <div className="mt-4 pt-3 border-t border-border/60 flex items-start gap-2.5 text-xs text-muted-foreground">
               <ShieldCheck size={14} className="text-primary mt-0.5 flex-shrink-0" />
               <span>
                 <strong>Modo Somente-Leitura Ativo</strong>: As escritas repetidas no D1 durante a sincronização de conta foram eliminadas no release 0.4.6.
-                Para telemetria direta via API da Cloudflare, adicione os segredos <code className="text-primary">CLOUDFLARE_API_TOKEN</code> e <code className="text-primary">CLOUDFLARE_ACCOUNT_ID</code> no Worker.
+                Para telemetria direta via API da Cloudflare, adicione o segredo <code className="text-primary">CLOUDFLARE_API_TOKEN</code> no Worker via <code className="text-primary">npx wrangler secret put CLOUDFLARE_API_TOKEN</code>.
               </span>
             </div>
           )}
         </div>
+
 
         {/* KPIs de Usuários e Conteúdo */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
