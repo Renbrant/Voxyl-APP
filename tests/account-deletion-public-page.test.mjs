@@ -75,7 +75,7 @@ describe('Issue #104 public account-deletion page', () => {
 
     assert.match(
       pageSource,
-      /Playlists criadas por você/,
+      /Suas playlists originais\. Quem salvou uma playlist pública manterá uma cópia privada/,
     );
 
     assert.match(

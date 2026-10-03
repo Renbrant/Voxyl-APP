@@ -3090,12 +3090,12 @@ function accountIdentityParams(
   return params;
 }
 
-function ownedPlaylistPredicate(): string {
+function ownedPlaylistPredicate(prefix = ""): string {
   return [
-    "creator_id = ?",
-    "creator_clerk_user_id = ?",
-    "(? <> '' AND creator_legacy_base44_user_id = ?)",
-    "(? <> '' AND lower(TRIM(COALESCE(creator_email, ''))) = ?)",
+    `${prefix}creator_id = ?`,
+    `${prefix}creator_clerk_user_id = ?`,
+    `(? <> '' AND ${prefix}creator_legacy_base44_user_id = ?)`,
+    `(? <> '' AND lower(TRIM(COALESCE(${prefix}creator_email, ''))) = ?)`,
   ].join(" OR ");
 }
 
@@ -3117,6 +3117,7 @@ function prepareAccountDeletionStatements(
   identity: AccountDeletionIdentity,
 ): D1PreparedStatement[] {
   const playlistPredicate = ownedPlaylistPredicate();
+  const joinedPlaylistPredicate = ownedPlaylistPredicate("p.");
   const playlistParams = ownedPlaylistParams(identity);
 
   const playlistLikeUserPredicate = accountIdentityPredicate(
@@ -3125,6 +3126,30 @@ function prepareAccountDeletionStatements(
     "legacy_base44_user_id",
     "user_email",
   );
+  const joinedPlaylistLikeUserPredicate = accountIdentityPredicate(
+    "l.user_id", "l.clerk_user_id", "l.legacy_base44_user_id", "l.user_email",
+  );
+
+  // A saved public playlist becomes a private copy owned by each remaining
+  // listener. Deriving its ID from the like keeps the transfer deterministic.
+  // Keep only feed URLs: playlist metadata and extra RSS fields can identify
+  // the departing creator. The original playlist and its share link disappear.
+  const savedPlaylistId = "'saved-' || l.id";
+  const safeFeedUrls = `(
+    SELECT json_group_array(json_object('url', COALESCE(
+      json_extract(feed.value, '$.url'),
+      json_extract(feed.value, '$.feed_url')
+    )))
+    FROM json_each(CASE
+      WHEN json_valid(p.rss_feeds) AND json_type(p.rss_feeds) = 'array'
+      THEN p.rss_feeds ELSE '[]'
+    END) AS feed
+    WHERE feed.type = 'object'
+      AND typeof(COALESCE(
+        json_extract(feed.value, '$.url'),
+        json_extract(feed.value, '$.feed_url')
+      )) = 'text'
+  )`;
 
   const podcastLikeUserPredicate = accountIdentityPredicate(
     "user_id",
@@ -3195,6 +3220,38 @@ function prepareAccountDeletionStatements(
   );
 
   return [
+    env.DB.prepare(
+      `INSERT INTO playlists (
+         id, creator_id, title, visibility, rss_feeds,
+         max_duration, time_filter_hours, episodes_sort_order,
+         likes_count, plays_count, creator_username, creator_hidden
+       )
+       SELECT ${savedPlaylistId}, l.user_id,
+         'Saved playlist ' || l.id, 'private',
+         ${safeFeedUrls}, p.max_duration, p.time_filter_hours,
+         p.episodes_sort_order, 1, 0, 'saved-' || l.id, 1
+       FROM playlists p
+       JOIN playlist_likes l ON l.playlist_id = p.id
+       JOIN users listener ON listener.id = l.user_id
+       WHERE p.visibility = 'public'
+         AND (${joinedPlaylistPredicate})
+         AND NOT COALESCE((${joinedPlaylistLikeUserPredicate}), 0)`,
+    ).bind(...playlistParams, ...accountIdentityParams(identity, true)),
+
+    env.DB.prepare(
+      `UPDATE playlist_likes AS l
+       SET playlist_id = ${savedPlaylistId}
+       WHERE l.playlist_id IN (
+         SELECT id FROM playlists
+         WHERE visibility = 'public' AND (${playlistPredicate})
+       )
+         AND EXISTS (
+           SELECT 1 FROM playlists copy
+           WHERE copy.id = ${savedPlaylistId}
+             AND copy.creator_id = l.user_id
+         )`,
+    ).bind(...playlistParams),
+
     env.DB.prepare(
       `DELETE FROM playlist_episodes_cache
        WHERE playlist_id IN (

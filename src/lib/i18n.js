@@ -264,7 +264,7 @@ const translations = {
   settingsLogoutDesc: { pt: 'Você será desconectado', en: 'You will be signed out' },
   settingsActions: { pt: 'Ações', en: 'Actions' },
   settingsDeleteAccount: { pt: 'Desativar Conta', en: 'Deactivate Account' },
-  settingsDeleteAccountDesc: { pt: 'Anonimiza e remove todos os seus dados', en: 'Anonymizes and removes all your data' },
+  settingsDeleteAccountDesc: { pt: 'Exclui sua conta e seus dados vinculados', en: 'Deletes your account and linked data' },
   settingsHidden: { pt: 'Oculto', en: 'Hidden' },
 
   // Delete Account Modal
@@ -275,7 +275,7 @@ const translations = {
   deleteStep1Confirm: { pt: 'Continuar', en: 'Continue' },
   deleteStep1Cancel: { pt: 'Manter minha conta', en: 'Keep my account' },
   deleteStep2Title: { pt: 'Seus dados do Voxyl serão removidos', en: 'Your Voxyl data will be removed' },
-  deleteStep2Body: { pt: 'Playlists, curtidas, histórico de reprodução, progresso de episódios, relações sociais e mídia do perfil vinculados à sua conta serão excluídos.', en: 'Playlists, likes, listening history, episode progress, social relationships, and profile media linked to your account will be deleted.' },
+  deleteStep2Body: { pt: 'Suas playlists originais, curtidas, histórico de reprodução, progresso de episódios, relações sociais e mídia do perfil serão excluídos. Quem salvou uma playlist pública sua conservará uma cópia privada com apenas os feeds, sem seu nome, título, descrição ou capa.', en: 'Your original playlists, likes, listening history, episode progress, social relationships, and profile media will be deleted. Anyone who saved one of your public playlists will keep a private copy of its feeds, without your name, title, description, or cover.' },
   deleteStep2Warning: { pt: 'Seu acesso ao Voxyl também será encerrado após a exclusão.', en: 'Your Voxyl sign-in access will also be removed after deletion.' },
   deleteStep2Confirm: { pt: 'Entendo, continuar', en: 'I understand, continue' },
   deleteCancel: { pt: 'Voltar', en: 'Back' },
@@ -369,7 +369,7 @@ const translations = {
   privacyDeleteStep4Title: { pt: 'Toque em "Excluir Conta"', en: 'Tap "Delete Account"' },
   privacyDeleteStep4: { pt: 'Dentro da Zona de Perigo, toque em "Excluir Conta". O app pedirá uma confirmação antes de prosseguir.', en: 'Inside the Danger Zone, tap "Delete Account". The app will ask for confirmation before proceeding.' },
   privacyDeleteStep5Title: { pt: 'Confirmação e exclusão', en: 'Confirmation and deletion' },
-  privacyDeleteStep5: { pt: 'Confirme a ação. Sua conta, playlists, curtidas, histórico de reprodução e todos os dados pessoais serão removidos permanentemente.', en: 'Confirm the action. Your account, playlists, likes, play history and all personal data will be permanently deleted.' },
+  privacyDeleteStep5: { pt: 'Confirme a ação. Sua conta, playlists originais, curtidas e histórico serão excluídos. Quem salvou uma playlist pública manterá uma cópia privada dos feeds sem sua identificação.', en: 'Confirm the action. Your account, original playlists, likes, and listening history will be deleted. People who saved a public playlist will keep a private copy of its feeds without your identity.' },
   privacyDeleteWarning: { pt: '⚠️ A exclusão é permanente e irreversível. Não é possível recuperar os dados após a confirmação.', en: '⚠️ Deletion is permanent and irreversible. Data cannot be recovered after confirmation.' },
   privacyDeleteEmail: { pt: 'Caso não consiga acessar o app, envie um e-mail para privacy@voxyl.app e processaremos sua solicitação em até 30 dias.', en: 'If you cannot access the app, send an email to privacy@voxyl.app and we will process your request within 30 days.' },
 };
