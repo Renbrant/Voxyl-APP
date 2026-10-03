@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   BarChart3,
   CheckCircle2,
+  Clock,
   Database,
   Flame,
   Heart,
@@ -30,6 +31,7 @@ import {
 } from 'recharts';
 import { voxylApi } from '@/api/voxylApiClient';
 import { useAuth } from '@/lib/AuthContext';
+import { useCloudflareResetCountdown } from '@/lib/cloudflareQuota';
 import UserAvatar from '@/components/common/UserAvatar';
 
 export default function Admin() {
@@ -49,6 +51,9 @@ export default function Admin() {
     enabled: Boolean(isAdmin),
     refetchInterval: 60000,
   });
+
+  const cfResetAt = data?.cloudflare?.resetAt || data?.cloudflare?.limits?.resetAt || null;
+  const resetCountdown = useCloudflareResetCountdown(cfResetAt);
 
   if (isLoadingAuth) {
     return (
@@ -153,9 +158,21 @@ export default function Admin() {
                 </p>
               </div>
             </div>
-            <div className={`self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-semibold border ${healthBadge.color} flex items-center gap-1.5`}>
-              <CheckCircle2 size={13} />
-              <span>{healthBadge.label}</span>
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              <div
+                className="px-3 py-1 rounded-full text-xs font-medium border border-border/70 bg-secondary/60 text-foreground flex items-center gap-1.5 shadow-sm"
+                title="Os limites gratuitos diários da Cloudflare resetam todos os dias às 00:00 UTC"
+              >
+                <Clock size={13} className="text-primary animate-pulse" />
+                <span className="text-muted-foreground">Reset em:</span>
+                <span className="font-mono font-bold text-foreground">{resetCountdown.formatted}</span>
+                <span className="text-[10px] text-muted-foreground hidden sm:inline">(00:00 UTC)</span>
+              </div>
+
+              <div className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${healthBadge.color} flex items-center gap-1.5`}>
+                <CheckCircle2 size={13} />
+                <span>{healthBadge.label}</span>
+              </div>
             </div>
           </div>
 
@@ -233,6 +250,19 @@ export default function Admin() {
                 <span className="text-muted-foreground">de 100.000 / dia</span>
               </div>
             </div>
+          </div>
+
+          {/* Barra Informativa do Reset dos Limites Cloudflare */}
+          <div className="mt-4 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Clock size={14} className="text-primary flex-shrink-0" />
+              <span>
+                <strong>Ciclo Diário Cloudflare:</strong> Os limites gratuitos resetam às <strong>00:00 UTC</strong> — faltam <strong className="text-foreground font-mono">{resetCountdown.formatted}</strong> para o próximo ciclo.
+              </span>
+            </div>
+            <span className="text-[11px] text-muted-foreground/80 self-end sm:self-auto font-mono">
+              Próximo reset: {new Date(resetCountdown.targetUtc).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} (local)
+            </span>
           </div>
 
           {cf?.notice && (

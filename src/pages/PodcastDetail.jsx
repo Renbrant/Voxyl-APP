@@ -38,7 +38,7 @@ export default function PodcastDetail() {
   const [user, setUser] = useState(null);
   const [showInfo, setShowInfo] = useState(false);
   const [feedSource, setFeedSource] = useState('none');
-  const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
+  const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, finishedUrls, setFinishedUrls, outroSkippedUrls, markFinished, getCachedProgress } = usePlayer();
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -268,12 +268,19 @@ export default function PodcastDetail() {
               {episodes.map((ep, i) => {
                 const isActive = currentEpisode?.audioUrl === ep.audioUrl;
                 const isCurrentlyPlaying = isActive && isPlaying;
-                const isFinished = finishedUrls.has(ep.audioUrl) && !isActive;
-                const progress = isActive && duration ? (currentTime / duration) * 100 : 0;
                 const savedProgress = !isActive ? getCachedProgress(ep.audioUrl) : null;
+                const isFinished = (finishedUrls.has(ep.audioUrl) || Boolean(savedProgress?.finished)) && !isActive;
+                const isOutroSkipped = (outroSkippedUrls?.has(ep.audioUrl) || Boolean(savedProgress?.skipped_outro)) && !isActive;
+                const progress = isActive && duration ? (currentTime / duration) * 100 : 0;
                 const savedProgressPct = savedProgress && savedProgress.duration_seconds > 0 && !savedProgress.finished
                   ? (savedProgress.position_seconds / savedProgress.duration_seconds) * 100
                   : 0;
+                const epSkipStart = Math.max(0, Number(isActive ? currentEpisode?.skip_start_seconds : ep.skip_start_seconds) || 0);
+                const epSkipEnd = Math.max(0, Number(isActive ? currentEpisode?.skip_end_seconds : ep.skip_end_seconds) || 0);
+                const activeDur = isActive ? duration : (savedProgress?.duration_seconds || 0);
+                const hasActiveSkip = activeDur > 0 && (epSkipStart > 0 || epSkipEnd > 0);
+                const activeSkipStartPct = hasActiveSkip && epSkipStart > 0 ? Math.min(100, (epSkipStart / activeDur) * 100) : 0;
+                const activeSkipEndPct = hasActiveSkip && epSkipEnd > 0 ? Math.min(100 - activeSkipStartPct, (epSkipEnd / activeDur) * 100) : 0;
                 return (
                   <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i * 0.02, 0.4) }}>
                       {!isActive ? (
@@ -319,6 +326,7 @@ export default function PodcastDetail() {
                             isActive={isActive}
                             isCurrentlyPlaying={isCurrentlyPlaying}
                             isFinished={isFinished}
+                            isOutroSkipped={isOutroSkipped}
                             onShortPress={() => handlePlayEpisode(ep)}
                             onMarkFinished={() => markFinished(ep.audioUrl)}
                             onMarkUnfinished={() => setFinishedUrls(prev => { const s = new Set(prev); s.delete(ep.audioUrl); return s; })}
@@ -327,7 +335,19 @@ export default function PodcastDetail() {
 
                         {!isActive && savedProgressPct > 1 && (
                           <div className="mt-2 px-0.5">
-                            <div className="h-1 bg-border rounded-full overflow-hidden">
+                            <div className="relative h-1 bg-border rounded-full overflow-hidden">
+                              {activeSkipStartPct > 0 && (
+                                <div
+                                  className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                  style={{ width: `${activeSkipStartPct}%` }}
+                                />
+                              )}
+                              {activeSkipEndPct > 0 && (
+                                <div
+                                  className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                  style={{ width: `${activeSkipEndPct}%` }}
+                                />
+                              )}
                               <div className="h-full rounded-full bg-primary/50" style={{ width: `${savedProgressPct}%` }} />
                             </div>
                           </div>
@@ -343,14 +363,36 @@ export default function PodcastDetail() {
                                  seek(((e.clientX - rect.left) / rect.width) * duration);
                                }}
                              >
-                               <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                               {activeSkipStartPct > 0 && (
+                                 <div
+                                   className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
+                                   style={{ width: `${activeSkipStartPct}%` }}
+                                   title={`Início pulado: ${epSkipStart}s`}
+                                 />
+                               )}
+                               {activeSkipEndPct > 0 && (
+                                 <div
+                                   className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
+                                   style={{ width: `${activeSkipEndPct}%` }}
+                                   title={`Final pulado: ${epSkipEnd}s`}
+                                 />
+                               )}
+                               <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
                                <div
-                                 className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all"
+                                 className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all z-20"
                                  style={{ left: `${progress}%`, transform: 'translate(-50%, -50%)' }}
                                />
                              </div>
-                             <div className="flex justify-between mt-1">
+                             <div className="flex justify-between items-center mt-1">
                                <span className="text-xs text-primary/80">{formatDuration(Math.floor(currentTime))}</span>
+                               {hasActiveSkip && (
+                                 <span
+                                   className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
+                                   title="Pular intro/fim ativo"
+                                 >
+                                   ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                                 </span>
+                               )}
                                <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>
                              </div>
                            </div>
@@ -395,6 +437,7 @@ export default function PodcastDetail() {
                                 isActive={isActive}
                                 isCurrentlyPlaying={isCurrentlyPlaying}
                                 isFinished={isFinished}
+                                isOutroSkipped={isOutroSkipped}
                                 onShortPress={() => handlePlayEpisode(ep)}
                                 onMarkFinished={() => markFinished(ep.audioUrl)}
                                 onMarkUnfinished={() => setFinishedUrls(prev => { const s = new Set(prev); s.delete(ep.audioUrl); return s; })}
@@ -403,7 +446,19 @@ export default function PodcastDetail() {
 
                             {!isActive && savedProgressPct > 1 && (
                               <div className="mt-2 px-0.5">
-                                <div className="h-1 bg-border rounded-full overflow-hidden">
+                                <div className="relative h-1 bg-border rounded-full overflow-hidden">
+                                  {activeSkipStartPct > 0 && (
+                                    <div
+                                      className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                      style={{ width: `${activeSkipStartPct}%` }}
+                                    />
+                                  )}
+                                  {activeSkipEndPct > 0 && (
+                                    <div
+                                      className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                      style={{ width: `${activeSkipEndPct}%` }}
+                                    />
+                                  )}
                                   <div className="h-full rounded-full bg-primary/50" style={{ width: `${savedProgressPct}%` }} />
                                 </div>
                               </div>
@@ -419,14 +474,36 @@ export default function PodcastDetail() {
                                      seek(((e.clientX - rect.left) / rect.width) * duration);
                                    }}
                                  >
-                                   <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                                   {activeSkipStartPct > 0 && (
+                                     <div
+                                       className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
+                                       style={{ width: `${activeSkipStartPct}%` }}
+                                       title={`Início pulado: ${epSkipStart}s`}
+                                     />
+                                   )}
+                                   {activeSkipEndPct > 0 && (
+                                     <div
+                                       className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
+                                       style={{ width: `${activeSkipEndPct}%` }}
+                                       title={`Final pulado: ${epSkipEnd}s`}
+                                     />
+                                   )}
+                                   <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
                                    <div
-                                     className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all"
+                                     className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all z-20"
                                      style={{ left: `${progress}%`, transform: 'translate(-50%, -50%)' }}
                                    />
                                  </div>
-                                 <div className="flex justify-between mt-1">
+                                 <div className="flex justify-between items-center mt-1">
                                    <span className="text-xs text-primary/80">{formatDuration(Math.floor(currentTime))}</span>
+                                   {hasActiveSkip && (
+                                     <span
+                                       className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
+                                       title="Pular intro/fim ativo"
+                                     >
+                                       ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                                     </span>
+                                   )}
                                    <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>
                                  </div>
                                </div>

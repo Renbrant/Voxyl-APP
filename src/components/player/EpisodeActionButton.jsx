@@ -3,7 +3,7 @@ import { Play, Pause, CheckCircle2, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlayer } from '@/lib/PlayerContext';
 
-export default function EpisodeActionButton({ ep, isActive, isCurrentlyPlaying, isFinished, onShortPress, onMarkFinished, onMarkUnfinished, progressPct = 0 }) {
+export default function EpisodeActionButton({ ep, isActive, isCurrentlyPlaying, isFinished, isOutroSkipped = false, onShortPress, onMarkFinished, onMarkUnfinished, progressPct = 0 }) {
   const { isLoading } = usePlayer();
   const isBuffering = isActive && isLoading;
   const [pressing, setPressing] = useState(false);
@@ -71,9 +71,17 @@ export default function EpisodeActionButton({ ep, isActive, isCurrentlyPlaying, 
           style={{ animation: 'grow-up 3s linear forwards' }}
         />
       )}
-      {isFinished
-        ? <CheckCircle2 size={16} className="text-green-400 relative z-10" />
-        : isBuffering
+      {isFinished ? (
+        <div className="relative flex items-center justify-center">
+          <CheckCircle2 size={16} className="text-green-400 relative z-10" />
+          {isOutroSkipped && (
+            <span
+              className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-card shadow-sm z-20"
+              title="Ouvido (final pulado pela playlist)"
+            />
+          )}
+        </div>
+      ) : isBuffering
         ? <Loader2 size={14} className="text-white relative z-10 animate-spin" />
         : isCurrentlyPlaying
         ? <Pause size={12} fill="white" className="text-white relative z-10" />

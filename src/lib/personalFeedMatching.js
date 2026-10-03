@@ -100,6 +100,7 @@ export function getListeningHistoryEpisodes(plays = []) {
 export function getContinueListeningItems(
   progressRecords = [],
   plays = [],
+  limit,
 ) {
   const history = getListeningHistoryEpisodes(plays);
 
@@ -110,7 +111,7 @@ export function getContinueListeningItems(
     ]),
   );
 
-  return progressRecords
+  const items = progressRecords
     .filter(progress => {
       const position = Number(progress?.position_seconds);
 
@@ -146,6 +147,8 @@ export function getContinueListeningItems(
         timestampMs(right.progress.last_played_at) -
         timestampMs(left.progress.last_played_at),
     );
+
+  return typeof limit === 'number' ? items.slice(0, limit) : items;
 }
 
 export function getPlaybackProgressPercent(progress) {

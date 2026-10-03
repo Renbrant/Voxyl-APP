@@ -21,6 +21,11 @@ export default function AudioPlayer() {
   if (!currentEpisode) return null;
 
   const progress = duration ? (currentTime / duration) * 100 : 0;
+  const skipStart = Math.max(0, Number(currentEpisode?.skip_start_seconds) || 0);
+  const skipEnd = Math.max(0, Number(currentEpisode?.skip_end_seconds) || 0);
+  const hasSkip = duration > 0 && (skipStart > 0 || skipEnd > 0);
+  const skipStartPct = hasSkip && skipStart > 0 ? Math.min(100, (skipStart / duration) * 100) : 0;
+  const skipEndPct = hasSkip && skipEnd > 0 ? Math.min(100 - skipStartPct, (skipEnd / duration) * 100) : 0;
 
   return (
     <div className="fixed left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 w-full max-w-md md:max-w-sm z-40 px-3 md:px-0 animate-slide-up select-none [bottom:calc(4rem+env(safe-area-inset-bottom,0px))] md:[bottom:1.5rem]">
@@ -30,7 +35,21 @@ export default function AudioPlayer() {
           {isLoading ? (
             <div className="absolute inset-0 animate-[shimmer_1s_linear_infinite] bg-gradient-to-r from-transparent via-primary/80 to-transparent bg-[length:200%_100%]" />
           ) : (
-            <div className="h-full rounded-full gradient-primary transition-all" style={{ width: `${progress}%` }} />
+            <>
+              {skipStartPct > 0 && (
+                <div
+                  className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                  style={{ width: `${skipStartPct}%` }}
+                />
+              )}
+              {skipEndPct > 0 && (
+                <div
+                  className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                  style={{ width: `${skipEndPct}%` }}
+                />
+              )}
+              <div className="h-full rounded-full gradient-primary transition-all z-0" style={{ width: `${progress}%` }} />
+            </>
           )}
         </div>
 
@@ -75,16 +94,40 @@ export default function AudioPlayer() {
                     const rect = e.currentTarget.getBoundingClientRect();
                     seek(((touch.clientX - rect.left) / rect.width) * duration);
                   }}>
-                  <div className="relative h-1 bg-border rounded-full overflow-hidden">
+                  <div className="relative h-1.5 bg-border rounded-full overflow-hidden">
                     {isLoading ? (
                       <div className="absolute inset-0 animate-[shimmer_1s_linear_infinite] bg-gradient-to-r from-transparent via-primary/80 to-transparent bg-[length:200%_100%]" />
                     ) : (
-                      <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all" style={{ width: `${progress}%` }} />
+                      <>
+                        {skipStartPct > 0 && (
+                          <div
+                            className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300/80 pointer-events-none"
+                            style={{ width: `${skipStartPct}%` }}
+                            title={`Início pulado pela playlist: ${skipStart}s`}
+                          />
+                        )}
+                        {skipEndPct > 0 && (
+                          <div
+                            className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300/80 pointer-events-none"
+                            style={{ width: `${skipEndPct}%` }}
+                            title={`Final pulado pela playlist: ${skipEnd}s`}
+                          />
+                        )}
+                        <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all z-0" style={{ width: `${progress}%` }} />
+                      </>
                     )}
                   </div>
                 </div>
-                <div className="flex justify-between mt-0.5">
+                <div className="flex justify-between items-center mt-0.5">
                   <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(currentTime))}</span>
+                  {hasSkip && (
+                    <span
+                      className="text-[10px] text-amber-500 font-medium tracking-tight px-1.5 py-0.2 rounded bg-amber-500/10 border border-amber-500/20 flex items-center gap-1"
+                      title="Pular intro/fim ativo nesta playlist"
+                    >
+                      ⚡ {skipStart > 0 ? `-${skipStart}s início` : ''}{skipStart > 0 && skipEnd > 0 ? ' • ' : ''}{skipEnd > 0 ? `-${skipEnd}s fim` : ''}
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground">-{formatDuration(Math.max(0, Math.floor(duration - currentTime)))}</span>
                 </div>
               </div>

@@ -212,7 +212,8 @@ export default function MyPlaylistsContent({
       getContinueListeningItems(
         episodeProgress,
         userPodcastPlays,
-      ).slice(0, 6),
+        2,
+      ),
     [
       episodeProgress,
       userPodcastPlays,
@@ -372,7 +373,7 @@ export default function MyPlaylistsContent({
         {!isLoadingProgress &&
           !isProgressError &&
           continueListening.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {continueListening.map(item => {
                 const isActive =
                   currentEpisode?.audioUrl ===

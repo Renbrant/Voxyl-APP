@@ -92,6 +92,7 @@ function normalizeProgressEntry(entry) {
     position_seconds: Number.isFinite(position) && position >= 0 ? Math.trunc(position) : 0,
     duration_seconds: Number.isFinite(duration) && duration >= 0 ? Math.trunc(duration) : 0,
     finished: normalizeEpisodeFinished(entry),
+    skipped_outro: Boolean(entry.skipped_outro),
     last_played_at: timestamp,
     server_updated_at: serverTimestamp && Number.isFinite(Date.parse(serverTimestamp)) ? serverTimestamp : undefined,
   };
@@ -228,6 +229,7 @@ function mergeProgressCache(left, right) {
       ...revisionSource,
       position_seconds: furthestPosition,
       finished: normalizeEpisodeFinished(current) || normalizeEpisodeFinished(normalized),
+      skipped_outro: Boolean(current.skipped_outro || normalized.skipped_outro),
     };
   }
 
@@ -678,16 +680,22 @@ export function createProgressHydrationController(options = {}) {
   return controller;
 }
 
-export function setCachedProgress(audioUrl, position, duration, finished) {
+export function setCachedProgress(audioUrl, position, duration, finished, metadata = {}) {
   const cache = readCache();
   const current = cache[audioUrl];
   const safePosition = Number.isFinite(position) && position >= 0 ? Math.floor(position) : 0;
   const safeDuration = Number.isFinite(duration) && duration >= 0 ? Math.floor(duration) : current?.duration_seconds || 0;
+  const isFinished = Boolean(finished) || (safeDuration > 0 && safePosition / safeDuration >= FINISH_THRESHOLD);
+  const skippedOutro = metadata?.skipped_outro !== undefined
+    ? Boolean(metadata.skipped_outro)
+    : (isFinished ? Boolean(current?.skipped_outro) : false);
+
   cache[audioUrl] = {
     id: current?.id,
     position_seconds: safePosition,
     duration_seconds: safeDuration,
-    finished: Boolean(finished) || (safeDuration > 0 && safePosition / safeDuration >= FINISH_THRESHOLD),
+    finished: isFinished,
+    skipped_outro: skippedOutro,
     last_played_at: new Date().toISOString(),
     server_updated_at: current?.server_updated_at,
   };
@@ -699,9 +707,18 @@ export function isFinishedFromCache(audioUrl) {
   return getCachedProgress(audioUrl)?.finished === true;
 }
 
+export function isOutroSkippedFromCache(audioUrl) {
+  return getCachedProgress(audioUrl)?.skipped_outro === true;
+}
+
 export function getAllFinishedFromCache() {
   const cache = readCache();
   return new Set(Object.entries(cache).filter(([, v]) => v.finished).map(([k]) => k));
+}
+
+export function getAllOutroSkippedFromCache() {
+  const cache = readCache();
+  return new Set(Object.entries(cache).filter(([, v]) => v.skipped_outro).map(([k]) => k));
 }
 
 export function mergeProgressRecords(records, expectedVersion = scopeVersion) {

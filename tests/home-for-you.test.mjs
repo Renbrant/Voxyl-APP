@@ -168,6 +168,35 @@ describe('Issue #72 For You matching', () => {
     );
   });
 
+  it('supports an optional limit parameter to restrict returned items', () => {
+    const items = getContinueListeningItems(
+      [
+        {
+          audio_url: 'https://audio.example.com/a.mp3',
+          position_seconds: 80,
+          duration_seconds: 300,
+          finished: 0,
+          last_played_at: '2026-08-22T10:00:00.000Z',
+        },
+        {
+          audio_url: 'https://audio.example.com/b.mp3',
+          position_seconds: 60,
+          duration_seconds: 300,
+          completed: 0,
+          last_played_at: '2026-08-23T10:00:00.000Z',
+        },
+      ],
+      plays,
+      1,
+    );
+
+    assert.equal(items.length, 1);
+    assert.equal(
+      items[0].episode.audioUrl,
+      'https://audio.example.com/b.mp3',
+    );
+  });
+
   it('deduplicates broader listening history by audio URL while retaining newest metadata', () => {
     const history =
       getListeningHistoryEpisodes(plays);
@@ -286,6 +315,18 @@ describe('Issue #72 For You source contract', () => {
     assert.match(
       personalSource,
       /feedContinueListeningEmpty/,
+    );
+  });
+
+  it('limits Continue Listening to the latest 2 unfinished episodes', () => {
+    assert.match(
+      personalSource,
+      /getContinueListeningItems\(\s*episodeProgress,\s*userPodcastPlays,\s*2,?\s*\)/,
+    );
+
+    assert.doesNotMatch(
+      personalSource,
+      /getContinueListeningItems[^\n]+\.slice\(0,\s*6\)/,
     );
   });
 

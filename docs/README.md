@@ -2,7 +2,7 @@
 
 This directory contains current operational, architecture, authentication, release, migration, and platform-specific documentation for Voxyl.
 
-The current beta line is **Voxyl 0.4.x**, with **v0.4.6** as the latest Android release. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
+The current beta line is **Voxyl 0.4.x**, with **v0.4.8** as the latest Android release. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
 
 ## Start Here
 
@@ -33,7 +33,9 @@ The v0.4.x UX phases are documented in `CHANGELOG.md`:
 - v0.4.3 — People social dashboard;
 - v0.4.4 — People detail flows and social interactions;
 - v0.4.5 — Library dashboard and focused collection views;
-- v0.4.6 — Google Play readiness, account deletion, cache isolation, and production hardening.
+- v0.4.6 — Google Play readiness, account deletion, cache isolation, and production hardening;
+- v0.4.7 — Continue Listening optimization to 2 episodes and responsive grid;
+- v0.4.8 — Playlist skip visualization, outro skip completion recording, and Cloudflare quota reset countdown.
 
 The v0.4.4 People experience adds relationship-aware detail flows for **Following**, **Followers**, **Requests**, and **Suggestions**, direct People search-to-profile navigation, explicit Follow/Follow back/Following/Unfollow states, and Accept/Decline handling for incoming follow requests.
 

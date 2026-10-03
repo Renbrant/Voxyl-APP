@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.6
-Android versionCode 406
+Voxyl 0.4.8
+Android versionCode 408
 Package com.renbrant.voxyl
 ```
 
@@ -430,10 +430,10 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 The current Android reference release is:
 
 ```text
-Voxyl v0.4.6
+Voxyl v0.4.8
 source commit main
-versionCode 406
-APK Voxyl-v0.4.6-release.apk
+versionCode 408
+APK Voxyl-v0.4.8-release.apk
 ```
 
 The GitHub tag points to the exact source commit, the Release is public and non-prerelease, exactly one APK asset is present, GitHub reports the same size/digest, and the helper downloaded the public asset again and verified exact byte identity against the frozen APK.

@@ -6,6 +6,27 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.8 - October 2026
+
+### Playlist Skip Visualization, Outro Skip Completion, and Telemetry Enhancements
+
+- **Scrubber Skip Visual Representation**: Added visual indicators on episode progress bars (in both the floating audio player and playlist episode rows) showing skipped intro and outro sections in distinct amber colors when playlist skip rules are active.
+- **Player Skip Badges**: Added subtle skip duration indicators (`⚡ -Xs início • -Ys fim`) in the player timeline for instant feedback.
+- **Outro Skip Full Completion Recording**: Guaranteed that when an episode reaches the end-skip threshold and skips the outro, it is immediately recorded as finished/played in database and local cache, whether autoplay is enabled or disabled and even at the end of the queue.
+- **Subtle Outro-Skipped Indicators**: Added a subtle visual indicator on completed episode checkmarks and metadata rows (`• ouvido (final pulado)`) showing the episode was completed with its outro skipped by playlist configuration.
+- **Cloudflare Quota Reset Countdown**: Added a real-time countdown timer to the Admin dashboard displaying the exact remaining time until Cloudflare daily quotas reset at 00:00 UTC with localized next-reset times.
+- **Telemetry Enhancements**: Added `resetAt` metadata to Cloudflare telemetry responses in the Worker API.
+- Synchronized release version metadata across web, Android (`versionCode 408`), API Worker, and test suites.
+
+## v0.4.7 - October 2026
+
+### Home Feed Refinements and Version Alignment
+
+- Refined the Home feed Continue Listening section to display only the 2 latest unfinished episodes instead of 6, providing a cleaner and more actionable resume experience.
+- Adjusted the Continue Listening responsive grid to 2 columns on larger screens, eliminating blank third slots.
+- Added optional `limit` parameter to `getContinueListeningItems`.
+- Synchronized release version metadata across web, Android (`versionCode 407`), API Worker, and test suites.
+
 ## v0.4.6 - October 2026
 
 ### Google Play Readiness, Security, and Production Hardening

@@ -69,7 +69,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
   const [followingLoader, setFollowingLoader] = useState(false);
   const { requireAuth } = useRequireAuth();
   const queryClient = useQueryClient();
-  const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, autoplay, setAutoplay, finishedUrls, setFinishedUrls, markFinished, getCachedProgress } = usePlayer();
+  const { play, currentEpisode, isPlaying, togglePlay, seek, currentTime, duration, autoplay, setAutoplay, finishedUrls, setFinishedUrls, outroSkippedUrls, markFinished, getCachedProgress } = usePlayer();
   const currentPlaylistIdRef = useRef(id);
   const cacheRequestGuardRef = useRef(null);
   const syncRequestGuardRef = useRef(null);
@@ -522,13 +522,20 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
             {episodes.map((ep, i) => {
               const isActive = currentEpisode?.audioUrl === ep.audioUrl;
               const isCurrentlyPlaying = isActive && isPlaying;
-              const hasBeenPlayed = playedUrls.has(ep.audioUrl) && !isActive;
-              const isFinished = finishedUrls.has(ep.audioUrl) && !isActive;
-              const progress = isActive && duration ? (currentTime / duration) * 100 : 0;
               const savedProgress = !isActive ? getCachedProgress(ep.audioUrl) : null;
+              const isFinished = (finishedUrls.has(ep.audioUrl) || Boolean(savedProgress?.finished)) && !isActive;
+              const isOutroSkipped = (outroSkippedUrls?.has(ep.audioUrl) || Boolean(savedProgress?.skipped_outro)) && !isActive;
+              const hasBeenPlayed = (playedUrls.has(ep.audioUrl) || isFinished) && !isActive;
+              const progress = isActive && duration ? (currentTime / duration) * 100 : 0;
               const savedProgressPct = savedProgress && savedProgress.duration_seconds > 0 && !savedProgress.finished
                 ? (savedProgress.position_seconds / savedProgress.duration_seconds) * 100
                 : 0;
+              const epSkipStart = Math.max(0, Number(ep.skip_start_seconds) || 0);
+              const epSkipEnd = Math.max(0, Number(ep.skip_end_seconds) || 0);
+              const activeDur = isActive ? duration : (savedProgress?.duration_seconds || 0);
+              const hasActiveSkip = activeDur > 0 && (epSkipStart > 0 || epSkipEnd > 0);
+              const activeSkipStartPct = hasActiveSkip && epSkipStart > 0 ? Math.min(100, (epSkipStart / activeDur) * 100) : 0;
+              const activeSkipEndPct = hasActiveSkip && epSkipEnd > 0 ? Math.min(100 - activeSkipStartPct, (epSkipEnd / activeDur) * 100) : 0;
               return (
                 <motion.div
                   key={ep.audioUrl || ep.link || `${ep.feedUrl || 'episode'}-${ep.title || i}`}
@@ -587,7 +594,11 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                             • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
                           </span>
                         )}
-                        {hasBeenPlayed && <span className="text-xs text-muted-foreground/60 italic">• ouvido</span>}
+                        {hasBeenPlayed && (
+                          <span className="text-xs text-muted-foreground/60 italic">
+                            • {isOutroSkipped ? t('detailHeardOutroSkipped') : t('detailHeard')}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <EpisodeActionButton
@@ -595,6 +606,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                       isActive={isActive}
                       isCurrentlyPlaying={isCurrentlyPlaying}
                       isFinished={isFinished}
+                      isOutroSkipped={isOutroSkipped}
                       progressPct={savedProgressPct}
                       onShortPress={() => handlePlayEpisode(ep)}
                       onMarkFinished={() => markFinished(ep.audioUrl)}
@@ -605,7 +617,19 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                   {/* Saved progress bar — for non-active episodes with partial progress */}
                   {!isActive && savedProgressPct > 1 && (
                     <div className="mt-2 px-0.5">
-                      <div className="h-1 bg-border rounded-full overflow-hidden">
+                      <div className="relative h-1 bg-border rounded-full overflow-hidden">
+                        {activeSkipStartPct > 0 && (
+                          <div
+                            className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                            style={{ width: `${activeSkipStartPct}%` }}
+                          />
+                        )}
+                        {activeSkipEndPct > 0 && (
+                          <div
+                            className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                            style={{ width: `${activeSkipEndPct}%` }}
+                          />
+                        )}
                         <div
                           className="h-full rounded-full bg-primary/50"
                           style={{ width: `${savedProgressPct}%` }}
@@ -695,7 +719,11 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                                 • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
                               </span>
                             )}
-                            {hasBeenPlayed && <span className="text-xs text-muted-foreground/60 italic">• {t('detailHeard')}</span>}
+                            {hasBeenPlayed && (
+                              <span className="text-xs text-muted-foreground/60 italic">
+                                • {isOutroSkipped ? t('detailHeardOutroSkipped') : t('detailHeard')}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <EpisodeActionButton
@@ -703,6 +731,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                           isActive={isActive}
                           isCurrentlyPlaying={isCurrentlyPlaying}
                           isFinished={isFinished}
+                          isOutroSkipped={isOutroSkipped}
                           progressPct={savedProgressPct}
                           onShortPress={() => handlePlayEpisode(ep)}
                           onMarkFinished={() => markFinished(ep.audioUrl)}
@@ -740,17 +769,39 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
                               seek(((touch.clientX - rect.left) / rect.width) * duration);
                             }}
                           >
+                            {activeSkipStartPct > 0 && (
+                              <div
+                                className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
+                                style={{ width: `${activeSkipStartPct}%` }}
+                                title={`Início pulado: ${epSkipStart}s`}
+                              />
+                            )}
+                            {activeSkipEndPct > 0 && (
+                              <div
+                                className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
+                                style={{ width: `${activeSkipEndPct}%` }}
+                                title={`Final pulado: ${epSkipEnd}s`}
+                              />
+                            )}
                             <div
-                              className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300"
+                              className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0"
                               style={{ width: `${progress}%` }}
                             />
                             <div
-                              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all"
+                              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all z-20"
                               style={{ left: `${progress}%`, transform: 'translate(-50%, -50%)' }}
                             />
                           </div>
-                          <div className="flex justify-between mt-1">
+                          <div className="flex justify-between items-center mt-1">
                             <span className="text-xs text-primary/80">{formatDuration(Math.floor(currentTime))}</span>
+                            {hasActiveSkip && (
+                              <span
+                                className="text-[10px] text-amber-500 font-medium px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20"
+                                title="Pular intro/fim ativo nesta playlist"
+                              >
+                                ⚡ {epSkipStart > 0 ? `-${epSkipStart}s início` : ''}{epSkipStart > 0 && epSkipEnd > 0 ? ' • ' : ''}{epSkipEnd > 0 ? `-${epSkipEnd}s fim` : ''}
+                              </span>
+                            )}
                             <span className="text-xs text-muted-foreground">{formatDuration(Math.floor(duration))}</span>
                           </div>
                         </div>

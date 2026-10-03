@@ -7,6 +7,7 @@ import {
   getCachedProgress,
   setCachedProgress,
   getAllFinishedFromCache,
+  getAllOutroSkippedFromCache,
   activateProgressCacheScope,
   getEpisodeResumeState,
   getProgressScopeDecision,
@@ -66,6 +67,7 @@ export function PlayerProvider({ children }) {
   const [playerMinimized, setPlayerMinimized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [finishedUrls, setFinishedUrls] = useState(new Set());
+  const [outroSkippedUrls, setOutroSkippedUrls] = useState(new Set());
   const [user, setUser] = useState(null);
   const [episodeSource, setEpisodeSource] = useState(null);
 
@@ -77,6 +79,7 @@ export function PlayerProvider({ children }) {
   const currentEpisodeRef = useRef(null);
   const autoplayRef = useRef(true);
   const finishedUrlsRef = useRef(new Set());
+  const outroSkippedUrlsRef = useRef(new Set());
   const transitioningRef = useRef(false);
   const loadingWatchdogRef = useRef(null);
   const webPlaybackTransitionRef = useRef(createWebPlaybackTransitionCoordinator());
@@ -106,6 +109,7 @@ export function PlayerProvider({ children }) {
   queueRef.current = queue;
   autoplayRef.current = autoplay;
   finishedUrlsRef.current = finishedUrls;
+  outroSkippedUrlsRef.current = outroSkippedUrls;
   isPlayingRef.current = isPlaying;
 
   // =========================================================================
@@ -308,23 +312,24 @@ export function PlayerProvider({ children }) {
   });
 
   const saveCurrentProgress = useCallback((forceDB = false, options = {}) => {
-    const { recordPlay = true, allowDB = true } = options;
+    const { recordPlay = true, allowDB = true, forceFinished = false, skippedOutro = false } = options;
     const ep = currentEpisodeRef.current;
     if (!ep?.audioUrl) return;
     const useNative = isNative && nativeAudioPlayer.isReady();
     const pos = useNative ? nativeCurrentTimeRef.current : (audioRef.current?.currentTime || 0);
     const dur = useNative ? nativeDurationRef.current : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
-    if (pos < MIN_SAVE_POSITION) return;
-    const finished = dur > 0 && pos / dur >= FINISH_THRESHOLD;
-    if (shouldBlockProgressSaveForGuard(activeProgressRegressionGuardRef.current, ep.audioUrl, pos)) {
+    if (pos < MIN_SAVE_POSITION && !forceFinished) return;
+    const finished = forceFinished || (dur > 0 && pos / dur >= FINISH_THRESHOLD);
+    if (!forceFinished && shouldBlockProgressSaveForGuard(activeProgressRegressionGuardRef.current, ep.audioUrl, pos)) {
       if (recordPlay) recordPodcastPlay();
       return;
     }
     if (activeProgressRegressionGuardRef.current?.audioUrl === ep.audioUrl) {
       activeProgressRegressionGuardRef.current = null;
     }
-    setCachedProgress(ep.audioUrl, pos, dur, finished);
+    setCachedProgress(ep.audioUrl, pos, dur, finished, { skipped_outro: skippedOutro });
     if (finished) setFinishedUrls(prev => new Set([...prev, ep.audioUrl]));
+    if (skippedOutro) setOutroSkippedUrls(prev => new Set([...prev, ep.audioUrl]));
     if (recordPlay) recordPodcastPlay();
     const u = dbProgressUserRef.current;
     if (forceDB && allowDB && u) {
@@ -483,6 +488,38 @@ export function PlayerProvider({ children }) {
 
   const advanceToNextEpisode = useCallback(async (source = 'UNKNOWN') => {
     const isManualAdvance = source === 'MANUAL NEXT' || source === 'MEDIA SESSION NEXT';
+    const isOutroSkip = source === 'SKIP_END' || source === 'NATIVE SKIP_END';
+    const isNaturalEnd = source === 'AUDIO ENDED' || source === 'NATIVE ENDED';
+    const isCompleted = isOutroSkip || isNaturalEnd;
+
+    console.log('[AUDIO_NEXT] advance triggered', {
+      source,
+      title: currentEpisodeRef.current?.title,
+      index: currentIndexRef.current,
+      isOutroSkip,
+      isNaturalEnd,
+    });
+
+    // Save and mark finished/outro-skipped episode immediately upon completion
+    const endingEpisode = currentEpisodeRef.current;
+    if (endingEpisode?.audioUrl && isCompleted) {
+      const dur = (isNative && nativeAudioPlayer.isReady())
+        ? nativeDurationRef.current
+        : (isNaN(audioRef.current?.duration) ? 0 : audioRef.current.duration);
+
+      finishedUrlsRef.current = new Set([...finishedUrlsRef.current, endingEpisode.audioUrl]);
+      setFinishedUrls(new Set(finishedUrlsRef.current));
+
+      if (isOutroSkip) {
+        outroSkippedUrlsRef.current = new Set([...outroSkippedUrlsRef.current, endingEpisode.audioUrl]);
+        setOutroSkippedUrls(new Set(outroSkippedUrlsRef.current));
+      }
+
+      setCachedProgress(endingEpisode.audioUrl, dur, dur, true, { skipped_outro: isOutroSkip });
+      saveCurrentProgress(true, { forceFinished: true, skippedOutro: isOutroSkip });
+      stopSaveTimers();
+    }
+
     if (!autoplayRef.current && !isManualAdvance) {
       console.log('[AUDIO_NEXT] autoplay disabled — stopping after current episode');
       if (isNative && nativeAudioPlayer.isReady()) {
@@ -490,18 +527,14 @@ export function PlayerProvider({ children }) {
         nativeAudioPlayer.stop().catch(() => {});
       }
       transitioningRef.current = false;
+      setIsPlaying(false);
+      clearLoadingState();
       return;
     }
 
     const currentQueue = queueRef.current;
     const nextIdx = currentIndexRef.current + 1;
     const nextEpisode = currentQueue[nextIdx];
-
-    console.log('[AUDIO_NEXT] current episode ended', {
-      source,
-      title: currentEpisodeRef.current?.title,
-      index: currentIndexRef.current,
-    });
 
     if (!nextEpisode) {
       console.log('[AUDIO_NEXT] no next episode available — end of queue');
@@ -519,14 +552,10 @@ export function PlayerProvider({ children }) {
     });
     console.log('[AUDIO_NEXT] next episode URL', { url: nextEpisode.audioUrl });
 
-    // Save + mark current as finished
-    saveCurrentProgress(true);
-    stopSaveTimers();
-    const prevUrl = currentEpisodeRef.current?.audioUrl;
-    if (prevUrl) {
-      finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
-      const dur = (isNative && nativeAudioPlayer.isReady()) ? nativeDurationRef.current : (audioRef.current?.duration || 0);
-      setCachedProgress(prevUrl, dur, dur, true);
+    // For manual next advances where episode didn't naturally complete, ensure progress was flushed
+    if (!isCompleted) {
+      saveCurrentProgress(true);
+      stopSaveTimers();
     }
 
     let webTransition = null;
@@ -539,6 +568,7 @@ export function PlayerProvider({ children }) {
         setCurrentTime(0);
         setDuration(0);
         setFinishedUrls(new Set(finishedUrlsRef.current));
+        setOutroSkippedUrls(new Set(outroSkippedUrlsRef.current));
         armLoadingWatchdog(`advance:${source}`);
         await nativeAudioPlayer.updateQueue(currentQueue, nextIdx, autoplayRef.current);
         console.log('[AUDIO_NEXT] next episode load/preload started (native)', { url: nextEpisode.audioUrl });
@@ -573,6 +603,7 @@ export function PlayerProvider({ children }) {
             setCurrentTime(startAt);
             setDuration(nextDurationSeconds);
             setFinishedUrls(new Set(finishedUrlsRef.current));
+            setOutroSkippedUrls(new Set(outroSkippedUrlsRef.current));
             armLoadingWatchdog(`advance:${source}`);
           },
         });
@@ -780,10 +811,23 @@ export function PlayerProvider({ children }) {
         if (!nextEpisode) return;
 
         console.log('[AUDIO_NEXT] syncing JS state to natively-advanced track', { url, index });
-        const prevUrl = currentEpisodeRef.current?.audioUrl;
+        const prevEp = currentEpisodeRef.current;
+        const prevUrl = prevEp?.audioUrl;
         if (prevUrl && prevUrl !== url) {
+          const skipEnd = prevEp?.skip_end_seconds || 0;
+          const dur = nativeDurationRef.current || 0;
+          const pos = nativeCurrentTimeRef.current || 0;
+          const isOutroSkip = skipEnd > 0 && dur > 0 && pos >= (dur - skipEnd);
+
           finishedUrlsRef.current = new Set([...finishedUrlsRef.current, prevUrl]);
           setFinishedUrls(new Set(finishedUrlsRef.current));
+
+          if (isOutroSkip) {
+            outroSkippedUrlsRef.current = new Set([...outroSkippedUrlsRef.current, prevUrl]);
+            setOutroSkippedUrls(new Set(outroSkippedUrlsRef.current));
+          }
+
+          setCachedProgress(prevUrl, dur, dur, true, { skipped_outro: isOutroSkip });
         }
 
         currentEpisodeRef.current = nextEpisode;
@@ -1006,6 +1050,9 @@ export function PlayerProvider({ children }) {
         const cached = getAllFinishedFromCache();
         setFinishedUrls(cached);
         finishedUrlsRef.current = cached;
+        const cachedOutro = getAllOutroSkippedFromCache();
+        setOutroSkippedUrls(cachedOutro);
+        outroSkippedUrlsRef.current = cachedOutro;
       },
     });
   }, [
@@ -1116,6 +1163,9 @@ export function PlayerProvider({ children }) {
     let cached = getAllFinishedFromCache();
     setFinishedUrls(cached);
     finishedUrlsRef.current = cached;
+    let cachedOutro = getAllOutroSkippedFromCache();
+    setOutroSkippedUrls(cachedOutro);
+    outroSkippedUrlsRef.current = cachedOutro;
 
     if (decision.status !== 'confirmed' || !nextProgressUser?.id) {
       progressHydrationRecoveryRef.current = null;
@@ -1515,7 +1565,9 @@ export function PlayerProvider({ children }) {
       queue, play, togglePlay, seek, playNext, playPrev,
       autoplay, setAutoplay,
       playerMinimized, setPlayerMinimized,
-      finishedUrls, setFinishedUrls, markFinished,
+      finishedUrls, setFinishedUrls,
+      outroSkippedUrls, setOutroSkippedUrls,
+      markFinished,
       getCachedProgress,
       episodeSource, setEpisodeSource,
     }}>

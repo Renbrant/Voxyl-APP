@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.4.6",
+  version: "0.4.8",
 };
 
 const notFoundResponse = {
@@ -40,7 +40,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.6 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.8 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -51,7 +51,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.4.6 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.4.8 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -6903,6 +6903,17 @@ function isUserAdmin(user: D1User, env: Env): boolean {
   return false;
 }
 
+function getNextCloudflareResetUtc(): string {
+  const now = new Date();
+  const reset = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0, 0, 0, 0,
+  ));
+  return reset.toISOString();
+}
+
 async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
   configured: boolean;
   rowsWritten?: number;
@@ -6910,14 +6921,17 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
   rowsRead?: number;
   queryCount?: number;
   date?: string;
-  limits: { d1Writes: number; d1Reads: number; workerRequests: number };
+  resetAt?: string;
+  limits: { d1Writes: number; d1Reads: number; workerRequests: number; resetAt?: string };
   notice?: string;
   groups?: Array<{ date: string; rowsWritten: number; rowsRead: number; queryCount: number }>;
 }> {
+  const resetAt = getNextCloudflareResetUtc();
   const limits = {
     d1Writes: 100000,
     d1Reads: 5000000,
     workerRequests: 100000,
+    resetAt,
   };
 
   const token = env.CLOUDFLARE_API_TOKEN;
@@ -6927,6 +6941,7 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
     return {
       configured: false,
       limits,
+      resetAt,
       notice: "Configure CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID no Worker para telemetria em tempo real.",
     };
   }
@@ -7034,6 +7049,7 @@ async function fetchCloudflareD1Telemetry(env: Env, fresh = false): Promise<{
       rowsRead: reads,
       queryCount: queries,
       limits,
+      resetAt,
       history,
     };
 

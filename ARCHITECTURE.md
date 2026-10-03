@@ -633,8 +633,8 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current documented Android release:
 
 ```text
-Voxyl 0.4.6
-versionCode 406
+Voxyl 0.4.8
+versionCode 408
 ```
 
-The v0.4.6 release incorporates Google Play readiness (secure account deletion and versioned privacy policy), account-scoped private caches, tightened Clerk session validation, and protection against recurring D1 writes during normal account synchronization, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
+The v0.4.8 release introduces visual representations of skipped intro and outro sections on episode scrubber/progress bars, guaranteed completion recording and subtle indicators for outro-skipped episodes, and live Cloudflare daily quota reset countdown telemetry in the Admin dashboard, with full version and platform alignment, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
