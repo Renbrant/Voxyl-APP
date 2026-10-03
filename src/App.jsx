@@ -10,6 +10,7 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import { PlayerProvider } from '@/lib/PlayerContext';
 import Layout from '@/components/Layout';
 // Add page imports here
+import Landing from '@/pages/Landing';
 import Feed from '@/pages/Feed';
 import Explore from '@/pages/Explore';
 import People from '@/pages/People';
@@ -113,6 +114,16 @@ const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
   const location = useLocation();
 
+  // The public landing page is intentionally available immediately and does not
+  // wait for authentication or public-account settings to finish loading.
+  if (location.pathname === '/') {
+    return (
+      <Routes location={location}>
+        <Route path="/" element={<Landing />} />
+      </Routes>
+    );
+  }
+
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-background">
@@ -142,7 +153,7 @@ const AuthenticatedApp = () => {
     <BackButtonHandler />
     <Routes location={location}>
       <Route element={<Layout />}>
-        <Route path="/" element={<Feed />} />
+        <Route path="/app" element={<Feed />} />
         <Route path="/discover" element={<Explore />} />
         <Route path="/explore" element={<LegacyRouteRedirect to="/discover" />} />
         <Route path="/people" element={<People />} />

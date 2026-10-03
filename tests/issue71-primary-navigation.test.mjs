@@ -33,7 +33,7 @@ test('Issue #71 primary navigation architecture', async t => {
     assert.deepEqual(
       PRIMARY_NAVIGATION_PATHS,
       [
-        '/',
+        '/app',
         '/discover',
         '/people',
         '/library',
@@ -90,7 +90,7 @@ test('Issue #71 primary navigation architecture', async t => {
     assert.deepEqual(
       LEGACY_PRIMARY_NAVIGATION.map(item => item.path),
       [
-        '/',
+        '/app',
         '/explore',
         '/playlists',
         '/profile',
@@ -150,7 +150,7 @@ test('Issue #71 primary navigation architecture', async t => {
     assert.deepEqual(
       ACTIVE_PRIMARY_NAVIGATION.map(item => item.path),
       [
-        '/',
+        '/app',
         '/discover',
         '/people',
         '/library',

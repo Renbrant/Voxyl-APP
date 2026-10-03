@@ -1,7 +1,7 @@
 export const PRIMARY_NAVIGATION = Object.freeze([
   Object.freeze({
     id: 'home',
-    path: '/',
+    path: '/app',
     labelKey: 'navHome',
     icon: 'home',
   }),
@@ -41,7 +41,7 @@ export const PRIMARY_NAVIGATION_PATHS = Object.freeze(
 
 const LEGACY_RUNTIME = Object.freeze({
   home: Object.freeze({
-    path: '/',
+    path: '/app',
     labelKey: 'navFeed',
   }),
   discover: Object.freeze({
