@@ -9,6 +9,7 @@ routes = [
 [vars]
 CLERK_AUTHORIZED_PARTIES = "http://127.0.0.1:5173,http://localhost:5173,https://localhost,capacitor://localhost,https://voxyl.renbrant.com,https://v.renbrant.com"
 CLERK_ISSUER = "https://clerk.v.renbrant.com"
+CLOUDFLARE_ACCOUNT_ID = "9631e486fffaa1a728cd33b34b6dd2b7"
 
 [[d1_databases]]
 binding = "DB"
