@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { lang, setLanguage } from '@/lib/i18n';
 
-const APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/v0.4.5/Voxyl-v0.4.5-release.apk';
+const APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/v0.4.10/Voxyl-v0.4.10-release.apk';
 const RELEASES_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/latest';
 
 const copy = {
@@ -43,7 +43,7 @@ const copy = {
     optionShortcutBody: 'Tenha um ícone do Voxyl como se fosse um app, sem precisar baixar uma loja de aplicativos.',
     optionApkTitle: 'Instalar o APK no Android',
     optionApkBody: 'Para quem prefere uma instalação nativa no Android, o APK oficial da versão beta está disponível no GitHub.',
-    currentBeta: 'Beta atual: v0.4.5',
+    currentBeta: 'Beta atual: v0.4.10',
     featuresEyebrow: 'Mais do que um player',
     featuresTitle: 'Uma experiência feita para ouvir e descobrir em comunidade.',
     featureDiscoverTitle: 'Descubra podcasts',
@@ -73,8 +73,8 @@ const copy = {
     iosStep4: 'Toque em “Adicionar”.',
     apkEyebrow: 'Prefere instalar no Android?',
     apkTitle: 'Baixe o APK oficial do Voxyl.',
-    apkBody: 'Durante a fase beta, a versão Android também pode ser instalada diretamente pelo APK publicado no GitHub. O Android pode pedir permissão para instalar aplicativos de fontes externas.',
-    apkButton: 'Baixar APK v0.4.5',
+    apkBody: 'Baixe o APK oficial do GitHub. O Android pode pedir permissão para instalar aplicativos de fontes externas. Esta versão usa uma nova assinatura: se você já tem o Voxyl instalado, desinstale a versão anterior antes de instalar esta. Isso apaga dados e downloads salvos somente no aparelho.',
+    apkButton: 'Baixar APK v0.4.10',
     releasesButton: 'Ver releases no GitHub',
     finalTitle: 'Pronto para ouvir?',
     finalBody: 'Abra o Voxyl agora mesmo. Nenhuma instalação é necessária.',
@@ -105,7 +105,7 @@ const copy = {
     optionShortcutBody: 'Keep a Voxyl icon like a regular app without downloading anything from an app store.',
     optionApkTitle: 'Install the Android APK',
     optionApkBody: 'If you prefer a native Android installation, the official beta APK is available on GitHub.',
-    currentBeta: 'Current beta: v0.4.5',
+    currentBeta: 'Current beta: v0.4.10',
     featuresEyebrow: 'More than a player',
     featuresTitle: 'A listening and discovery experience built around people.',
     featureDiscoverTitle: 'Discover podcasts',
@@ -135,8 +135,8 @@ const copy = {
     iosStep4: 'Tap “Add”.',
     apkEyebrow: 'Prefer an Android installation?',
     apkTitle: 'Download the official Voxyl APK.',
-    apkBody: 'During beta, the Android version can also be installed directly from the APK published on GitHub. Android may ask you to allow installs from external sources.',
-    apkButton: 'Download APK v0.4.5',
+    apkBody: 'Download the official APK from GitHub. Android may ask you to allow installs from external sources. This release uses a new signing key: if Voxyl is already installed, uninstall the previous version before installing this one. This removes data and downloads stored on your device.',
+    apkButton: 'Download APK v0.4.10',
     releasesButton: 'View GitHub releases',
     finalTitle: 'Ready to listen?',
     finalBody: 'Open Voxyl right now. No installation is required.',
