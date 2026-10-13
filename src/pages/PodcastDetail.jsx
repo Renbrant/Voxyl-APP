@@ -4,6 +4,7 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { usePlayer } from '@/lib/PlayerContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDuration } from '@/lib/rssUtils';
+import { getEpisodeDurationLabel } from '@/lib/episodeDuration';
 import { getFeedFromCache, saveFeedToCache, getRSSCacheFromCloud } from '@/lib/feedCache';
 import {
   handlePodcastLikeMutationSuccess,
@@ -271,13 +272,17 @@ export default function PodcastDetail() {
                 const savedProgress = !isActive ? getCachedProgress(ep.audioUrl) : null;
                 const isFinished = (finishedUrls.has(ep.audioUrl) || Boolean(savedProgress?.finished)) && !isActive;
                 const isOutroSkipped = (outroSkippedUrls?.has(ep.audioUrl) || Boolean(savedProgress?.skipped_outro)) && !isActive;
-                const progress = isActive && duration ? (currentTime / duration) * 100 : 0;
+                const progress = isActive && duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0;
                 const savedProgressPct = savedProgress && savedProgress.duration_seconds > 0 && !savedProgress.finished
                   ? (savedProgress.position_seconds / savedProgress.duration_seconds) * 100
                   : 0;
                 const epSkipStart = Math.max(0, Number(isActive ? currentEpisode?.skip_start_seconds : ep.skip_start_seconds) || 0);
                 const epSkipEnd = Math.max(0, Number(isActive ? currentEpisode?.skip_end_seconds : ep.skip_end_seconds) || 0);
                 const activeDur = isActive ? duration : (savedProgress?.duration_seconds || 0);
+                const episodeDurationLabel = getEpisodeDurationLabel(
+                  { ...ep, skip_start_seconds: epSkipStart, skip_end_seconds: epSkipEnd },
+                  activeDur || getCachedProgress(ep.audioUrl)?.duration_seconds,
+                );
                 const hasActiveSkip = activeDur > 0 && (epSkipStart > 0 || epSkipEnd > 0);
                 const activeSkipStartPct = hasActiveSkip && epSkipStart > 0 ? Math.min(100, (epSkipStart / activeDur) * 100) : 0;
                 const activeSkipEndPct = hasActiveSkip && epSkipEnd > 0 ? Math.min(100 - activeSkipStartPct, (epSkipEnd / activeDur) * 100) : 0;
@@ -313,7 +318,7 @@ export default function PodcastDetail() {
                               {ep.title}
                             </p>
                             <div className="flex flex-wrap items-center gap-x-2 mt-1">
-                              {ep.duration && <span className="text-xs text-muted-foreground">{ep.duration}</span>}
+                              {episodeDurationLabel && <span className="text-xs text-muted-foreground">{episodeDurationLabel}</span>}
                               {ep.pubDate && (
                                 <span className="text-xs text-muted-foreground">
                                   • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: isEn ? enUS : ptBR })}
@@ -338,13 +343,13 @@ export default function PodcastDetail() {
                             <div className="relative h-1 bg-border rounded-full overflow-hidden">
                               {activeSkipStartPct > 0 && (
                                 <div
-                                  className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                  className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                                   style={{ width: `${activeSkipStartPct}%` }}
                                 />
                               )}
                               {activeSkipEndPct > 0 && (
                                 <div
-                                  className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                  className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                                   style={{ width: `${activeSkipEndPct}%` }}
                                 />
                               )}
@@ -356,7 +361,7 @@ export default function PodcastDetail() {
                         {isActive && (
                            <div className="mt-2.5 px-0.5">
                              <div
-                               className="relative h-2 bg-border rounded-full overflow-hidden cursor-pointer"
+                               className="relative h-2 bg-border rounded-full cursor-pointer"
                                onClick={e => {
                                  e.stopPropagation();
                                  const rect = e.currentTarget.getBoundingClientRect();
@@ -365,22 +370,22 @@ export default function PodcastDetail() {
                              >
                                {activeSkipStartPct > 0 && (
                                  <div
-                                   className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
+                                   className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-r border-gray-300 pointer-events-none"
                                    style={{ width: `${activeSkipStartPct}%` }}
                                    title={`${t('detailSkipStartTitle')}: ${epSkipStart}s`}
                                  />
                                )}
                                {activeSkipEndPct > 0 && (
                                  <div
-                                   className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
+                                   className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-l border-gray-300 pointer-events-none"
                                    style={{ width: `${activeSkipEndPct}%` }}
                                    title={`${t('detailSkipEndTitle')}: ${epSkipEnd}s`}
                                  />
                                )}
                                <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
                                <div
-                                 className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all z-20"
-                                 style={{ left: `${progress}%`, transform: 'translate(-50%, -50%)' }}
+                                 className="absolute top-1/2 w-3 h-3 rounded-full bg-primary shadow-sm ring-2 ring-card transition-all z-20 pointer-events-none"
+                                 style={{ left: `clamp(6px, ${progress}%, calc(100% - 6px))`, transform: 'translate(-50%, -50%)' }}
                                />
                              </div>
                              <div className="flex justify-between items-center mt-1">
@@ -424,7 +429,7 @@ export default function PodcastDetail() {
                                   {ep.title}
                                 </p>
                                 <div className="flex flex-wrap items-center gap-x-2 mt-1">
-                                  {ep.duration && <span className="text-xs text-muted-foreground">{ep.duration}</span>}
+                                  {episodeDurationLabel && <span className="text-xs text-muted-foreground">{episodeDurationLabel}</span>}
                                   {ep.pubDate && (
                                     <span className="text-xs text-muted-foreground">
                                       • {format(new Date(ep.pubDate), "d MMM yyyy", { locale: ptBR })}
@@ -449,13 +454,13 @@ export default function PodcastDetail() {
                                 <div className="relative h-1 bg-border rounded-full overflow-hidden">
                                   {activeSkipStartPct > 0 && (
                                     <div
-                                      className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                      className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                                       style={{ width: `${activeSkipStartPct}%` }}
                                     />
                                   )}
                                   {activeSkipEndPct > 0 && (
                                     <div
-                                      className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                                      className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                                       style={{ width: `${activeSkipEndPct}%` }}
                                     />
                                   )}
@@ -467,7 +472,7 @@ export default function PodcastDetail() {
                             {isActive && (
                                <div className="mt-2.5 px-0.5">
                                  <div
-                                   className="relative h-2 bg-border rounded-full overflow-hidden cursor-pointer"
+                                   className="relative h-2 bg-border rounded-full cursor-pointer"
                                    onClick={e => {
                                      e.stopPropagation();
                                      const rect = e.currentTarget.getBoundingClientRect();
@@ -476,22 +481,22 @@ export default function PodcastDetail() {
                                  >
                                    {activeSkipStartPct > 0 && (
                                      <div
-                                       className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300 pointer-events-none"
+                                       className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-r border-gray-300 pointer-events-none"
                                        style={{ width: `${activeSkipStartPct}%` }}
                                        title={`${t('detailSkipStartTitle')}: ${epSkipStart}s`}
                                      />
                                    )}
                                    {activeSkipEndPct > 0 && (
                                      <div
-                                       className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300 pointer-events-none"
+                                       className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-l border-gray-300 pointer-events-none"
                                        style={{ width: `${activeSkipEndPct}%` }}
                                        title={`${t('detailSkipEndTitle')}: ${epSkipEnd}s`}
                                      />
                                    )}
                                    <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all duration-300 z-0" style={{ width: `${progress}%` }} />
                                    <div
-                                     className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary shadow-lg shadow-primary/50 transition-all z-20"
-                                     style={{ left: `${progress}%`, transform: 'translate(-50%, -50%)' }}
+                                     className="absolute top-1/2 w-3 h-3 rounded-full bg-primary shadow-sm ring-2 ring-card transition-all z-20 pointer-events-none"
+                                     style={{ left: `clamp(6px, ${progress}%, calc(100% - 6px))`, transform: 'translate(-50%, -50%)' }}
                                    />
                                  </div>
                                  <div className="flex justify-between items-center mt-1">

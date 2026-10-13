@@ -100,10 +100,10 @@ describe('Playlist Skip Scrubber Representation and Outro Skip Completion', () =
       assert.match(audioPlayerSource, /skipEndPct/);
     });
 
-    it('renders distinct amber skip zones on the interactive scrubber bar', () => {
+    it('renders distinct gray skip zones on the interactive scrubber bar', () => {
       assert.match(audioPlayerSource, /skipStartPct > 0/);
       assert.match(audioPlayerSource, /skipEndPct > 0/);
-      assert.match(audioPlayerSource, /bg-amber-400 dark:bg-amber-500/);
+      assert.match(audioPlayerSource, /bg-gray-400 dark:bg-gray-500/);
     });
 
     it('renders subtle skip indicator badge below the scrubber bar', () => {
@@ -114,10 +114,10 @@ describe('Playlist Skip Scrubber Representation and Outro Skip Completion', () =
   });
 
   describe('PlaylistDetail scrubber and episode row presentation', () => {
-    it('renders amber skip zones on the active episode scrubber in PlaylistDetail', () => {
+    it('renders gray skip zones on the active episode scrubber in PlaylistDetail', () => {
       assert.match(playlistDetailSource, /activeSkipStartPct > 0/);
       assert.match(playlistDetailSource, /activeSkipEndPct > 0/);
-      assert.match(playlistDetailSource, /bg-amber-400 dark:bg-amber-500/);
+      assert.match(playlistDetailSource, /bg-gray-400 dark:bg-gray-500/);
     });
 
     it('renders subtle outro skipped text in metadata when episode completed with outro skip', () => {
