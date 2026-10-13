@@ -633,8 +633,8 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.4.11
-versionCode 411
+Voxyl 0.4.12
+versionCode 412
 ```
 
-The v0.4.11 source redirects native root entry to `/app` before authentication loading, preserving search parameters and fragments with replacement navigation. Browser root entry continues to render the public landing page. Existing native deep links retain their destinations. The v0.4.11 Android APK uses the same signing certificate as v0.4.10 for upgrade continuity.
+The v0.4.12 source fixes the native audio bridge initialization failure observed on the Android device: the legacy App bridge returns a listener handle synchronously, so calling `.catch()` on its result throws before playback readiness. Awaiting the registration directly accepts handles and Promises. The optional app-state listener is guarded independently so its failure does not disable the Media3 player. Native startup continues to open `/app`; browser root entry continues to show the landing page.

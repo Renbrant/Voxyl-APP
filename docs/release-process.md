@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.11
-Android versionCode 411
+Voxyl 0.4.12
+Android versionCode 412
 Package com.renbrant.voxyl
 ```
 
@@ -427,25 +427,23 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 
 ## Current Reference Release
 
-The current Android reference release is:
+The current source candidate is:
 
 ```text
-Voxyl v0.4.11
-source commit 3a58d5a1d5add3813e71953dc5bd23c1e40f1f9e
-versionCode 411
-APK Voxyl-v0.4.11-release.apk
-size 12011244 bytes
-SHA-256 4B8DDFFC63D6E03C2DD33BCC3E0427BB9DBDBE8FBBE34A5EE1E96B206D738498
+Voxyl v0.4.12
+source commit main (pin its full SHA before packaging)
+versionCode 412
+APK Voxyl-v0.4.12-release.apk (not yet published)
 ```
 
-This release fixes native startup so Android opens `/app` directly while browser root entry keeps the landing page. Source tests, lint and production build passed in GitHub Actions. APK build, signing, package/version, embedded provenance and alignment checks passed on Windows. Physical-device startup, login and playback smoke still need to be recorded.
+An Android v0.4.11 diagnostic build confirmed the failure `App.addListener(...).catch is not a function`. That error aborts the frontend audio bridge before readiness, causing both Play All and individual playback to be ignored. The v0.4.12 candidate awaits either listener-return type directly and isolates optional app-state listener registration errors.
 
-The signing certificate matches the v0.4.10 replacement key created on October 12, 2026, so v0.4.11 can update that APK in place without uninstalling.
+Executable bridge tests cover the recorded legacy-handle failure, modern Promise handles, asynchronous rejection, synchronous errors, foreground state restoration and subsequent native play calls. Build the corrected APK and validate Play All and individual playback on the device before publication.
 
-Accepted signing certificate SHA-256:
+Keep the signing certificate used for v0.4.10 and v0.4.11:
 
 ```text
 2abf39aec2f5a8e5822080e620189bd3f2317a43a7d626018c7c546b581b3edc
 ```
 
-Publication must use the frozen APK recorded above and pass the official helper's public-download size/hash verification before the landing-page link update is merged. Keep publication evidence alongside the frozen APK.
+The previous published Android release is v0.4.11 from source commit `3a58d5a1d5add3813e71953dc5bd23c1e40f1f9e`, APK size `12011244`, SHA-256 `4B8DDFFC63D6E03C2DD33BCC3E0427BB9DBDBE8FBBE34A5EE1E96B206D738498`. Public-byte identity and signing continuity passed; playback failed on the physical device and is being corrected in this candidate.
