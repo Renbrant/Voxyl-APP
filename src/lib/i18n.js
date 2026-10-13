@@ -301,6 +301,7 @@ const translations = {
   detailIntroSkippedBadge: { pt: 'início pulado', en: 'intro skipped' },
   detailBy: { pt: 'por', en: 'by' },
   detailLastHours: { pt: 'Últimas', en: 'Last' },
+  detailDay: { pt: 'dia', en: 'day' },
   detailDays: { pt: 'dias', en: 'days' },
   detailHours: { pt: 'h', en: 'h' },
   detailFeeds: { pt: 'feeds', en: 'feeds' },

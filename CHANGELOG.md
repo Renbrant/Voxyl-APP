@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.13 - October 2026 (Unreleased)
+
+### Playback Presentation
+
+- Skipped intro/outro sections use gray instead of orange on player and episode timelines, including mobile playlist rows.
+- Added position dots to the floating player and prevented episode position dots from being clipped.
+- Playlist age filters use singular `1 day` / `1 dia` and plural for other counts.
+- Episode metadata shows normalized total duration from playback, saved progress, or RSS. Episodes with cuts also show playable duration in quotes, e.g. `30:00 "25:00"`.
+- If no duration is known yet, omit the duration entirely. Real audio duration is used as soon as playback metadata becomes available; no extra audio downloads are triggered to probe durations.
+- Source metadata synchronized to v0.4.13 / Android versionCode 413. Web deployment, APK packaging and release publication remain pending.
+
 ## v0.4.12 - October 2026
 
 ### Native Audio Initialization

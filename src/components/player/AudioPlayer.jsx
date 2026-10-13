@@ -21,7 +21,7 @@ export default function AudioPlayer() {
 
   if (!currentEpisode) return null;
 
-  const progress = duration ? (currentTime / duration) * 100 : 0;
+  const progress = duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0;
   const skipStart = Math.max(0, Number(currentEpisode?.skip_start_seconds) || 0);
   const skipEnd = Math.max(0, Number(currentEpisode?.skip_end_seconds) || 0);
   const hasSkip = duration > 0 && (skipStart > 0 || skipEnd > 0);
@@ -32,24 +32,28 @@ export default function AudioPlayer() {
     <div className="fixed left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 w-full max-w-md md:max-w-sm z-40 px-3 md:px-0 animate-slide-up select-none [bottom:calc(4rem+env(safe-area-inset-bottom,0px))] md:[bottom:1.5rem]">
       <div className="bg-card border border-border rounded-2xl shadow-2xl overflow-hidden cursor-pointer" onClick={handlePlayerClick}>
         {/* Progress bar always visible */}
-        <div className="h-1 bg-border relative overflow-hidden">
+        <div className="h-2 bg-border relative">
           {isLoading ? (
             <div className="absolute inset-0 animate-[shimmer_1s_linear_infinite] bg-gradient-to-r from-transparent via-primary/80 to-transparent bg-[length:200%_100%]" />
           ) : (
             <>
               {skipStartPct > 0 && (
                 <div
-                  className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                  className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                   style={{ width: `${skipStartPct}%` }}
                 />
               )}
               {skipEndPct > 0 && (
                 <div
-                  className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10"
+                  className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10"
                   style={{ width: `${skipEndPct}%` }}
                 />
               )}
               <div className="h-full rounded-full gradient-primary transition-all z-0" style={{ width: `${progress}%` }} />
+              <div
+                className="absolute top-1/2 w-2 h-2 rounded-full bg-primary z-20 pointer-events-none"
+                style={{ left: `clamp(4px, ${progress}%, calc(100% - 4px))`, transform: 'translate(-50%, -50%)' }}
+              />
             </>
           )}
         </div>
@@ -108,26 +112,30 @@ export default function AudioPlayer() {
                     const rect = e.currentTarget.getBoundingClientRect();
                     seek(((touch.clientX - rect.left) / rect.width) * duration);
                   }}>
-                  <div className="relative h-1.5 bg-border rounded-full overflow-hidden">
+                  <div className="relative h-1.5 bg-border rounded-full">
                     {isLoading ? (
                       <div className="absolute inset-0 animate-[shimmer_1s_linear_infinite] bg-gradient-to-r from-transparent via-primary/80 to-transparent bg-[length:200%_100%]" />
                     ) : (
                       <>
                         {skipStartPct > 0 && (
                           <div
-                            className="absolute top-0 left-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-r border-amber-300/80 pointer-events-none"
+                            className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-r border-gray-300/80 pointer-events-none"
                             style={{ width: `${skipStartPct}%` }}
                             title={`${t('playerSkipStartTitle')}: ${skipStart}s`}
                           />
                         )}
                         {skipEndPct > 0 && (
                           <div
-                            className="absolute top-0 right-0 h-full bg-amber-400 dark:bg-amber-500 z-10 border-l border-amber-300/80 pointer-events-none"
+                            className="absolute top-0 right-0 h-full bg-gray-400 dark:bg-gray-500 z-10 border-l border-gray-300/80 pointer-events-none"
                             style={{ width: `${skipEndPct}%` }}
                             title={`${t('playerSkipEndTitle')}: ${skipEnd}s`}
                           />
                         )}
                         <div className="absolute top-0 left-0 h-full rounded-full gradient-primary transition-all z-0" style={{ width: `${progress}%` }} />
+                        <div
+                          className="absolute top-1/2 w-3 h-3 rounded-full bg-primary ring-2 ring-card shadow-sm z-20 pointer-events-none"
+                          style={{ left: `clamp(6px, ${progress}%, calc(100% - 6px))`, transform: 'translate(-50%, -50%)' }}
+                        />
                       </>
                     )}
                   </div>

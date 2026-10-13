@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.12
-Android versionCode 412
+Voxyl 0.4.13
+Android versionCode 413
 Package com.renbrant.voxyl
 ```
 
@@ -427,13 +427,15 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 
 ## Current Reference Release
 
+The current source candidate is unreleased. Do not deploy, package or publish it until explicitly requested. Published Android baseline: v0.4.12.
+
 The current source candidate is:
 
 ```text
-Voxyl v0.4.12
+Voxyl v0.4.13
 source commit main (pin its full SHA before packaging)
-versionCode 412
-APK Voxyl-v0.4.12-release.apk (not yet published)
+versionCode 413
+APK Voxyl-v0.4.13-release.apk (not yet published)
 ```
 
 An Android v0.4.11 diagnostic build confirmed the failure `App.addListener(...).catch is not a function`. That error aborts the frontend audio bridge before readiness, causing both Play All and individual playback to be ignored. The v0.4.12 candidate awaits either listener-return type directly and isolates optional app-state listener registration errors.
