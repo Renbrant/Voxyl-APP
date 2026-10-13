@@ -15,7 +15,8 @@ Historical entries below retain their original version labels for traceability.
 - Native root redirection preserves search parameters and fragments and replaces the root history entry.
 - Native deep links and existing app routes keep their destinations.
 - Synchronized source version metadata across web, Android (`versionCode 411`), API Worker, documentation and regression tests.
-- The latest published Android APK remains v0.4.10 until the corrected package is built and published.
+- Published Android APK v0.4.11 from source commit `3a58d5a1d5add3813e71953dc5bd23c1e40f1f9e`, retaining the v0.4.10 replacement signing certificate for in-place updates.
+- Updated the landing page's direct APK link and labels to v0.4.11.
 
 ## v0.4.10 - October 2026
 
