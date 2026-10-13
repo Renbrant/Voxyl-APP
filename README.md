@@ -443,8 +443,8 @@ Voxyl is built around explicit user control and server-side authorization.
 
 Android source versionCode: **411**
 
-The v0.4.11 source fixes native startup so Android opens Home at `/app` immediately. Browsers continue to open the public landing page at `/`. The latest published Android APK is v0.4.10 until the corrected v0.4.11 APK is packaged and published.
+The v0.4.11 source fixes native startup so Android opens Home at `/app` immediately. Browsers continue to open the public landing page at `/`. The corrected v0.4.11 Android APK uses the same signing key as v0.4.10 and supports an in-place update.
 
-**[View the v0.4.10 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.10)**
+**[View the v0.4.11 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.11)**
 
 Thank you for helping shape the future of social podcasting.

@@ -427,18 +427,20 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 
 ## Current Reference Release
 
-The current source candidate is:
+The current Android reference release is:
 
 ```text
 Voxyl v0.4.11
-source commit main (pin its full SHA before packaging)
+source commit 3a58d5a1d5add3813e71953dc5bd23c1e40f1f9e
 versionCode 411
-APK Voxyl-v0.4.11-release.apk (not yet published)
+APK Voxyl-v0.4.11-release.apk
+size 12011244 bytes
+SHA-256 4B8DDFFC63D6E03C2DD33BCC3E0427BB9DBDBE8FBBE34A5EE1E96B206D738498
 ```
 
-This candidate fixes native startup so Android opens `/app` directly while browser root entry keeps the landing page. Complete source validation, APK packaging, signing, identity/provenance checks, device smoke and publication verification for this candidate.
+This release fixes native startup so Android opens `/app` directly while browser root entry keeps the landing page. Source tests, lint and production build passed in GitHub Actions. APK build, signing, package/version, embedded provenance and alignment checks passed on Windows. Physical-device startup, login and playback smoke still need to be recorded.
 
-The previous published Android release is v0.4.10 from source commit `e3b63a857d16bef656d0880975bb5024d3ec7bd4`. It uses the replacement signing key created on October 12, 2026. Use that same key for v0.4.11 so installation over v0.4.10 preserves app data.
+The signing certificate matches the v0.4.10 replacement key created on October 12, 2026, so v0.4.11 can update that APK in place without uninstalling.
 
 Accepted signing certificate SHA-256:
 
@@ -446,4 +448,4 @@ Accepted signing certificate SHA-256:
 2abf39aec2f5a8e5822080e620189bd3f2317a43a7d626018c7c546b581b3edc
 ```
 
-The previous v0.4.10 APK SHA-256 is `741F064AD1C56E625F3F464F986FA21B9FCD250BDA083EE3F3B06233731B46DA`. Its published-byte identity passed; physical-device smoke was not recorded during publication. Do not carry earlier v0.4.5 device-test claims into this candidate.
+Publication must use the frozen APK recorded above and pass the official helper's public-download size/hash verification before the landing-page link update is merged. Keep publication evidence alongside the frozen APK.

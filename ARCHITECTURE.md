@@ -637,4 +637,4 @@ Voxyl 0.4.11
 versionCode 411
 ```
 
-The v0.4.11 source redirects native root entry to `/app` before authentication loading, preserving search parameters and fragments with replacement navigation. Browser root entry continues to render the public landing page. Existing native deep links retain their destinations. The latest published APK remains v0.4.10 until Android packaging is completed.
+The v0.4.11 source redirects native root entry to `/app` before authentication loading, preserving search parameters and fragments with replacement navigation. Browser root entry continues to render the public landing page. Existing native deep links retain their destinations. The v0.4.11 Android APK uses the same signing certificate as v0.4.10 for upgrade continuity.

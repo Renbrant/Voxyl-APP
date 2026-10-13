@@ -2,7 +2,7 @@
 
 This directory contains current operational, architecture, authentication, release, migration, and platform-specific documentation for Voxyl.
 
-The current beta line is **Voxyl 0.4.x**, with **v0.4.11** as the current source version. The latest published Android APK remains **v0.4.10** until the corrected package is published. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
+The current beta line is **Voxyl 0.4.x**, with **v0.4.11** as the current source version. The latest published Android APK is **v0.4.11**, which opens Home directly at native startup. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
 
 ## Start Here
 
