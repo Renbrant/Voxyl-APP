@@ -630,11 +630,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 
 ## Current Release Baseline
 
-Current documented Android release:
+Current source release baseline:
 
 ```text
-Voxyl 0.4.10
-versionCode 410
+Voxyl 0.4.11
+versionCode 411
 ```
 
-The v0.4.10 release adds a dedicated close option to the audio player (both expanded and minimized), allowing users to immediately stop playback and dismiss the player while reliably saving listening progress, while preserving the Cloudflare/Clerk platform and the process-owned Media3 playback foundation established in v0.3.2.
+The v0.4.11 source redirects native root entry to `/app` before authentication loading, preserving search parameters and fragments with replacement navigation. Browser root entry continues to render the public landing page. Existing native deep links retain their destinations. The latest published APK remains v0.4.10 until Android packaging is completed.

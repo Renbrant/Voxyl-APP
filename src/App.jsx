@@ -3,6 +3,8 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Component, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { getNativeEntryRedirect } from '@/lib/entryRouting';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { clearAccountClientData } from '@/lib/accountCache';
@@ -114,6 +116,11 @@ const LegacyRouteRedirect = ({ to }) => {
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
   const location = useLocation();
+
+  const nativeEntryRedirect = getNativeEntryRedirect(location, Capacitor.isNativePlatform());
+  if (nativeEntryRedirect) {
+    return <Navigate to={nativeEntryRedirect} replace />;
+  }
 
   // The public landing page is intentionally available immediately and does not
   // wait for authentication or public-account settings to finish loading.

@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.11 - October 2026
+
+### Native Startup Route
+
+- Android and other Capacitor native platforms open Home at `/app` when launched at `/`.
+- The browser and browser-installed PWA continue to render the public landing page at `/`.
+- Native root redirection preserves search parameters and fragments and replaces the root history entry.
+- Native deep links and existing app routes keep their destinations.
+- Synchronized source version metadata across web, Android (`versionCode 411`), API Worker, documentation and regression tests.
+- The latest published Android APK remains v0.4.10 until the corrected package is built and published.
+
 ## v0.4.10 - October 2026
 
 ### Audio Player Close Control and Safe Playback Termination
