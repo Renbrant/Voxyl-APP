@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.10
-Android versionCode 410
+Voxyl 0.4.11
+Android versionCode 411
 Package com.renbrant.voxyl
 ```
 
@@ -427,25 +427,23 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 
 ## Current Reference Release
 
-The current Android reference release is:
+The current source candidate is:
 
 ```text
-Voxyl v0.4.10
-source commit main
-versionCode 410
-APK Voxyl-v0.4.10-release.apk
+Voxyl v0.4.11
+source commit main (pin its full SHA before packaging)
+versionCode 411
+APK Voxyl-v0.4.11-release.apk (not yet published)
 ```
 
-The GitHub tag points to the exact source commit, the Release is public and non-prerelease, exactly one APK asset is present, GitHub reports the same size/digest, and the helper downloaded the public asset again and verified exact byte identity against the frozen APK.
+This candidate fixes native startup so Android opens `/app` directly while browser root entry keeps the landing page. Complete source validation, APK packaging, signing, identity/provenance checks, device smoke and publication verification for this candidate.
 
-Validation classification for the final corrected artifact:
+The previous published Android release is v0.4.10 from source commit `e3b63a857d16bef656d0880975bb5024d3ec7bd4`. It uses the replacement signing key created on October 12, 2026. Use that same key for v0.4.11 so installation over v0.4.10 preserves app data.
+
+Accepted signing certificate SHA-256:
 
 ```text
-source/tests/lint/build: PASS
-artifact identity/signing/freeze: PASS
-literal 0.4.4 -> 0.4.5 physical upgrade: PASS
-Library browser visual validation: 7/7 states PASS
-authenticated primary-navigation and Library device smoke: PASS
-playback singleton architecture: unchanged from accepted v0.3.2 implementation, with final-artifact playback spot-check
-GitHub publication/public-byte verification: PASS
+2abf39aec2f5a8e5822080e620189bd3f2317a43a7d626018c7c546b581b3edc
 ```
+
+The previous v0.4.10 APK SHA-256 is `741F064AD1C56E625F3F464F986FA21B9FCD250BDA083EE3F3B06233731B46DA`. Its published-byte identity passed; physical-device smoke was not recorded during publication. Do not carry earlier v0.4.5 device-test claims into this candidate.
