@@ -256,23 +256,30 @@ class NativeAudioPlayer {
       const App = getApp();
 
       if (App) {
-        this._appStateListener = await App.addListener(
-          'appStateChange',
-          async (state) => {
-            if (!state.isActive) return;
+        try {
+          // Legacy Capacitor.Plugins may return a listener handle directly.
+          // Await supports both that handle and the modern promise API.
+          this._appStateListener = await App.addListener(
+            'appStateChange',
+            async (state) => {
+              if (!state.isActive) return;
 
-            try {
-              const restored = await this._getVoxylPlaybackState(true);
-              this._onRestoredState?.(restored);
-              const position = Math.max(0, Number(restored?.position) || 0);
-              const duration = Math.max(0, Number(restored?.duration) || 0);
+              try {
+                const restored = await this._getVoxylPlaybackState(true);
+                this._onRestoredState?.(restored);
+                const position = Math.max(0, Number(restored?.position) || 0);
+                const duration = Math.max(0, Number(restored?.duration) || 0);
 
-              this._onTimeUpdate?.(position, duration);
-            } catch (_) {
-              // The MediaController connection may still be settling.
+                this._onTimeUpdate?.(position, duration);
+              } catch (_) {
+                // The MediaController connection may still be settling.
+              }
             }
-          }
-        ).catch(() => null);
+          );
+        } catch (error) {
+          this._appStateListener = null;
+          console.warn('[NativeAudioPlayer] app-state listener unavailable:', error?.message);
+        }
       }
 
       const initialState = await this._getVoxylPlaybackState(true);

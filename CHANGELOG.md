@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.12 - October 2026
+
+### Native Audio Initialization
+
+- Fixed `App.addListener(...).catch is not a function`, which aborted native audio initialization and disabled both Play All and individual-episode playback.
+- Accept both synchronous legacy App listener handles and Promise-returning registration methods.
+- Treat app-state registration as optional so a rejected registration cannot disable the process-owned playback service.
+- Added executable bridge regression tests for legacy handles, Promise handles, rejected Promises, synchronous errors, listener cleanup, foreground restoration and subsequent playback.
+- Synchronized source version metadata to v0.4.12 / Android versionCode 412.
+- Corrected APK device playback validation and publication are pending; latest published Android APK remains v0.4.11.
+
 ## v0.4.11 - October 2026
 
 ### Native Startup Route

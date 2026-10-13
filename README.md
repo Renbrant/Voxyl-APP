@@ -137,6 +137,7 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.9** | Player | Playlist skip visualization and outro skip completion recording |
 | **v0.4.10** | Player | Audio player close control with playback stop and progress persistence |
 | **v0.4.11** | Android | Native startup opens Home directly; the landing page remains a browser entry |
+| **v0.4.12** | Android player | Native audio initialization accepts legacy listener handles and optional lifecycle listener failures |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -439,11 +440,11 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.11 — Beta**
+**Voxyl 0.4.12 — Beta**
 
-Android source versionCode: **411**
+Android source versionCode: **412**
 
-The v0.4.11 source fixes native startup so Android opens Home at `/app` immediately. Browsers continue to open the public landing page at `/`. The corrected v0.4.11 Android APK uses the same signing key as v0.4.10 and supports an in-place update.
+The v0.4.12 source fixes native audio initialization when the Android App bridge returns a listener handle directly rather than a Promise. Failure to register the optional app-state listener no longer disables the audio player. The latest published APK remains v0.4.11 until the corrected package passes device validation and is published.
 
 **[View the v0.4.11 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.11)**
 
