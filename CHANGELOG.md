@@ -15,7 +15,9 @@ Historical entries below retain their original version labels for traceability.
 - Treat app-state registration as optional so a rejected registration cannot disable the process-owned playback service.
 - Added executable bridge regression tests for legacy handles, Promise handles, rejected Promises, synchronous errors, listener cleanup, foreground restoration and subsequent playback.
 - Synchronized source version metadata to v0.4.12 / Android versionCode 412.
-- Corrected APK device playback validation and publication are pending; latest published Android APK remains v0.4.11.
+- Signed APK v0.4.12 was installed successfully and the owner confirmed playback working on the physical Android device.
+- Published APK source commit `c38ef32a42343111d74358d732da107bf32bda31`, SHA-256 `029A2E9C0FB4456E45DADCE0C6261E649615AC5C3538730FA0385133ABCB4B1E`, with signer continuity from v0.4.10/v0.4.11.
+- Updated the landing page's direct APK link and version labels to v0.4.12.
 
 ## v0.4.11 - October 2026
 

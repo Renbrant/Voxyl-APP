@@ -444,8 +444,8 @@ Voxyl is built around explicit user control and server-side authorization.
 
 Android source versionCode: **412**
 
-The v0.4.12 source fixes native audio initialization when the Android App bridge returns a listener handle directly rather than a Promise. Failure to register the optional app-state listener no longer disables the audio player. The latest published APK remains v0.4.11 until the corrected package passes device validation and is published.
+The v0.4.12 source fixes native audio initialization when the Android App bridge returns a listener handle directly rather than a Promise. Failure to register the optional app-state listener no longer disables the audio player. The corrected v0.4.12 APK was installed successfully and playback was confirmed by the owner on the physical Android device.
 
-**[View the v0.4.11 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.11)**
+**[View the v0.4.12 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.12)**
 
 Thank you for helping shape the future of social podcasting.

@@ -638,3 +638,5 @@ versionCode 412
 ```
 
 The v0.4.12 source fixes the native audio bridge initialization failure observed on the Android device: the legacy App bridge returns a listener handle synchronously, so calling `.catch()` on its result throws before playback readiness. Awaiting the registration directly accepts handles and Promises. The optional app-state listener is guarded independently so its failure does not disable the Media3 player. Native startup continues to open `/app`; browser root entry continues to show the landing page.
+
+The v0.4.12 APK was installed successfully over the existing app and playback was confirmed by the owner on the physical Android device. The production signing certificate is unchanged from v0.4.10/v0.4.11.
