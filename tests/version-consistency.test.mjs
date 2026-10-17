@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_VERSION = "0.4.13";
-const EXPECTED_ANDROID_VERSION_CODE = 413;
+const EXPECTED_VERSION = "0.4.14";
+const EXPECTED_ANDROID_VERSION_CODE = 414;
 
 async function readText(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -35,17 +35,17 @@ test("keeps active Voxyl version metadata aligned", async () => {
   assert.equal(packageJson.version, EXPECTED_VERSION);
   assert.equal(packageLock.version, EXPECTED_VERSION);
   assert.equal(packageLock.packages[""].version, EXPECTED_VERSION);
-  assert.match(androidGradle, /versionName "0\.4\.13"/);
+  assert.match(androidGradle, /versionName "0\.4\.14"/);
   assert.match(androidGradle, new RegExp(`versionCode ${EXPECTED_ANDROID_VERSION_CODE}\\b`));
-  assert.match(workerSource, /version: "0\.4\.13"/);
-  assert.match(workerSource, /Voxyl\/0\.4\.13 \(\+https:\/\/v\.renbrant\.com\)/);
-  assert.match(workerSource, /Voxyl\/0\.4\.13 RSS Fetcher/);
-  assert.match(readme, /\*\*Voxyl 0\.4\.13 — Beta\*\*/);
-  assert.match(docsReadme, /\*\*v0\.4\.13\*\* as the current source version/);
-  assert.match(architecture, /Voxyl 0\.4\.13\r?\nversionCode 413/);
-  assert.match(releaseProcess, /Voxyl v0\.4\.13\r?\nsource commit/);
+  assert.match(workerSource, /version: "0\.4\.14"/);
+  assert.match(workerSource, /Voxyl\/0\.4\.14 \(\+https:\/\/v\.renbrant\.com\)/);
+  assert.match(workerSource, /Voxyl\/0\.4\.14 RSS Fetcher/);
+  assert.match(readme, /\*\*Voxyl 0\.4\.14 — Beta\*\*/);
+  assert.match(docsReadme, /\*\*v0\.4\.14\*\* as the current source version/);
+  assert.match(architecture, /Voxyl 0\.4\.14\r?\nversionCode 414/);
+  assert.match(releaseProcess, /Voxyl v0\.4\.14\r?\nsource commit/);
   assert.ok(
-    changelog.indexOf("## v0.4.13") < changelog.indexOf("## v0.4.12"),
-    "v0.4.13 must be the newest changelog entry",
+    changelog.indexOf("## v0.4.14") < changelog.indexOf("## v0.4.13"),
+    "v0.4.14 must be the newest changelog entry",
   );
 });

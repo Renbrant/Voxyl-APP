@@ -138,7 +138,9 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.10** | Player | Audio player close control with playback stop and progress persistence |
 | **v0.4.11** | Android | Native startup opens Home directly; the landing page remains a browser entry |
 | **v0.4.12** | Android player | Native audio initialization accepts legacy listener handles and optional lifecycle listener failures |
-| **v0.4.13** | Playback presentation (unreleased) | Gray skip zones, visible position dots, singular day filters and total/playable episode durations |
+| **v0.4.13** | Playback presentation | Gray skip zones, visible position dots, singular day filters and total/playable episode durations |
+
+| **v0.4.14** | Playlist creation (unreleased) | Authenticated creation API, atomic beta limits, safe retries and recoverable save errors |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -441,11 +443,14 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.13 — Beta** (unreleased)
+**Voxyl 0.4.14 — Beta** (unreleased)
 
-Android source versionCode: **413**
+Android source versionCode: **414**
 
-The v0.4.13 candidate improves timeline contrast, playback position dots, playlist filter grammar and episode duration metadata. The published Android release is v0.4.12. Do not deploy the web app, package a new APK or publish v0.4.13 until explicitly requested.
+The v0.4.14 candidate restores playlist creation through the Worker, prevents duplicate retry saves and handles errors in both creation forms. The previous Android baseline is v0.4.13. Deployment and signed APK/AAB packaging require separate validation.
+
+Before deploying the Worker, apply migration `0007_playlist_creation_idempotency.sql`. Creation enforces the beta limits of 2 playlists and 5 podcasts per playlist for standard accounts; administrator status is resolved on the server. A local easter-egg flag no longer grants extra creation capacity. Existing playlists are preserved.
+
 
 **[View the v0.4.12 GitHub Release](https://github.com/Renbrant/Voxyl-APP/releases/tag/v0.4.12)**
 

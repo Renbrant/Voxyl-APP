@@ -44,6 +44,27 @@ function isPlainObject(value) {
 }
 
 export async function apiFetch(path, options = {}) {
+  const { timeoutMs, ...requestOptions } = options;
+  if (!timeoutMs) return performApiFetch(path, requestOptions);
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      performApiFetch(path, { ...requestOptions, signal: controller.signal }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new DOMException('Request timed out', 'TimeoutError');
+          controller.abort(error);
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function performApiFetch(path, options = {}) {
   const { token, headers: optionHeaders, body: optionBody, method = "GET", params, ...fetchOptions } = options;
   const headers = new Headers(optionHeaders);
 
@@ -78,6 +99,7 @@ export async function apiFetch(path, options = {}) {
   if (!response.ok) {
     const error = new Error(data?.error || `HTTP ${response.status}`);
     error.status = response.status;
+    error.code = data?.code || null;
     error.data = data;
     throw error;
   }
@@ -141,7 +163,7 @@ function createEntityClient(entityName) {
       return apiFetch(path).then(normalizeEntityItem);
     },
     create(payload) {
-      return apiFetch(entityPath(entityName), { method: "POST", body: payload }).then(normalizeEntityItem);
+      return apiFetch(entityPath(entityName), { method: "POST", body: payload, timeoutMs: entityName === "Playlist" ? 20000 : undefined }).then(normalizeEntityItem);
     },
     update(id, payload) {
       return apiFetch(entityPath(entityName, id), { method: "PATCH", body: payload }).then(normalizeEntityItem);

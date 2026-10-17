@@ -17,6 +17,7 @@ import { getDownloads } from '@/lib/downloads';
 import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
 import { getCachedContent, setCachedContent } from '@/lib/savedContentCache';
 import {
+  invalidateCreatedPlaylistQueries,
   handlePodcastLikeMutationSuccess,
   loadLikedPlaylistsForRecords,
   loadPlaylistLikeRecords,
@@ -277,7 +278,10 @@ export default function Playlists({ view = 'mine' }) {
                   compact
                   liked={!likedPlaylistsError && !likedPlaylistsLoading && likedPlaylistIds.includes(playlist.id)}
                   currentUser={user}
-                  onEdited={refetchMine}
+                  onEdited={() => {
+                    invalidateCreatedPlaylistQueries(queryClient, user?.id);
+                    void refetchMine();
+                  }}
                 />
               </motion.div>
             ))

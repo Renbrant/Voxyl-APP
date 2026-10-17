@@ -152,3 +152,11 @@ export function togglePlaylistLikeOptimistically({ queryClient, userId, playlist
   playlistToggleInflight.set(inflightKey, promise);
   return promise;
 }
+
+// Playlist mutations change the owned collection shared by Library and My Playlists.
+export function invalidateCreatedPlaylistQueries(queryClient, userId) {
+  invalidateCache(`my-playlists-${userId}`);
+  clearContentCache(userId, 'MY_PLAYLISTS');
+  void queryClient.invalidateQueries({ queryKey: ['my-playlists', userId] });
+  void queryClient.invalidateQueries({ queryKey: ['profile-playlists', userId] });
+}

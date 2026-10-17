@@ -852,6 +852,7 @@ function AuthorizedPlaylistDetail({ id, viewer, user }) {
         playlist={playlist}
         onClose={() => setEditingPlaylist(false)}
         onSaved={() => refetchPlaylist()}
+        onDeleted={() => navigate('/library/my-playlists', { replace: true })}
       />
     )}
     <BottomNav />
