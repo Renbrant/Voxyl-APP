@@ -31,7 +31,7 @@ export default function AccountDeletion() {
         removesTitle: 'O que será excluído',
         removes: [
           'Sua conta e identidade de acesso ao Voxyl.',
-          'Playlists criadas por você.',
+          'Suas playlists originais. Quem salvou uma playlist pública manterá uma cópia privada dos feeds, com identificação genérica.',
           'Curtidas e conteúdo salvo.',
           'Histórico de reprodução e progresso de episódios.',
           'Relacionamentos sociais, bloqueios e referências vinculadas à sua conta.',
@@ -62,7 +62,7 @@ export default function AccountDeletion() {
         removesTitle: 'What will be deleted',
         removes: [
           'Your Voxyl account and sign-in identity.',
-          'Playlists you created.',
+          'Your original playlists. People who saved a public playlist will keep a private copy of its feeds under a generic label.',
           'Likes and saved content.',
           'Listening history and episode progress.',
           'Social relationships, blocks, and referrals linked to your account.',

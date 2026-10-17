@@ -33,9 +33,14 @@ export async function loadPlaylistLikeRecords(userId) {
 export async function loadLikedPlaylistsForRecords(records, ownedPlaylists = []) {
   const likedIds = playlistLikeIds(records);
   const ownedIds = new Set(asArray(ownedPlaylists).map((playlist) => playlist.id));
+  // A private copy transferred during account deletion belongs to this listener
+  // but must still appear in Saved, where they originally followed it.
+  const savedCopies = asArray(ownedPlaylists).filter((playlist) => (
+    playlist.id?.startsWith('saved-') && likedIds.includes(playlist.id)
+  ));
   const idsToLoad = likedIds.filter((id) => !ownedIds.has(id));
   const results = await Promise.allSettled(idsToLoad.map((id) => voxylApi.entities.Playlist.get(id)));
-  const playlists = [];
+  const playlists = [...savedCopies];
 
   results.forEach((result, index) => {
     const playlistId = idsToLoad[index];
