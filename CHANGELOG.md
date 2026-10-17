@@ -6,6 +6,19 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.14 - October 2026 (Unreleased)
+
+### Playlist Creation
+
+- Implemented authenticated playlist creation through the existing entity route and playlist aliases, including empty playlists for “save and find podcasts”.
+- Derive creator identity, avatar, counters and share tokens on the server; validate fields and enforce atomic standard beta limits of 2 playlists / 5 podcasts. Existing playlists are preserved; local easter-egg storage is no longer treated as extra creation entitlement.
+- Added non-destructive migration 0007 for per-owner idempotency keys and payload hashes. Retries return the original playlist instead of inserting duplicates.
+- Both creation forms now preserve inputs, display actionable errors and restore their controls after failure; creation requests have a 20-second timeout covering token acquisition and fetch.
+- Refresh owned-playlist and profile caches only after confirmed success. The legacy Android 0.4.13 payload remains supported by the endpoint.
+- Added real-SQLite Worker integration tests and executable frontend handler/retry/timeout tests.
+- Synchronized source version to v0.4.14 / Android versionCode 414. Apply migration 0007 before Worker deployment; signed Android packaging and device/Play Store validation remain pending.
+- This change addresses playlist creation in #108/#140; the separate account-sync/logout recovery work from #140 remains open.
+
 ## v0.4.13 - October 2026 (Unreleased)
 
 ### Playback Presentation

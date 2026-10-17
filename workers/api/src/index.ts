@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.4.13",
+  version: "0.4.14",
 };
 
 const notFoundResponse = {
@@ -40,7 +40,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.13 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.14 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -51,7 +51,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.4.13 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.4.14 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -4009,6 +4009,10 @@ async function parsePlaylistUpdatePayload(request: Request): Promise<PlaylistUpd
     throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
   }
 
+  return validatePlaylistUpdatePayload(body);
+}
+
+function validatePlaylistUpdatePayload(body: unknown): PlaylistUpdatePayload {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
   }
@@ -5751,6 +5755,136 @@ async function playlistsResponse(request: Request, env: Env): Promise<Response> 
   );
 }
 
+const PLAYLIST_CREATE_MAX_BYTES = 64 * 1024;
+const BETA_PLAYLIST_LIMIT = 2;
+const BETA_PLAYLIST_FEED_LIMIT = 5;
+
+async function readPlaylistCreateBody(request: Request): Promise<Record<string, unknown>> {
+  const reader = request.body?.getReader();
+  if (!reader) throw new PodcastPlayError(400, "invalid-request", "Request body is required");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > PLAYLIST_CREATE_MAX_BYTES) {
+        await reader.cancel();
+        throw new PodcastPlayError(413, "invalid-request", "Playlist request is too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let body: unknown;
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON"); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+  return body as Record<string, unknown>;
+}
+
+async function createPlaylistResponse(request: Request, env: Env): Promise<Response> {
+  const auth = await requireSavedContentUser(request, env);
+  if (auth.response) return auth.response;
+  const user = auth.user!;
+  const claims = auth.claims!;
+  const body = await readPlaylistCreateBody(request);
+  // Compatibility with the existing create-from-podcast client.
+  if (!hasOwn(body, "visibility") && hasOwn(body, "is_public")) {
+    if (typeof body.is_public !== "boolean") {
+      throw new PodcastPlayError(400, "invalid-request", "is_public must be a boolean");
+    }
+    body.visibility = body.is_public ? "public" : "private";
+  }
+  for (const field of ["max_duration", "time_filter_hours"]) {
+    if (hasOwn(body, field) && (typeof body[field] !== "number" || !Number.isSafeInteger(body[field]) || Number(body[field]) < 0)) {
+      throw new PodcastPlayError(400, "invalid-request", `${field} must be a non-negative integer`);
+    }
+  }
+  const validated = validatePlaylistUpdatePayload(body);
+  if (!validated.name) throw new PodcastPlayError(400, "invalid-request", "name is required");
+  const feeds = (validated.rss_feeds || []) as Record<string, unknown>[];
+  const feedLimit = user.role === "admin" ? 100 : BETA_PLAYLIST_FEED_LIMIT;
+  if (feeds.length > feedLimit) throw new PodcastPlayError(409, "feed-limit", `Maximum ${feedLimit} podcasts per playlist`);
+  const payload = {
+    name: validated.name,
+    description: validated.description || null,
+    cover_image: validated.cover_image ? validateAbsoluteHttpUrl(validated.cover_image, "cover_image", true) : null,
+    visibility: validated.visibility || "public",
+    max_duration: validated.max_duration ?? 0,
+    time_filter_hours: validated.time_filter_hours ?? 0,
+    episodes_sort_order: validated.episodes_sort_order || "newest_first",
+    rss_feeds: feeds.map((feed) => ({
+      url: String(feed.url).trim(),
+      title: validateBoundedString(feed.title, "feed title", 500) || null,
+      description: validateBoundedString(feed.description, "feed description", 4000) || null,
+      image: validateBoundedString(feed.image, "feed image", 2048) || null,
+      skip_start_seconds: feed.skip_start_seconds,
+      skip_end_seconds: feed.skip_end_seconds,
+    })),
+  };
+  // Legacy share_token is accepted only as an opaque retry key, never as the
+  // actual server-generated sharing credential. New clients use a UUID.
+  const rawKey = body.creation_request_id ?? body.share_token;
+  const requestId = rawKey === undefined ? null : validateBoundedString(rawKey, "creation_request_id", 128, true);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
+  const requestHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const corsHeaders = getCorsHeaders(request, env);
+  const findRetry = async (): Promise<Response | null> => {
+    if (!requestId) return null;
+    const existing = await env.DB.prepare(
+      `SELECT id, creation_request_hash FROM playlists WHERE creator_id = ? AND creation_request_id = ?`,
+    ).bind(user.id, requestId).first<{ id: string; creation_request_hash: string }>();
+    if (!existing) return null;
+    if (existing.creation_request_hash !== requestHash) {
+      throw new PodcastPlayError(409, "creation-request-conflict", "This creation key was already used for different playlist settings");
+    }
+    const playlist = await env.DB.prepare(`${playlistSelect} WHERE id = ?`).bind(existing.id).first<D1Playlist>();
+    if (!playlist) throw new Error("Created playlist could not be loaded");
+    return jsonResponse({ ok: true, playlist: toPublicPlaylist(playlist), replayed: true }, 200, corsHeaders);
+  };
+  const replay = await findRetry();
+  if (replay) return replay;
+  const id = crypto.randomUUID();
+  const owner = getPlaylistOwnerUpdatePredicate(user, claims);
+  // Count and insert in one SQLite statement: concurrent requests cannot both
+  // consume the last slot. Existing playlists are preserved if above quota.
+  const result = await env.DB.prepare(
+    `INSERT INTO playlists (
+      id, creator_id, creator_clerk_user_id, creator_legacy_base44_user_id,
+      title, description, cover_image, visibility, rss_feeds, max_duration,
+      time_filter_hours, episodes_sort_order, creator_name, creator_email,
+      creator_username, creator_picture, creator_hidden, is_public, share_token,
+      creation_request_id, creation_request_hash, likes_count, plays_count
+    ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0
+      WHERE (SELECT COUNT(*) FROM playlists WHERE ${owner.sql}) < ?
+      ON CONFLICT (creator_id, creation_request_id) WHERE creation_request_id IS NOT NULL DO NOTHING`,
+  ).bind(
+    id, user.id, claims.userId, user.legacy_base44_user_id,
+    payload.name, payload.description, payload.cover_image, payload.visibility,
+    JSON.stringify(payload.rss_feeds), payload.max_duration, payload.time_filter_hours,
+    payload.episodes_sort_order, user.name, user.email, user.username,
+    resolveProfilePicture(user), Number(user.profile_hidden || 0), payload.visibility === "public" ? 1 : 0,
+    crypto.randomUUID(), requestId, requestHash, ...owner.params,
+    user.role === "admin" ? Number.MAX_SAFE_INTEGER : BETA_PLAYLIST_LIMIT,
+  ).run();
+  if (Number(result.meta?.changes || 0) === 0) {
+    const concurrentReplay = await findRetry();
+    if (concurrentReplay) return concurrentReplay;
+    throw new PodcastPlayError(409, "playlist-limit", `Maximum ${BETA_PLAYLIST_LIMIT} playlists during beta`);
+  }
+  const playlist = await env.DB.prepare(`${playlistSelect} WHERE id = ?`).bind(id).first<D1Playlist>();
+  if (!playlist) throw new Error("Created playlist could not be loaded");
+  return jsonResponse({ ok: true, playlist: toPublicPlaylist(playlist) }, 201, corsHeaders);
+}
+
 async function updatePlaylistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -7232,6 +7366,10 @@ if (request.method === "DELETE" && isMeRoute(pathname)) {
         return withCors(await deleteMeResponse(request, env), request, env);
       }
 
+
+      if (request.method === "POST" && (isPlaylistsRoute(pathname) || isEntityPlaylistRoute(pathname))) {
+        return withCors(await createPlaylistResponse(request, env), request, env);
+      }
 
       if (request.method === "GET" && (isPlaylistsRoute(pathname) || isEntityPlaylistRoute(pathname))) {
         return withCors(await playlistsResponse(request, env), request, env);
