@@ -74,7 +74,7 @@ describe('Issue #76 Library dashboard and collection ownership', () => {
     assert.doesNotMatch(librarySource, /CreatePlaylistModal/);
     assert.match(collectionsSource, /view === 'mine' \? \(/);
     assert.match(collectionsSource, /<CreatePlaylistModal/);
-    assert.match(collectionsSource, /onEdited=\{refetchMine\}/);
+    assert.match(collectionsSource, /onEdited=\{\(\) => \{\s*invalidateCreatedPlaylistQueries\(queryClient, user\?\.id\);\s*void refetchMine\(\);/);
   });
 
   it('uses downloaded episodes as the supported episode collection instead of inventing a SavedEpisode backend', () => {

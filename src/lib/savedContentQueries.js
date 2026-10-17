@@ -153,7 +153,7 @@ export function togglePlaylistLikeOptimistically({ queryClient, userId, playlist
   return promise;
 }
 
-// Creation changes the owned collection shared by Library and My Playlists.
+// Playlist mutations change the owned collection shared by Library and My Playlists.
 export function invalidateCreatedPlaylistQueries(queryClient, userId) {
   invalidateCache(`my-playlists-${userId}`);
   clearContentCache(userId, 'MY_PLAYLISTS');

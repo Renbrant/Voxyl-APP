@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import { t } from '@/lib/i18n';
-import { X, Plus, Trash2, Globe, Lock, Loader2, Image as ImageIcon, Sparkles, Users, Search, Timer, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Plus, Trash2, Globe, Lock, Loader2, Image as ImageIcon, Users, Search, Timer, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useQueryClient } from '@tanstack/react-query';
 import { createPlaylistSubmission, getPlaylistCreationErrorKey } from '@/lib/playlistCreation';
@@ -109,31 +109,19 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
   };
   const updateFeedSkip = (i, field, value) => setFeeds(prev => prev.map((f, idx) => idx === i ? { ...f, [field]: Number(value) || 0 } : f));
 
-  const handleGenerateImage = async () => {
-    if (!name.trim()) { setError('Digite um nome para a playlist primeiro'); return; }
-    setGeneratingImage(true);
-    setError('');
-    const prompt = `Create a vibrant and modern podcast playlist cover art for "${name.trim()}". ${description ? `Theme: ${description.trim()}. ` : ''}Style: colorful, eye-catching, professional. No text or logos.`;
-    const res = await voxylApi.integrations.Core.GenerateImage({ prompt }).catch(() => null);
-    setGeneratingImage(false);
-    if (res?.url) {
-      setCoverImage(res.url);
-    } else {
-      setError('Erro ao gerar imagem');
-    }
-  };
-
   const handleUploadImage = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || generatingImage) return;
     setGeneratingImage(true);
     setError('');
-    const res = await voxylApi.integrations.Core.UploadFile({ file }).catch(() => null);
-    setGeneratingImage(false);
-    if (res?.file_url) {
+    try {
+      const res = await voxylApi.integrations.Core.UploadFile({ file });
+      if (!res?.file_url) throw new Error('Erro ao fazer upload da imagem');
       setCoverImage(res.file_url);
-    } else {
-      setError('Erro ao fazer upload da imagem');
+    } catch (error) {
+      setError(error?.message || 'Erro ao fazer upload da imagem');
+    } finally {
+      setGeneratingImage(false);
     }
   };
 
@@ -278,17 +266,9 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
             <div className="flex gap-2">
               <label className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 bg-secondary text-muted-foreground rounded-2xl border border-border cursor-pointer hover:border-primary/30 transition-all text-xs font-medium">
                 <ImageIcon size={14} />
-                Enviar
+                {generatingImage ? 'Enviando...' : 'Enviar'}
                 <input type="file" accept="image/*" onChange={handleUploadImage} disabled={generatingImage} className="hidden" />
               </label>
-              <button
-                onClick={handleGenerateImage}
-                disabled={generatingImage}
-                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 gradient-primary text-white rounded-2xl text-xs font-medium disabled:opacity-50"
-              >
-                {generatingImage ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {generatingImage ? 'Gerando...' : 'Gerar IA'}
-              </button>
             </div>
           </div>
 

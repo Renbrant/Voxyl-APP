@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Trash2, GripVertical, Loader2, Clock, Save, Image as ImageIcon, Lock, Globe, Users, ChevronDown, ChevronUp, Timer, ArrowDown, ArrowUp, AlertCircle } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
 import { t } from '@/lib/i18n';
+import { useQueryClient } from '@tanstack/react-query';
+import { invalidateCreatedPlaylistQueries } from '@/lib/savedContentQueries';
+import { clearCache } from '@/lib/playlistCacheManager';
 
 const DURATION_OPTIONS = [
   { label: 'Sem limite', value: 0 },
@@ -24,16 +27,13 @@ const TIME_FILTER_OPTIONS = [
   { label: 'Último ano', value: 8760 },
 ];
 
-const BASE_MAX_FEEDS = 5;
-const EGG_BONUS_FEEDS = 15;
-
 function getMaxFeeds(isAdmin = false) {
-  if (isAdmin) return Infinity;
-  const unlocked = localStorage.getItem('voxyl_egg_unlocked') === 'true';
-  return BASE_MAX_FEEDS + (unlocked ? EGG_BONUS_FEEDS : 0);
+  return isAdmin ? 100 : 5;
 }
 
-export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) {
+export default function EditPlaylistModal({ playlist, onClose, onSaved, onDeleted, user }) {
+  const queryClient = useQueryClient();
+  const deletingRef = useRef(false);
   const [currentUser, setCurrentUser] = useState(user || null);
 
   useEffect(() => {
@@ -107,11 +107,24 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
   };
 
   const handleDelete = async () => {
+    if (deletingRef.current || saving) return;
+    deletingRef.current = true;
     setDeleting(true);
-    await voxylApi.entities.Playlist.delete(playlist.id);
-    setDeleting(false);
-    onSaved();
-    onClose();
+    setSaveError('');
+    try {
+      await voxylApi.entities.Playlist.delete(playlist.id);
+      invalidateCreatedPlaylistQueries(queryClient, currentUser?.id || playlist.creator_id);
+      clearCache(playlist.id);
+      clearCache(playlist.id, `user:${currentUser?.id || playlist.creator_id}`);
+      queryClient.removeQueries({ queryKey: ['playlist', playlist.id] });
+      (onDeleted || onSaved)?.();
+      onClose();
+    } catch (error) {
+      setSaveError(error?.message || 'Não foi possível excluir a playlist. Tente novamente.');
+    } finally {
+      deletingRef.current = false;
+      setDeleting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -129,6 +142,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, user }) 
         cover_image: coverImage,
         visibility,
       });
+      invalidateCreatedPlaylistQueries(queryClient, currentUser?.id || playlist.creator_id);
       onSaved();
       onClose();
     } catch (error) {

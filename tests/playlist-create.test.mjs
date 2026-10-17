@@ -83,7 +83,11 @@ function setup(options = {}) {
       ...(authenticated ? { authorization: `Bearer ${token}` } : {}) },
     body: raw === undefined ? JSON.stringify(payload) : raw,
   }), env);
-  return { db, create, env };
+  const request = (method, route, payload, authenticated = true) => worker.fetch(new Request(`https://api.voxyl.test${route}`, {
+    method, headers: { 'content-type': 'application/json', ...(authenticated ? { authorization: `Bearer ${token}` } : {}) },
+    ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+  }), env);
+  return { db, create, env, request };
 }
 
 afterEach(() => mock.restoreAll());
@@ -228,4 +232,54 @@ describe('playlist creation through the Worker with real SQLite migrations', () 
     assert.equal((await response.json()).ok, false);
     assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM playlists').get().n, 0);
   });
+});
+
+
+describe('playlist deletion and editing with real SQLite foreign keys', () => {
+  for (const prefix of ['/api/playlists', '/api/entities/playlist']) {
+    it(`${prefix}: authorizes deletion, cleans references and immediately releases quota`, async () => {
+      const { db, create, request } = setup();
+      const { playlist } = await (await create({ name: 'Delete me' })).json();
+      await create({ name: 'Keep me' });
+      assert.equal((await create({ name: 'Full' })).status, 409);
+      db.sqlite.prepare("INSERT INTO playlist_likes (id, playlist_id, user_id) VALUES ('like', ?, 'owner-user')").run(playlist.id);
+      db.sqlite.prepare("INSERT INTO playlist_episodes_cache (id, playlist_id, episodes_json) VALUES ('cache', ?, '[]')").run(playlist.id);
+      db.sqlite.prepare("INSERT INTO podcast_plays (id, playlist_id, user_id) VALUES ('play', ?, 'owner-user')").run(playlist.id);
+      db.sqlite.prepare("INSERT INTO reports (id, reported_playlist_id) VALUES ('report', ?)").run(playlist.id);
+      assert.equal((await request('DELETE', `${prefix}/${playlist.id}`, undefined, false)).status, 401);
+      assert.equal((await request('DELETE', `${prefix}/missing`)).status, 404);
+      db.sqlite.exec("INSERT INTO users (id, clerk_user_id) VALUES ('other', 'clerk-other'); INSERT INTO playlists (id, creator_id, title) VALUES ('theirs', 'other', 'Other');");
+      assert.equal((await request('DELETE', `${prefix}/theirs`)).status, 403);
+      assert.ok(db.sqlite.prepare("SELECT id FROM playlists WHERE id = 'theirs'").get());
+      const response = await request('DELETE', `${prefix}/${playlist.id}`);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { ok: true, deleted: true, id: playlist.id });
+      assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM playlist_likes').get().n, 0);
+      assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM playlist_episodes_cache').get().n, 0);
+      assert.equal(db.sqlite.prepare("SELECT playlist_id FROM podcast_plays WHERE id = 'play'").get().playlist_id, null);
+      assert.equal(db.sqlite.prepare("SELECT reported_playlist_id FROM reports WHERE id = 'report'").get().reported_playlist_id, null);
+      assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), []);
+      assert.equal((await create({ name: 'Replacement' })).status, 201);
+      assert.equal((await request('DELETE', `${prefix}/${playlist.id}`)).status, 404);
+    });
+  }
+
+  for (const [role, limit] of [['user', 5], ['admin', 100]]) {
+    it(`enforces ${role} feed growth limit while preserving maintenance of legacy playlists`, async () => {
+      const { db, create, request } = setup({ role });
+      const { playlist } = await (await create({ name: 'Feeds' })).json();
+      const feeds = count => Array.from({ length: count }, (_, i) => ({ url: `https://example.com/${i}` }));
+      const patch = payload => request('PATCH', `/api/playlists/${playlist.id}`, payload);
+      assert.equal((await patch({ rss_feeds: feeds(limit) })).status, 200);
+      const excess = await patch({ rss_feeds: feeds(limit + 1) });
+      assert.equal(excess.status, 409);
+      assert.equal((await excess.json()).code, 'feed-limit');
+      assert.equal(JSON.parse(db.sqlite.prepare('SELECT rss_feeds FROM playlists WHERE id = ?').get(playlist.id).rss_feeds).length, limit);
+      db.sqlite.prepare('UPDATE playlists SET rss_feeds = ? WHERE id = ?').run(JSON.stringify(feeds(limit + 3)), playlist.id);
+      assert.equal((await patch({ name: 'Renamed' })).status, 200);
+      assert.equal((await patch({ rss_feeds: feeds(limit + 3) })).status, 200);
+      assert.equal((await patch({ rss_feeds: feeds(limit + 2) })).status, 200);
+      assert.equal((await patch({ rss_feeds: feeds(limit + 3) })).status, 409);
+    });
+  }
 });

@@ -8,6 +8,14 @@ Historical entries below retain their original version labels for traceability.
 
 ## v0.4.14 - October 2026 (Unreleased)
 
+### Playlist Management
+
+- Added owner-authorized DELETE routes; D1 cascades likes/episode caches and preserves play/report history with detached references, freeing beta quota immediately.
+- Delete failures now restore controls and show an alert; successful edits/deletes invalidate collection caches, and deletion from details returns to My Playlists.
+- Enforced 5-feed / 100-admin-feed limits on growth during edits while allowing legacy over-limit playlists to be maintained or reduced.
+- Removed unavailable AI cover generation; image upload now reports failures and always restores its control.
+- Kept v0.4.14 / Android 414 as a continuation of unmerged PR #141.
+
 ### Playlist Creation
 
 - Implemented authenticated playlist creation through the existing entity route and playlist aliases, including empty playlists for “save and find podcasts”.

@@ -5885,6 +5885,27 @@ async function createPlaylistResponse(request: Request, env: Env): Promise<Respo
   return jsonResponse({ ok: true, playlist: toPublicPlaylist(playlist) }, 201, corsHeaders);
 }
 
+async function deletePlaylistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
+  const auth = await requireSavedContentUser(request, env);
+  if (auth.response) return auth.response;
+  const user = auth.user!;
+  const claims = auth.claims!;
+  const playlist = await env.DB.prepare(`${playlistSelect} WHERE id = ? LIMIT 1`)
+    .bind(playlistId).first<D1Playlist>();
+  if (!playlist) return jsonResponse(notFoundResponse, 404);
+  if (!isPlaylistOwner(playlist, user, claims)) {
+    return jsonResponse({ ok: false, error: "Forbidden" }, 403);
+  }
+  const ownerPredicate = getPlaylistOwnerUpdatePredicate(user, claims);
+  // D1 foreign keys atomically cascade likes/cache and detach plays/reports.
+  const result = await env.DB.prepare(`DELETE FROM playlists WHERE id = ? AND ${ownerPredicate.sql}`)
+    .bind(playlistId, ...ownerPredicate.params).run();
+  if (Number(result.meta?.changes ?? 0) === 0) {
+    return jsonResponse({ ok: false, error: "Playlist was not deleted" }, 409);
+  }
+  return jsonResponse({ ok: true, deleted: true, id: playlistId }, 200);
+}
+
 async function updatePlaylistResponse(request: Request, env: Env, playlistId: string): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -5914,6 +5935,12 @@ async function updatePlaylistResponse(request: Request, env: Env, playlistId: st
 
   if (!isPlaylistOwner(playlist, user, claims)) {
     return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
+  }
+
+  const feedLimit = user.role === "admin" ? 100 : BETA_PLAYLIST_FEED_LIMIT;
+  if (payload.rss_feeds && payload.rss_feeds.length > feedLimit
+      && payload.rss_feeds.length > parseRssFeeds(playlist.rss_feeds).length) {
+    throw new PodcastPlayError(409, "feed-limit", `Maximum ${feedLimit} podcasts per playlist`);
   }
 
   const updates: string[] = [];
@@ -7522,6 +7549,10 @@ if (request.method === "DELETE" && isMeRoute(pathname)) {
 
       if (request.method === "GET" && playlistId) {
         return withCors(await playlistResponse(request, env, playlistId), request, env);
+      }
+
+      if (request.method === "DELETE" && playlistId) {
+        return withCors(await deletePlaylistResponse(request, env, playlistId), request, env);
       }
 
       if (request.method === "PATCH" && playlistId) {
