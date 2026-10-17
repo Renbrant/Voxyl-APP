@@ -633,10 +633,10 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.4.13
-versionCode 413
+Voxyl 0.4.14
+versionCode 414
 ```
 
-The v0.4.13 candidate is unreleased and adds gray skip zones, visible timeline position dots, singular day labels, and total/playable duration metadata. Duration resolution reuses playback and saved progress before RSS; missing duration does not trigger audio probing.
+The v0.4.14 candidate adds authenticated playlist creation, atomic beta quotas and persisted per-owner idempotency. Migration 0007 adds nullable request keys/hashes without modifying existing playlist data. The frontend retains operation keys for retries and bounds creation requests to 20 seconds. The previous playback presentation behavior remains intact.
 
 The v0.4.12 source fixes the native audio bridge initialization failure observed on the Android device: the legacy App bridge returns a listener handle synchronously, so calling `.catch()` on its result throws before playback readiness. Awaiting the registration directly accepts handles and Promises. The optional app-state listener is guarded independently so its failure does not disable the Media3 player. Native startup continues to open `/app`; browser root entry continues to show the landing page.

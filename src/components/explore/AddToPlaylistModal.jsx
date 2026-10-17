@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { voxylApi } from '@/api/voxylApiClient';
 import { X, Plus, Loader2, CheckCircle2, ListMusic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { generateShareToken } from '@/lib/rssUtils';
+import { useQueryClient } from '@tanstack/react-query';
+import { t } from '@/lib/i18n';
+import { createPlaylistSubmission, getPlaylistCreationErrorKey } from '@/lib/playlistCreation';
+import { invalidateCreatedPlaylistQueries } from '@/lib/savedContentQueries';
 import { motion } from 'framer-motion';
 
 export default function AddToPlaylistModal({ podcast, onClose }) {
+  const queryClient = useQueryClient();
+  const savingRef = useRef(false);
+  const submitRef = useRef(null);
+  if (!submitRef.current) submitRef.current = createPlaylistSubmission(voxylApi.entities.Playlist.create);
+  const [error, setError] = useState('');
   const [user, setUser] = useState(null);
   const [playlists, setPlaylists] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,46 +33,53 @@ export default function AddToPlaylistModal({ podcast, onClose }) {
   }, []);
 
   const addFeedToPlaylist = async (playlist) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
-    const existing = playlist.rss_feeds || [];
-    const alreadyAdded = existing.some(f => f.url === podcast.feedUrl);
-    if (!alreadyAdded) {
-      const updatedFeeds = [...existing, {
-        url: podcast.feedUrl,
-        title: podcast.title,
-        description: podcast.description || '',
-        image: podcast.image || '',
-      }];
-      await voxylApi.entities.Playlist.update(playlist.id, { rss_feeds: updatedFeeds });
+    setError('');
+    try {
+      const existing = playlist.rss_feeds || [];
+      if (!existing.some(f => f.url === podcast.feedUrl)) {
+        await voxylApi.entities.Playlist.update(playlist.id, { rss_feeds: [...existing, {
+          url: podcast.feedUrl, title: podcast.title,
+          description: podcast.description || '', image: podcast.image || '',
+        }] });
+      }
+      invalidateCreatedPlaylistQueries(queryClient, user.id);
+      setDone(playlist.name);
+    } catch (error) {
+      setError(t(getPlaylistCreationErrorKey(error)));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    setSaving(false);
-    setDone(playlist.name);
   };
 
   const handleCreateAndAdd = async () => {
-    if (!newName.trim() || !user) return;
+    if (savingRef.current || !newName.trim() || !user) return;
+    savingRef.current = true;
     setSaving(true);
-    const pl = await voxylApi.entities.Playlist.create({
-      name: newName.trim(),
-      creator_id: user.id,
-      creator_email: user.email,
-      creator_name: user.full_name || user.email.split('@')[0],
-      creator_username: user.username || '',
-      creator_hidden: user.profile_hidden || false,
-      rss_feeds: [{
-        url: podcast.feedUrl,
-        title: podcast.title,
-        description: podcast.description || '',
-        image: podcast.image || '',
-      }],
-      is_public: true,
-      max_duration: 0,
-      share_token: generateShareToken(),
-      likes_count: 0,
-      plays_count: 0,
-    });
-    setSaving(false);
-    setDone(pl.name);
+    setError('');
+    try {
+      const pl = await submitRef.current({
+        name: newName.trim(),
+        rss_feeds: [{
+          url: podcast.feedUrl, title: podcast.title,
+          description: podcast.description || '', image: podcast.image || '',
+        }],
+        visibility: 'public',
+        max_duration: 0,
+      });
+      if (pl) {
+        invalidateCreatedPlaylistQueries(queryClient, user.id);
+        setDone(pl.name);
+      }
+    } catch (error) {
+      setError(t(getPlaylistCreationErrorKey(error)));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
@@ -89,6 +104,7 @@ export default function AddToPlaylistModal({ podcast, onClose }) {
         </div>
 
         <div className="overflow-y-auto flex-1 px-5 pb-24">
+        {error && <p role="alert" className="text-destructive text-sm mb-3">{error}</p>}
         {done ? (
           <div className="flex flex-col items-center py-8 gap-3">
             <div className="w-14 h-14 rounded-full gradient-primary flex items-center justify-center glow-primary">

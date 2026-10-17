@@ -27,6 +27,14 @@ const translations = {
   search: { pt: 'Buscar', en: 'Search' },
   cancel: { pt: 'Cancelar', en: 'Cancel' },
 
+  // Playlist creation
+  playlistCreateFailed: { pt: 'Não foi possível criar a playlist. Tente novamente.', en: 'Could not create the playlist. Please try again.' },
+  playlistCreateTimeout: { pt: 'A confirmação demorou demais. Tente novamente sem alterar os campos para verificar a mesma criação.', en: 'Confirmation timed out. Retry without changing the fields to check the same creation.' },
+  playlistCreateAuthError: { pt: 'Não foi possível verificar sua conta. Entre novamente antes de criar a playlist.', en: 'Could not verify your account. Sign in again before creating a playlist.' },
+  playlistCreateLimit: { pt: 'Limite de 2 playlists atingido durante o beta.', en: 'The beta limit of 2 playlists has been reached.' },
+  playlistCreateFeedLimit: { pt: 'Limite de podcasts por playlist atingido.', en: 'The podcast limit for this playlist has been reached.' },
+  playlistCreateInvalid: { pt: 'Confira o nome, os links e os filtros da playlist e tente novamente.', en: 'Check the playlist name, links and filters, then try again.' },
+
   // Navigation
   navHome: { pt: 'Início', en: 'Home' },
   navDiscover: { pt: 'Descobrir', en: 'Discover' },

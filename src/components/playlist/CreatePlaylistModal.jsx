@@ -1,31 +1,33 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { voxylApi } from '@/api/voxylApiClient';
 import { t } from '@/lib/i18n';
 import { X, Plus, Trash2, Globe, Lock, Loader2, Image as ImageIcon, Sparkles, Users, Search, Timer, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { generateShareToken } from '@/lib/rssUtils';
+import { useQueryClient } from '@tanstack/react-query';
+import { createPlaylistSubmission, getPlaylistCreationErrorKey } from '@/lib/playlistCreation';
+import { invalidateCreatedPlaylistQueries } from '@/lib/savedContentQueries';
 import { cn } from '@/lib/utils';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
 
 const BASE_MAX_PLAYLISTS = 2;
 const BASE_MAX_FEEDS = 5;
-const EGG_BONUS_PLAYLISTS = 5;
-const EGG_BONUS_FEEDS = 15; // 5 + 15 = 20 feeds when egg unlocked
-
+// Beta quotas must match the authoritative Worker limits. Local easter-egg
+// storage is not an entitlement and cannot grant extra creation capacity.
 function getLimits(isAdmin = false) {
-  if (isAdmin) return { MAX_PLAYLISTS: Infinity, MAX_FEEDS: Infinity };
-  const unlocked = localStorage.getItem('voxyl_egg_unlocked') === 'true';
-  return {
-    MAX_PLAYLISTS: BASE_MAX_PLAYLISTS + (unlocked ? EGG_BONUS_PLAYLISTS : 0),
-    MAX_FEEDS: BASE_MAX_FEEDS + (unlocked ? EGG_BONUS_FEEDS : 0),
-  };
+  return isAdmin
+    ? { MAX_PLAYLISTS: Infinity, MAX_FEEDS: 100 }
+    : { MAX_PLAYLISTS: BASE_MAX_PLAYLISTS, MAX_FEEDS: BASE_MAX_FEEDS };
 }
 
 export default function CreatePlaylistModal({ user, onClose, onCreated, playlistCount = 0 }) {
   const isAdmin = user?.role === 'admin';
   const { MAX_PLAYLISTS, MAX_FEEDS } = getLimits(isAdmin);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const savingRef = useRef(false);
+  const submitRef = useRef(null);
+  if (!submitRef.current) submitRef.current = createPlaylistSubmission(voxylApi.entities.Playlist.create);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('public');
@@ -136,31 +138,42 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
   };
 
   const handleSave = async (andExplore = false) => {
+    if (savingRef.current) return;
+    if (!user?.id || user.account_sync_pending) { setError(t('playlistCreateAuthError')); return; }
     if (!name.trim()) { setError('Nome é obrigatório'); return; }
     const validFeeds = feeds.filter(f => f.url.trim());
     if (validFeeds.length > MAX_FEEDS) { setError(`Máximo de ${MAX_FEEDS} podcasts por playlist durante o período de testes.`); return; }
+    savingRef.current = true;
     setSaving(true);
     setError('');
-    await voxylApi.entities.Playlist.create({
-      name: name.trim(),
-      description: description.trim(),
-      creator_id: user.id,
-      creator_name: user.full_name || user.email.split('@')[0],
-      creator_username: user.username || '',
-      creator_hidden: user.profile_hidden || false,
-      creator_picture: user.profile_picture || user.picture || user.avatar_url || '',
-      rss_feeds: validFeeds,
-      visibility,
-      max_duration: maxDuration,
-      time_filter_hours: timeFilterHours,
-      cover_image: coverImage,
-      share_token: generateShareToken(),
-      likes_count: 0,
-      plays_count: 0,
-    });
-    setSaving(false);
-    onCreated();
-    if (andExplore) navigate('/discover');
+    try {
+      const playlist = await submitRef.current({
+        name: name.trim(),
+        description: description.trim(),
+        creator_id: user.id,
+        creator_name: user.full_name || user.email?.split('@')[0] || user.username || 'Listener',
+        creator_username: user.username || '',
+        creator_hidden: user.profile_hidden || false,
+        creator_picture: user.profile_picture || user.picture || user.avatar_url || '',
+        rss_feeds: validFeeds,
+        visibility,
+        max_duration: maxDuration,
+        time_filter_hours: timeFilterHours,
+        cover_image: coverImage,
+        likes_count: 0,
+        plays_count: 0,
+      });
+      if (playlist) {
+        invalidateCreatedPlaylistQueries(queryClient, user.id);
+        onCreated(playlist);
+        if (andExplore) navigate('/discover');
+      }
+    } catch (error) {
+      setError(t(getPlaylistCreationErrorKey(error)));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
@@ -184,7 +197,6 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
         ) : (
         <>
         <div className="overflow-y-auto flex-1 px-5 pb-2">
-        {error && <p className="text-destructive text-sm mb-3 bg-destructive/10 px-3 py-2 rounded-xl">{error}</p>}
 
         <div className="space-y-4">
           <div>
@@ -430,6 +442,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
 
         </div>{/* end scroll */}
         <div className="px-5 pt-3 flex-shrink-0 border-t border-border space-y-2" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 5rem)' }}>
+        {error && <p role="alert" className="text-destructive text-sm mb-3 bg-destructive/10 px-3 py-2 rounded-xl">{error}</p>}
           <Button
             onClick={() => handleSave(false)}
             disabled={saving}
