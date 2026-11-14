@@ -68,7 +68,9 @@ jobs:
 
       - name: Build signed release bundle
         working-directory: android
-        run: ./gradlew :app:bundleRelease --no-daemon
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:bundleRelease --no-daemon
 
       - name: Verify bundle signature
         run: |
