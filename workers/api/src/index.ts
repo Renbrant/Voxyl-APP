@@ -1,10 +1,11 @@
 import { verifyToken } from "@clerk/backend";
 import sax from "sax";
+import { dimensionsAllowed, inspectImage } from "./imageInspection.ts";
 
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.6.6",
+  version: "0.6.7",
 };
 
 const notFoundResponse = {
@@ -44,7 +45,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.6 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.7 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -55,7 +56,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.6.6 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.6.7 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -4234,17 +4235,37 @@ async function handleGetUserPlaylists(request: Request, env: Env): Promise<Respo
   );
 }
 
-function sanitizeUploadFileName(fileName: string): string {
-  const sanitized = fileName
-    .trim()
-    .replace(/[/\\]/g, "-")
-    .replace(/[^a-zA-Z0-9._-]/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 120);
+const UPLOAD_MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Multipart framing around the file; a larger body is rejected before it is buffered.
+const UPLOAD_MAX_REQUEST_BYTES = UPLOAD_MAX_FILE_BYTES + 64 * 1024;
+const UPLOAD_MAX_OBJECTS_PER_USER = 40;
+const UPLOAD_MAX_BYTES_PER_USER = 100 * 1024 * 1024;
 
-  return sanitized || "profile-photo";
+function uploadError(
+  status: number,
+  code: string,
+  error: string,
+  corsHeaders: Record<string, string>,
+): Response {
+  return jsonResponse({ ok: false, code, error }, status, corsHeaders);
 }
 
+// Per-account storage quota. Uploaded images may be in use as avatars or playlist covers,
+// so old objects are never deleted automatically: the upload is refused instead.
+async function isUploadQuotaExceeded(env: Env, clerkUserId: string, incomingBytes: number): Promise<boolean> {
+  const page = await env.VOXYL_MEDIA.list({
+    prefix: `profiles/${clerkUserId}/`,
+    limit: UPLOAD_MAX_OBJECTS_PER_USER + 1,
+  });
+  const usedBytes = page.objects.reduce((total, object) => total + object.size, 0);
+
+  return page.objects.length >= UPLOAD_MAX_OBJECTS_PER_USER
+    || page.truncated
+    || usedBytes + incomingBytes > UPLOAD_MAX_BYTES_PER_USER;
+}
+
+// Only the verified bytes decide the stored type, extension and Content-Type. The client's
+// MIME type and file name are ignored, so nothing user-controlled reaches the object key.
 async function handleFileUpload(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const claims = await getVerifiedClerkClaims(request, env);
@@ -4261,34 +4282,51 @@ async function handleFileUpload(request: Request, env: Env): Promise<Response> {
 
   await assertTermsAcceptedForUserId(env, uploader.id);
 
+  const declaredLength = Number(request.headers.get("content-length"));
+
+  if (Number.isFinite(declaredLength) && declaredLength > UPLOAD_MAX_REQUEST_BYTES) {
+    return uploadError(413, "file-too-large", "File too large (max 5MB)", corsHeaders);
+  }
+
   let formData: FormData;
 
   try {
     formData = await request.formData();
   } catch {
-    return jsonResponse({ ok: false, error: "Request body must be multipart form data" }, 400, corsHeaders);
+    return uploadError(400, "invalid-request", "Request body must be multipart form data", corsHeaders);
   }
 
   const file = formData.get("file");
 
   if (!(file instanceof File) || file.size === 0) {
-    return jsonResponse({ ok: false, error: "No file provided" }, 400, corsHeaders);
+    return uploadError(400, "no-file", "No file provided", corsHeaders);
   }
 
-  if (!file.type.startsWith("image/")) {
-    return jsonResponse({ ok: false, error: "Only image files are allowed" }, 400, corsHeaders);
+  if (file.size > UPLOAD_MAX_FILE_BYTES) {
+    return uploadError(413, "file-too-large", "File too large (max 5MB)", corsHeaders);
   }
 
-  if (file.size > 5 * 1024 * 1024) {
-    return jsonResponse({ ok: false, error: "File too large (max 5MB)" }, 400, corsHeaders);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const image = inspectImage(bytes);
+
+  if (!image) {
+    return uploadError(415, "unsupported-image", "Only JPEG, PNG or WebP images are allowed", corsHeaders);
   }
 
-  const fileName = sanitizeUploadFileName(file.name);
-  const objectKey = `profiles/${claims.userId}/${Date.now()}-${crypto.randomUUID()}-${fileName}`;
+  if (!dimensionsAllowed(image)) {
+    return uploadError(413, "image-dimensions", "Image dimensions are too large", corsHeaders);
+  }
 
-  await env.VOXYL_MEDIA.put(objectKey, await file.arrayBuffer(), {
+  if (await isUploadQuotaExceeded(env, claims.userId, bytes.byteLength)) {
+    return uploadError(413, "storage-quota-exceeded", "Upload storage limit reached", corsHeaders);
+  }
+
+  const objectKey = `profiles/${claims.userId}/${Date.now()}-${crypto.randomUUID()}.${image.extension}`;
+
+  await env.VOXYL_MEDIA.put(objectKey, bytes, {
     httpMetadata: {
-      contentType: file.type,
+      contentType: image.mime,
+      cacheControl: "public, max-age=31536000, immutable",
     },
   });
 

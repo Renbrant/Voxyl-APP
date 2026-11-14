@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.6
-versionCode 606
+Voxyl 0.6.7
+versionCode 607
 ```
+
+The v0.6.7 candidate hardens image uploads (issue #116): type, extension and dimensions are decided from the file bytes, request and file sizes are bounded, and each account has an object and byte quota.
 
 The v0.6.6 candidate closes anonymous user enumeration (issue #144): `searchUsers` and the new `getUserSuggestions` require a session, search needs two or more characters and escapes wildcards, anonymous profiles omit the real name, and blocks hide profiles and playlists in both directions.
 
