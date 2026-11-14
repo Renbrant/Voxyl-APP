@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.4.15
-versionCode 415
+Voxyl 0.4.16
+versionCode 416
 ```
+
+The v0.4.16 candidate moves username validation to the Worker. `PATCH /api/me` now normalizes the handle (trimmed, leading `@` removed, lowercased), enforces length, character and reserved-name rules, and claims it with a precondition guarded by the case-insensitive unique index added in migration 0009, so concurrent claims cannot share a handle. An unavailable handle returns `409` with code `username-taken` and no information about the account that holds it. `playlists.creator_username` is updated in the same D1 batch as the claim. The browser no longer checks availability itself: the generic `User` entity client and the non-existent `syncUsername` function call were removed, and the setup modal reads its text from the i18n catalog.
 
 The v0.4.15 candidate adds authenticated content reporting. `POST /api/reports` derives the reporter from the verified Clerk session, resolves the reported user and content title on the server, enforces one open report per reporter and content with a partial unique index (migration 0008), increments `playlists.reports_count` in the same D1 batch only when the insert happened, and limits each account to 20 reports per day. `GET /api/admin/reports` and `PATCH /api/admin/reports/:id` back the moderation queue in `/admin` and require an administrator. The generic `Report` entity client was removed from the frontend.
 
