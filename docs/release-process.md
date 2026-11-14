@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.6.4
-Android versionCode 604
+Voxyl 0.6.5
+Android versionCode 605
 Package com.renbrant.voxyl
 ```
 
@@ -430,10 +430,10 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 The current source candidate is unreleased. Previous published Android baseline: v0.4.13.
 
 ```text
-Voxyl v0.6.4
-source commit fix/145-remove-hardcoded-admin-0.6.4 (pin its full SHA before packaging)
-versionCode 604
-APK Voxyl-v0.6.4-release.apk (not yet packaged/published; requires device validation of the R8 build)
+Voxyl v0.6.5
+source commit fix/feed-getcache-import-0.6.5 (pin its full SHA before packaging)
+versionCode 605
+APK Voxyl-v0.6.5-release.apk (not yet packaged/published; requires device validation of the R8 build)
 ```
 
 ```text

@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.4
-versionCode 604
+Voxyl 0.6.5
+versionCode 605
 ```
+
+The v0.6.5 candidate fixes a signed-in startup crash on Home caused by a missing `getCache` import in v0.6.2.
 
 The v0.6.4 candidate removes the hardcoded admin email (issue #145): admin access comes from the D1 role, `ADMIN_CLERK_USER_IDS` or `ADMIN_EMAILS`, and the client reads `is_admin` from `/api/me`.
 
