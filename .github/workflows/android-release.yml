@@ -1,0 +1,90 @@
+name: Android Release Bundle
+
+# Manual only. Runs against the protected "production" environment, so it can
+# require a reviewer approval and only sees the Android release secrets stored there.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check release secrets are present
+        run: |
+          missing=0
+          for name in VITE_CLERK_PUBLISHABLE_KEY ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Missing secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          case "$VITE_CLERK_PUBLISHABLE_KEY" in
+            pk_live_*) ;;
+            *) echo "VITE_CLERK_PUBLISHABLE_KEY must be the Clerk production key (pk_live_)"; exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build web assets and sync Android
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: Decode upload keystore
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed release bundle
+        working-directory: android
+        run: ./gradlew :app:bundleRelease --no-daemon
+
+      - name: Verify bundle signature
+        run: |
+          aab=$(ls android/app/build/outputs/bundle/release/*.aab | head -n 1)
+          jarsigner -verify "$aab"
+
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
+
+      - name: Upload bundle and mapping
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxyl-android-release
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: error
+          retention-days: 30
