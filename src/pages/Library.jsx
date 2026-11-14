@@ -81,6 +81,7 @@ export default function Library() {
     accountSyncError,
     navigateToLogin,
     checkUserAuth,
+    logout,
   } = useAuth();
   const canLoadUserData = Boolean(user && !user.account_sync_pending && !accountSyncError);
 
@@ -193,6 +194,14 @@ export default function Library() {
           className="px-6 py-3 rounded-2xl gradient-primary text-white font-semibold text-sm glow-primary"
         >
           Try again
+        </button>
+        {/* Always give a way out, so a conflicting identity does not trap the user (issue #140). */}
+        <button
+          type="button"
+          onClick={() => logout()}
+          className="px-6 py-3 rounded-2xl bg-secondary text-foreground font-semibold text-sm"
+        >
+          {t('settingsLogout')}
         </button>
       </div>
     );
