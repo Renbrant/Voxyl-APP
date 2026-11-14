@@ -33,6 +33,7 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { useAuth } from '@/lib/AuthContext';
 import { useCloudflareResetCountdown } from '@/lib/cloudflareQuota';
 import UserAvatar from '@/components/common/UserAvatar';
+import ReportsPanel from '@/components/admin/ReportsPanel';
 
 export default function Admin() {
   const navigate = useNavigate();
@@ -565,8 +566,21 @@ export default function Admin() {
               >
                 Últimas Playlists ({stats?.recentPlaylists?.length || 0})
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('reports')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  activeTab === 'reports'
+                    ? 'bg-primary text-white'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Denúncias
+              </button>
             </div>
           </div>
+
+          {activeTab === 'reports' && <ReportsPanel enabled={isAdmin} />}
 
           {(activeTab === 'users' || activeTab === 'overview') && (
             <div className="overflow-x-auto">

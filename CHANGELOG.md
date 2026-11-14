@@ -6,6 +6,19 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.4.15 - November 2026 (Unreleased)
+
+### Moderation / Content Reports (issue #55)
+
+- Added authenticated `POST /api/reports`. The reporter comes from the verified Clerk session; the reported user and content title are resolved on the server, and client-sent identity or status fields are ignored. Private playlists the reporter cannot open return 404; reporting your own content is rejected.
+- Added migration `0008_report_moderation.sql`: legacy duplicate open reports are marked `duplicate`, then a partial unique index allows one open report per reporter and content. Repeated or concurrent submissions return `duplicate: true` without a second row.
+- `playlists.reports_count` is now incremented in the same D1 batch and only when the report row was actually inserted (previously the browser read and rewrote the counter, which the Worker rejected for non-owners).
+- Each account can send at most 20 reports per day (HTTP 429 `rate-limited`).
+- Added `GET /api/admin/reports` and `PATCH /api/admin/reports/:id` (administrators only; resolve or dismiss) and a "Denúncias" tab in `/admin`. Lists show usernames, never e-mail addresses.
+- The report form no longer stays on "Enviando..." when the request fails: errors are shown and the form can be retried. Report and block menu text moved to `i18n` (pt/en/es). `Report` was removed from the generic entity client.
+- Added `tests/report-worker.test.mjs`, which runs the Worker against a real SQLite database built from the migrations.
+- Deploy order: apply migration `0008` and deploy the Worker before shipping the new web/Android build.
+
 ## v0.4.14 - October 2026 (Unreleased)
 
 ### Playlist Management

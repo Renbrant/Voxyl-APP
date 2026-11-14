@@ -6,52 +6,53 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { t } from '@/lib/i18n';
 
 const REPORT_REASONS = [
-  { value: 'inappropriate', label: 'Conteúdo inapropriado' },
-  { value: 'spam', label: 'Spam' },
-  { value: 'hate_speech', label: 'Discurso de ódio' },
-  { value: 'misinformation', label: 'Desinformação' },
-  { value: 'other', label: 'Outro' },
+  { value: 'inappropriate', labelKey: 'reportReasonInappropriate' },
+  { value: 'spam', labelKey: 'reportReasonSpam' },
+  { value: 'hate_speech', labelKey: 'reportReasonHate' },
+  { value: 'misinformation', labelKey: 'reportReasonMisinformation' },
+  { value: 'other', labelKey: 'reportReasonOther' },
 ];
 
-export default function ReportBlockMenu({ targetUser, contentType = 'playlist', contentId, contentTitle, currentUser, onBlocked = null }) {
+export function getReportErrorKey(error) {
+  if (error?.status === 401) return 'reportErrorAuth';
+  if (error?.status === 404) return 'reportErrorNotFound';
+  if (error?.status === 429) return 'reportErrorRateLimit';
+  if (error?.code === 'own-content') return 'reportErrorOwnContent';
+  return 'reportErrorGeneric';
+}
+
+export default function ReportBlockMenu({ targetUser, contentType = 'playlist', contentId, currentUser, onBlocked = null }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState(null);
   const [reason, setReason] = useState('');
   const [details, setDetails] = useState('');
   const [loading, setLoading] = useState(false);
   const [blockError, setBlockError] = useState('');
+  const [reportError, setReportError] = useState('');
+  const [alreadyReported, setAlreadyReported] = useState(false);
 
   if (!currentUser || currentUser.id === targetUser?.id) return null;
 
-  const close = () => { setOpen(false); setMode(null); setReason(''); setDetails(''); setBlockError(''); };
+  const close = () => {
+    setOpen(false); setMode(null); setReason(''); setDetails('');
+    setBlockError(''); setReportError(''); setAlreadyReported(false);
+  };
 
   const handleReport = async () => {
-    if (!reason) return;
+    if (!reason || loading) return;
     setLoading(true);
-    // Create report record
-    await voxylApi.entities.Report.create({
-      reporter_id: currentUser.id,
-      reporter_email: currentUser.email,
-      reported_user_id: targetUser.id,
-      reported_user_email: targetUser.email || '',
-      content_type: contentType,
-      content_id: contentId,
-      content_title: contentTitle,
-      reason,
-      details,
-      status: 'pending',
-    });
-    // Increment reports_count on the playlist
-    if (contentType === 'playlist' && contentId) {
-      const playlists = await voxylApi.entities.Playlist.filter({ id: contentId });
-      if (playlists[0]) {
-        await voxylApi.entities.Playlist.update(contentId, {
-          reports_count: (playlists[0].reports_count || 0) + 1,
-        });
-      }
+    setReportError('');
+    try {
+      // Reporter, reported user and title are resolved by the server.
+      const result = await voxylApi.reports.create({ contentType, contentId, reason, details: details.trim() });
+      setAlreadyReported(Boolean(result?.duplicate));
+      setMode('done');
+    } catch (error) {
+      console.error('[ReportBlockMenu] Failed to send report', { contentType, contentId, status: error?.status, code: error?.code });
+      setReportError(t(getReportErrorKey(error)));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-    setMode('done');
   };
 
   const handleBlock = async () => {
@@ -98,14 +99,14 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
               <div className="text-center py-6">
                 <div className="text-4xl mb-3">✅</div>
                 <p className="font-semibold text-foreground">
-                  {reason ? 'Denúncia enviada' : 'Usuário bloqueado'}
+                  {reason ? t('reportSent') : t('reportBlockedDone')}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {reason
-                    ? 'Nossa equipe irá analisar o conteúdo em breve.'
-                    : 'Você não verá mais o conteúdo deste usuário.'}
+                    ? (alreadyReported ? t('reportAlreadySent') : t('reportSentDesc'))
+                    : t('reportBlockedDoneDesc')}
                 </p>
-                <button onClick={stopAndClose} className="mt-4 px-6 py-2 rounded-full bg-secondary text-sm font-medium">Fechar</button>
+                <button onClick={stopAndClose} className="mt-4 px-6 py-2 rounded-full bg-secondary text-sm font-medium">{t('reportClose')}</button>
               </div>
             )}
 
@@ -113,10 +114,10 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
             {mode === 'report' && (
               <>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-grotesk font-bold text-base">Denunciar conteúdo</h3>
+                  <h3 className="font-grotesk font-bold text-base">{t('reportMenuReport')}</h3>
                   <button onClick={stopAndClose}><X size={18} className="text-muted-foreground" /></button>
                 </div>
-                <p className="text-xs text-muted-foreground mb-3">Qual é o problema?</p>
+                <p className="text-xs text-muted-foreground mb-3">{t('reportQuestion')}</p>
                 <div className="space-y-2 mb-3">
                   {REPORT_REASONS.map(r => (
                     <button
@@ -126,23 +127,27 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
                         reason === r.value ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-secondary text-foreground'
                       }`}
                     >
-                      {r.label}
+                      {t(r.labelKey)}
                     </button>
                   ))}
                 </div>
                 <textarea
                   value={details}
                   onChange={e => setDetails(e.target.value)}
-                  placeholder="Detalhes adicionais (opcional)..."
+                  placeholder={t('reportDetailsPlaceholder')}
+                  maxLength={1000}
                   rows={2}
                   className="w-full px-3 py-2 rounded-xl bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none mb-3"
                 />
+                {reportError && (
+                  <p role="alert" className="text-xs text-destructive mb-3">{reportError}</p>
+                )}
                 <button
                   onClick={handleReport}
                   disabled={!reason || loading}
                   className="w-full py-3 rounded-2xl bg-destructive text-white font-semibold text-sm disabled:opacity-50"
                 >
-                  {loading ? 'Enviando...' : 'Enviar denúncia'}
+                  {loading ? t('reportSending') : t('reportSubmit')}
                 </button>
               </>
             )}
@@ -151,7 +156,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
             {mode === 'block' && (
               <>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-grotesk font-bold text-base">Bloquear usuário</h3>
+                  <h3 className="font-grotesk font-bold text-base">{t('reportBlockTitle')}</h3>
                   <button onClick={stopAndClose}><X size={18} className="text-muted-foreground" /></button>
                 </div>
                 <p className="text-sm text-muted-foreground mb-6">
@@ -165,9 +170,9 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
                   disabled={loading}
                   className="w-full py-3 rounded-2xl bg-destructive text-white font-semibold text-sm disabled:opacity-50 mb-2"
                 >
-                  {loading ? 'Bloqueando...' : 'Bloquear'}
+                  {loading ? t('reportBlocking') : t('reportBlockConfirm')}
                 </button>
-                <button onClick={stopAndClose} className="w-full py-3 rounded-2xl bg-secondary text-sm font-medium">Cancelar</button>
+                <button onClick={stopAndClose} className="w-full py-3 rounded-2xl bg-secondary text-sm font-medium">{t('cancel')}</button>
               </>
             )}
 
@@ -175,7 +180,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
             {!mode && (
               <>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-grotesk font-bold text-base">Opções</h3>
+                  <h3 className="font-grotesk font-bold text-base">{t('reportMenuTitle')}</h3>
                   <button onClick={stopAndClose}><X size={18} className="text-muted-foreground" /></button>
                 </div>
                 <div className="space-y-2">
@@ -184,7 +189,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
                     className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-secondary hover:bg-secondary/80 transition-colors"
                   >
                     <Flag size={18} className="text-yellow-400" />
-                    <span className="text-sm font-medium flex-1 text-left">Denunciar conteúdo</span>
+                    <span className="text-sm font-medium flex-1 text-left">{t('reportMenuReport')}</span>
                     <ChevronRight size={16} className="text-muted-foreground" />
                   </button>
                   <button
@@ -192,7 +197,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
                     className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-secondary hover:bg-secondary/80 transition-colors"
                   >
                     <Ban size={18} className="text-destructive" />
-                    <span className="text-sm font-medium flex-1 text-left">Bloquear usuário</span>
+                    <span className="text-sm font-medium flex-1 text-left">{t('reportMenuBlock')}</span>
                     <ChevronRight size={16} className="text-muted-foreground" />
                   </button>
                 </div>

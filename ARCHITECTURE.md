@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.4.14
-versionCode 414
+Voxyl 0.4.15
+versionCode 415
 ```
+
+The v0.4.15 candidate adds authenticated content reporting. `POST /api/reports` derives the reporter from the verified Clerk session, resolves the reported user and content title on the server, enforces one open report per reporter and content with a partial unique index (migration 0008), increments `playlists.reports_count` in the same D1 batch only when the insert happened, and limits each account to 20 reports per day. `GET /api/admin/reports` and `PATCH /api/admin/reports/:id` back the moderation queue in `/admin` and require an administrator. The generic `Report` entity client was removed from the frontend.
 
 The v0.4.14 candidate adds authenticated playlist creation, atomic beta quotas and persisted per-owner idempotency. Migration 0007 adds nullable request keys/hashes without modifying existing playlist data. The frontend retains operation keys for retries and bounds creation requests to 20 seconds. The previous playback presentation behavior remains intact.
 

@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.4.14",
+  version: "0.4.15",
 };
 
 const notFoundResponse = {
@@ -40,7 +40,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.14 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.15 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -51,7 +51,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.4.14 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.4.15 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -162,6 +162,9 @@ type PodcastPlayErrorCode =
   | "forbidden"
   | "invalid-playlist"
   | "identity-conflict"
+  | "not-found"
+  | "rate-limited"
+  | "own-content"
   | "internal-error";
 
 class PodcastPlayError extends Error {
@@ -7064,6 +7067,303 @@ function isUserAdmin(user: D1User, env: Env): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Content reports (issue #55)
+//
+// Reporter identity always comes from the verified Clerk session. The client
+// only names the content and the reason; the reported user and the content
+// title are resolved here so they cannot be forged.
+// ---------------------------------------------------------------------------
+
+const REPORT_REASONS = new Set(["inappropriate", "spam", "hate_speech", "misinformation", "other"]);
+const REPORT_CONTENT_TYPES = new Set(["playlist", "user"]);
+const REPORT_DETAILS_MAX_LENGTH = 1000;
+const REPORT_DAILY_LIMIT_PER_REPORTER = 20;
+const REPORT_ADMIN_LIST_LIMIT = 100;
+// "pending" is the status the legacy Base44 client used for new reports.
+const REPORT_STATUS_FILTERS: Record<string, string> = {
+  open: "r.status IN ('open', 'pending')",
+  resolved: "r.status = 'resolved'",
+  dismissed: "r.status = 'dismissed'",
+  all: "1 = 1",
+};
+const REPORT_ADMIN_TARGET_STATUSES = new Set(["resolved", "dismissed"]);
+
+function isReportsRoute(pathname: string): boolean {
+  return pathname === "/api/reports" || pathname === "/reports";
+}
+
+function isAdminReportsRoute(pathname: string): boolean {
+  return pathname === "/api/admin/reports" || pathname === "/admin/reports";
+}
+
+function getAdminReportId(pathname: string): string | null {
+  const match = /^\/(?:api\/)?admin\/reports\/([^/]+)$/.exec(pathname);
+
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function readJsonObjectBody(request: Request): Promise<Record<string, unknown>> {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be a JSON object");
+  }
+
+  return body as Record<string, unknown>;
+}
+
+type ReportPayload = {
+  contentType: "playlist" | "user";
+  contentId: string;
+  reason: string;
+  details: string | null;
+};
+
+async function parseReportPayload(request: Request): Promise<ReportPayload> {
+  const body = await readJsonObjectBody(request);
+  const contentType = validateBoundedString(body.content_type, "content_type", 32, true) || "";
+  const reason = validateBoundedString(body.reason, "reason", 32, true) || "";
+
+  if (!REPORT_CONTENT_TYPES.has(contentType)) {
+    throw new PodcastPlayError(400, "invalid-request", "content_type must be playlist or user");
+  }
+
+  if (!REPORT_REASONS.has(reason)) {
+    throw new PodcastPlayError(400, "invalid-request", "reason is not supported");
+  }
+
+  return {
+    contentType: contentType as ReportPayload["contentType"],
+    contentId: validateBoundedString(body.content_id, "content_id", 128, true) || "",
+    reason,
+    details: validateBoundedString(body.details, "details", REPORT_DETAILS_MAX_LENGTH),
+  };
+}
+
+async function createReportResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const reporter = auth.user!;
+  const claims = auth.claims!;
+  const payload = await parseReportPayload(request);
+  let reportedUserId: string | null = null;
+  let reportedPlaylistId: string | null = null;
+  let contentTitle: string | null = null;
+
+  if (payload.contentType === "playlist") {
+    const playlist = await env.DB.prepare(`${playlistSelect} WHERE id = ? LIMIT 1`)
+      .bind(payload.contentId)
+      .first<D1Playlist>();
+
+    // A private playlist the reporter cannot open is indistinguishable from a missing one.
+    if (!playlist || !(await canLikePlaylist(env, playlist as D1Playlist & PlaybackPlaylist, reporter, claims))) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
+
+    if (isPlaylistOwner(playlist, reporter, claims)) {
+      throw new PodcastPlayError(400, "own-content", "You cannot report your own content");
+    }
+
+    const creator = await getUserById(env, playlist.creator_id);
+    reportedPlaylistId = playlist.id;
+    reportedUserId = creator?.id ?? null;
+    contentTitle = playlist.title;
+  } else {
+    const target = await getUserById(env, payload.contentId);
+
+    if (!target) {
+      return jsonResponse(notFoundResponse, 404, corsHeaders);
+    }
+
+    if (target.id === reporter.id) {
+      throw new PodcastPlayError(400, "own-content", "You cannot report yourself");
+    }
+
+    reportedUserId = target.id;
+    contentTitle = target.username;
+  }
+
+  const recent = await env.DB.prepare(
+    `SELECT COUNT(*) AS total
+     FROM reports
+     WHERE reporter_id = ?
+       AND created_at > datetime('now', '-1 day')`,
+  )
+    .bind(reporter.id)
+    .first<{ total: number }>();
+
+  if (Number(recent?.total ?? 0) >= REPORT_DAILY_LIMIT_PER_REPORTER) {
+    throw new PodcastPlayError(429, "rate-limited", "Too many reports. Try again later.");
+  }
+
+  const id = crypto.randomUUID();
+  const statements = [
+    env.DB.prepare(
+      `INSERT INTO reports (
+         id, reporter_id, reporter_clerk_user_id, reporter_legacy_base44_user_id,
+         reported_user_id, reported_playlist_id, reason, details, status,
+         content_type, content_id, content_title
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      id,
+      reporter.id,
+      claims.userId,
+      reporter.legacy_base44_user_id,
+      reportedUserId,
+      reportedPlaylistId,
+      payload.reason,
+      payload.details,
+      payload.contentType,
+      payload.contentId,
+      contentTitle,
+    ),
+  ];
+
+  if (reportedPlaylistId) {
+    // Counts only when the insert above really created this report, in the same batch.
+    statements.push(
+      env.DB.prepare(
+        `UPDATE playlists
+         SET reports_count = COALESCE(reports_count, 0) + 1
+         WHERE id = ?
+           AND EXISTS (SELECT 1 FROM reports WHERE id = ?)`,
+      ).bind(reportedPlaylistId, id),
+    );
+  }
+
+  const results = await env.DB.batch(statements);
+  const inserted = Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) > 0;
+
+  if (!inserted) {
+    return jsonResponse({ ok: true, duplicate: true }, 200, corsHeaders);
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      duplicate: false,
+      report: { id, content_type: payload.contentType, content_id: payload.contentId, status: "open" },
+    },
+    201,
+    corsHeaders,
+  );
+}
+
+async function requireAdminUser(request: Request, env: Env): Promise<{ response?: Response; user?: D1User }> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return { response: auth.response };
+  }
+
+  if (!isUserAdmin(auth.user!, env)) {
+    return { response: jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders) };
+  }
+
+  return { user: auth.user };
+}
+
+type D1AdminReport = {
+  id: string;
+  reason: string | null;
+  details: string | null;
+  status: string | null;
+  content_type: string | null;
+  content_id: string | null;
+  content_title: string | null;
+  reported_user_id: string | null;
+  reported_username: string | null;
+  reporter_username: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+async function adminReportsListResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const admin = await requireAdminUser(request, env);
+
+  if (admin.response) {
+    return admin.response;
+  }
+
+  const requestedStatus = new URL(request.url).searchParams.get("status") || "open";
+  const statusFilter = REPORT_STATUS_FILTERS[requestedStatus];
+
+  if (!statusFilter) {
+    throw new PodcastPlayError(400, "invalid-request", "status must be open, resolved, dismissed or all");
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.reason, r.details, r.status, r.content_type, r.content_id, r.content_title,
+       r.reported_user_id, reported.username AS reported_username,
+       reporter.username AS reporter_username, r.created_at, r.updated_at
+     FROM reports r
+     LEFT JOIN users reported ON reported.id = r.reported_user_id
+     LEFT JOIN users reporter ON reporter.id = r.reporter_id
+     WHERE ${statusFilter}
+     ORDER BY r.created_at DESC
+     LIMIT ?`,
+  )
+    .bind(REPORT_ADMIN_LIST_LIMIT)
+    .all<D1AdminReport>();
+
+  return jsonResponse({ ok: true, reports: results || [] }, 200, corsHeaders);
+}
+
+async function adminReportUpdateResponse(request: Request, env: Env, reportId: string): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const admin = await requireAdminUser(request, env);
+
+  if (admin.response) {
+    return admin.response;
+  }
+
+  const body = await readJsonObjectBody(request);
+  const status = validateBoundedString(body.status, "status", 32, true) || "";
+
+  // Reopening is not allowed: it could collide with the one-open-report-per-reporter index.
+  if (!REPORT_ADMIN_TARGET_STATUSES.has(status)) {
+    throw new PodcastPlayError(400, "invalid-request", "status must be resolved or dismissed");
+  }
+
+  const result = await env.DB.prepare(
+    `UPDATE reports
+     SET status = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(status, reportId)
+    .run();
+
+  if (Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0) === 0) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ ok: true, report: { id: reportId, status } }, 200, corsHeaders);
+}
+
 function getNextCloudflareResetUtc(): string {
   const now = new Date();
   const reset = new Date(Date.UTC(
@@ -7380,6 +7680,20 @@ export default {
 
       if (request.method === "GET" && isAdminMetricsRoute(pathname)) {
         return withCors(await adminMetricsResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isReportsRoute(pathname)) {
+        return withCors(await createReportResponse(request, env), request, env);
+      }
+
+      if (request.method === "GET" && isAdminReportsRoute(pathname)) {
+        return withCors(await adminReportsListResponse(request, env), request, env);
+      }
+
+      const adminReportId = getAdminReportId(pathname);
+
+      if (request.method === "PATCH" && adminReportId) {
+        return withCors(await adminReportUpdateResponse(request, env, adminReportId), request, env);
       }
 
       if (request.method === "GET" && isMeRoute(pathname)) {

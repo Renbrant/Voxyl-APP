@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.14
-Android versionCode 414
+Voxyl 0.4.15
+Android versionCode 415
 Package com.renbrant.voxyl
 ```
 
@@ -430,13 +430,17 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 The current source candidate is unreleased. Previous published Android baseline: v0.4.13.
 
 ```text
-Voxyl v0.4.14
-source commit fix/140-playlist-creation-0.4.14 (pin its full SHA before packaging)
-versionCode 414
-APK Voxyl-v0.4.14-release.apk (not yet packaged/published)
+Voxyl v0.4.15
+source commit fix/55-report-endpoint-0.4.15 (pin its full SHA before packaging)
+versionCode 415
+APK Voxyl-v0.4.15-release.apk (not yet packaged/published)
 ```
 
-For this release, apply D1 migration `0007_playlist_creation_idempotency.sql` before deploying the Worker. The migration adds nullable creation request ID/hash columns and a per-owner unique index; it preserves existing playlists. Deploying the endpoint can restore creation for the existing 0.4.13 client. The retry/error UI requires the new web build and, on Android, a newly packaged APK/AAB. Do not treat a source-version bump as proof of deployment or Play Store publication.
+For this release, apply D1 migration `0008_report_moderation.sql` before deploying the Worker. It marks duplicate legacy open reports as `duplicate` and creates the partial unique index used by `POST /api/reports`; existing reports are preserved. Until the Worker is deployed the new web build cannot send reports, so deploy the Worker first. Older app builds keep failing to report (they call a route that never existed) but are otherwise unaffected.
+
+This release line also still requires D1 migration `0007_playlist_creation_idempotency.sql` before deploying the Worker if it has not been applied yet.
+
+Previous note for 0.4.14: apply D1 migration `0007_playlist_creation_idempotency.sql` before deploying the Worker. The migration adds nullable creation request ID/hash columns and a per-owner unique index; it preserves existing playlists. Deploying the endpoint can restore creation for the existing 0.4.13 client. The retry/error UI requires the new web build and, on Android, a newly packaged APK/AAB. Do not treat a source-version bump as proof of deployment or Play Store publication.
 
 Validate authenticated creation with both empty and populated playlists, quota boundaries, retry after a lost response, and failure recovery on Chrome and the installed Play Store build. Standard beta creation limits are 2 playlists / 5 podcasts; local easter-egg storage is not a server entitlement. Existing above-limit playlists are retained. Full plan/quota UX remains tracked in #77.
 
