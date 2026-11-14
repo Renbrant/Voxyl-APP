@@ -295,6 +295,7 @@ const translations = {
   reportBlockConfirm: { pt: 'Bloquear', en: 'Block', es: 'Bloquear' },
   reportBlocking: { pt: 'Bloqueando...', en: 'Blocking...', es: 'Bloqueando...' },
   reportErrorGeneric: { pt: 'Não foi possível enviar a denúncia agora. Tente novamente.', en: 'Could not send the report right now. Please try again.', es: 'No se pudo enviar la denuncia ahora. Inténtalo de nuevo.' },
+  rateLimitGeneric: { pt: 'Muitas ações em pouco tempo. Aguarde um minuto e tente novamente.', en: 'Too many actions in a short time. Please wait a minute and try again.', es: 'Demasiadas acciones en poco tiempo. Espera un minuto e inténtalo de nuevo.' },
   reportErrorRateLimit: { pt: 'Você enviou muitas denúncias hoje. Tente novamente mais tarde.', en: 'You have sent too many reports today. Please try again later.', es: 'Enviaste demasiadas denuncias hoy. Inténtalo más tarde.' },
   reportErrorNotFound: { pt: 'Este conteúdo não está mais disponível.', en: 'This content is no longer available.', es: 'Este contenido ya no está disponible.' },
   reportErrorOwnContent: { pt: 'Você não pode denunciar o seu próprio conteúdo.', en: 'You cannot report your own content.', es: 'No puedes denunciar tu propio contenido.' },

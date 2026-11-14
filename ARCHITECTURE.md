@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.4.16
-versionCode 416
+Voxyl 0.5.0
+versionCode 500
 ```
+
+The v0.5.0 candidate adds rate limiting through the Workers Rate Limiting API. Three bindings (`RL_PUBLIC`, `RL_EXPENSIVE`, `RL_WRITE`) are declared in `workers/api/wrangler.toml`. The dispatcher checks them before routing: podcast search and RSS fetch are limited per user when the caller is authenticated and per IP otherwise, public discovery routes are limited per IP, and authenticated writes are limited per user. A limited request returns 429 with `code: rate-limited` and `Retry-After: 60`. A missing binding disables enforcement, so local development and tests run unlimited. Clients do not retry 429 responses automatically.
 
 The v0.4.16 candidate moves username validation to the Worker. `PATCH /api/me` now normalizes the handle (trimmed, leading `@` removed, lowercased), enforces length, character and reserved-name rules, and claims it with a precondition guarded by the case-insensitive unique index added in migration 0009, so concurrent claims cannot share a handle. An unavailable handle returns `409` with code `username-taken` and no information about the account that holds it. `playlists.creator_username` is updated in the same D1 batch as the claim. The browser no longer checks availability itself: the generic `User` entity client and the non-existent `syncUsername` function call were removed, and the setup modal reads its text from the i18n catalog.
 

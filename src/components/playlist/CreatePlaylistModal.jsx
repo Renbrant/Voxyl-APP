@@ -119,7 +119,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated, playlist
       if (!res?.file_url) throw new Error('Erro ao fazer upload da imagem');
       setCoverImage(res.file_url);
     } catch (error) {
-      setError(error?.message || 'Erro ao fazer upload da imagem');
+      setError(error?.status === 429 ? t('rateLimitGeneric') : (error?.message || 'Erro ao fazer upload da imagem'));
     } finally {
       setGeneratingImage(false);
     }

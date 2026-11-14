@@ -156,3 +156,15 @@ Apply required D1 migrations before deploying Worker code that depends on the ne
 - [Profile Avatar Model](../../docs/profile-avatar-model.md)
 - [Documentation Index](../../docs/README.md)
 - [Cloudflare + Clerk Migration Plan — Historical](../../docs/cloudflare-clerk-migration-plan.md)
+
+## Rate limits
+
+The Worker applies per-route limits through the Workers Rate Limiting API. The bindings are declared in `wrangler.toml` (`[[ratelimits]]`) and require Wrangler 4.36 or later; the repository pins Wrangler 4.162.0 as a devDependency.
+
+| Binding | Routes | Key | Limit |
+|---|---|---|---|
+| `RL_PUBLIC` | `searchUsers`, `getPublicUserProfile`, `getUserPlaylists` | client IP | 60 / 60 s |
+| `RL_EXPENSIVE` | podcast search, RSS fetch | user id when authenticated, otherwise client IP | 20 / 60 s |
+| `RL_WRITE` | every authenticated `POST`, `PATCH`, `PUT` and `DELETE` | user id | 30 / 60 s |
+
+A limited request returns `429` with `{ "ok": false, "code": "rate-limited" }` and `Retry-After: 60`. The response keeps the CORS headers. A missing binding disables enforcement, which is how local development and the test suite run. Limits are starting values; calibrate them against real traffic before tightening, and note that a single playlist open can issue one RSS fetch per feed.

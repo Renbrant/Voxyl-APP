@@ -6,7 +6,19 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
-## v0.4.16 - November 2026 (Unreleased)
+## v0.5.0 - November 2026 (Unreleased)
+
+### Rate limiting (issue #143)
+
+- Added per-route rate limits through the Workers Rate Limiting API, declared in `workers/api/wrangler.toml` as `RL_PUBLIC` (60 requests per minute), `RL_EXPENSIVE` (20 per minute) and `RL_WRITE` (30 per minute).
+- Podcast search and RSS fetch are limited per authenticated user, or per client IP for anonymous callers. Public discovery routes (user search, public profiles, public playlists) are limited per IP. Authenticated writes are limited per user across routes.
+- A limited request returns `429` with `code: rate-limited` and `Retry-After: 60`, and keeps the CORS headers so the browser can read it.
+- A missing binding disables enforcement, so local development and tests run unlimited. An unverifiable token is treated as anonymous and never turns the check into a 500.
+- The client does not retry 429 responses automatically, and playlist creation and upload show a rate limit message.
+- Wrangler is now a pinned devDependency (4.162.0), so `npx wrangler` uses the version that supports `[[ratelimits]]`.
+- Added `tests/rate-limit-worker.test.mjs` and `tests/rate-limit-client.test.mjs`.
+
+## v0.4.16 - November 2026 (Worker deployed)
 
 ### Usernames / Secure Validation (issue #56)
 

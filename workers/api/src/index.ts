@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.4.16",
+  version: "0.5.0",
 };
 
 const notFoundResponse = {
@@ -37,10 +37,13 @@ interface Env {
   ADMIN_EMAILS?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  RL_PUBLIC?: RateLimitBinding;
+  RL_EXPENSIVE?: RateLimitBinding;
+  RL_WRITE?: RateLimitBinding;
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.16 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.5.0 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -51,7 +54,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.4.16 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.5.0 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -602,6 +605,113 @@ function getPlaylistId(pathname: string): string | null {
 
 function isPlaylistRoute(pathname: string): boolean {
   return isPlaylistsRoute(pathname) || getPlaylistId(pathname) !== null;
+}
+
+type RateLimitBinding = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+};
+
+type RateLimitClass = "public" | "expensive" | "write";
+
+const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
+
+// Classifies a request for rate limiting, or returns null when it is not limited.
+// Public discovery and RSS/search are the costly anonymous surface; authenticated
+// writes are limited per user. Reads of the caller's own data are not limited here.
+function getRateLimitClass(request: Request, pathname: string): RateLimitClass | null {
+  if (request.method === "POST" && (isPodcastSearchRoute(pathname) || isRssFetchRoute(pathname))) {
+    return "expensive";
+  }
+
+  if (
+    request.method === "POST" &&
+    (isSearchUsersRoute(pathname) || isGetPublicUserProfileRoute(pathname) || isGetUserPlaylistsRoute(pathname))
+  ) {
+    return "public";
+  }
+
+  if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method)) {
+    return "write";
+  }
+
+  return null;
+}
+
+function getRateLimiter(env: Env, rateLimitClass: RateLimitClass): RateLimitBinding | undefined {
+  switch (rateLimitClass) {
+    case "public":
+      return env.RL_PUBLIC;
+    case "expensive":
+      return env.RL_EXPENSIVE;
+    case "write":
+      return env.RL_WRITE;
+  }
+}
+
+function getClientIp(request: Request): string {
+  return request.headers.get("cf-connecting-ip") || "unknown";
+}
+
+// Limits must never turn an auth lookup failure (for example a JWKS timeout) into
+// a 500: an unverifiable caller is simply treated as anonymous.
+async function lookupRateLimitUserId(request: Request, env: Env): Promise<string | null> {
+  try {
+    const claims = await getVerifiedClerkClaims(request, env);
+    return claims?.userId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Returns a 429 response when the request exceeds its limit, otherwise null.
+// A missing binding means the limit is not enforced (local development and tests).
+async function enforceRateLimit(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const rateLimitClass = getRateLimitClass(request, pathname);
+
+  if (!rateLimitClass) {
+    return null;
+  }
+
+  const limiter = getRateLimiter(env, rateLimitClass);
+
+  if (!limiter) {
+    return null;
+  }
+
+  let key: string;
+
+  if (rateLimitClass === "write") {
+    // Unauthenticated writes are rejected by their handlers; there is no user to limit.
+    const userId = await lookupRateLimitUserId(request, env);
+
+    if (!userId) {
+      return null;
+    }
+
+    key = `write:user:${userId}`;
+  } else if (rateLimitClass === "expensive") {
+    const userId = await lookupRateLimitUserId(request, env);
+    const subject = userId ? `user:${userId}` : `ip:${getClientIp(request)}`;
+    key = `${request.method} ${pathname}:${subject}`;
+  } else {
+    key = `${request.method} ${pathname}:ip:${getClientIp(request)}`;
+  }
+
+  const { success } = await limiter.limit({ key });
+
+  if (success) {
+    return null;
+  }
+
+  return jsonResponse(
+    {
+      ok: false,
+      code: "rate-limited",
+      error: "Too many requests",
+    },
+    429,
+    { "retry-after": String(RATE_LIMIT_RETRY_AFTER_SECONDS) },
+  );
 }
 
 function healthCheckResponse(request: Request): Response {
@@ -7803,6 +7913,12 @@ export default {
 
       if (request.method === "OPTIONS") {
         return optionsResponse(request, env);
+      }
+
+      const rateLimitResponse = await enforceRateLimit(request, env, pathname);
+
+      if (rateLimitResponse) {
+        return withCors(rateLimitResponse, request, env);
       }
 
       if ((request.method === "GET" || request.method === "HEAD") && (pathname === "/health" || pathname === "/api/health")) {

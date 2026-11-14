@@ -26,6 +26,7 @@ export function getPlaylistCreationErrorKey(error) {
   if (code === 'playlist-limit') return 'playlistCreateLimit';
   if (code === 'feed-limit') return 'playlistCreateFeedLimit';
   if (code === 'identity-conflict' || error?.status === 401 || error?.status === 403) return 'playlistCreateAuthError';
+  if (error?.status === 429 || code === 'rate-limited') return 'rateLimitGeneric';
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'playlistCreateTimeout';
   if (error?.status === 400 || error?.status === 413) return 'playlistCreateInvalid';
   return 'playlistCreateFailed';
