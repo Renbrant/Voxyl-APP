@@ -6,7 +6,22 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
-## v0.4.15 - November 2026 (Unreleased)
+## v0.4.16 - November 2026 (Unreleased)
+
+### Usernames / Secure Validation (issue #56)
+
+- `PATCH /api/me` now accepts `username`. The previous handler silently ignored the field, so the browser's save never persisted a handle.
+- Normalization is server-side: the handle is trimmed, a leading `@` is removed and the value is lowercased before any check, so every client stores the same canonical form.
+- Server-side rules: 3 to 30 characters, `a-z`, `0-9` and `_` only, and a small reserved list (`admin`, `voxyl`, `support`, …) that would allow impersonating the product. Invalid input returns `400` with code `invalid-username`.
+- Uniqueness is case-insensitive and enforced under concurrency. The claim runs with a `NOT EXISTS` precondition inside a D1 batch, and migration `0009_username_normalization.sql` adds a unique index on `LOWER(username)` as the second guard. An unavailable handle returns `409` with code `username-taken`.
+- Conflict responses carry no information about the account holding the handle, so the endpoint cannot be used to enumerate users.
+- `playlists.creator_username` is updated in the same batch as the claim, and the update is a no-op when the claim is refused.
+- Migration `0009_username_normalization.sql` resolves pre-existing case-insensitive collisions (the earliest account keeps the handle; later ones get a deterministic suffix derived from their id), rewrites stored handles as trimmed lowercase, clears whitespace-only handles and realigns playlist creator handles.
+- Removed the generic `User` entity client from the frontend, along with the browser-side availability lookup and the call to the `syncUsername` function, which had no Worker route and always failed silently.
+- The username modal now reports server errors instead of assuming success, and reads its text from the i18n catalog (pt/en/es) rather than hardcoded Portuguese.
+- Added `tests/username-worker.test.mjs`: 25 tests covering normalization, rule enforcement, case-insensitive conflicts, concurrent claims, creator handle sync, migration behavior and the client helpers, against a real SQLite database built from the repository migrations.
+
+## v0.4.15 - November 2026 (Worker deployed)
 
 ### Moderation / Content Reports (issue #55)
 

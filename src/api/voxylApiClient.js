@@ -184,7 +184,6 @@ const entityNames = [
   "PodcastLike",
   "PodcastPlay",
   "Referral",
-  "User",
 ];
 
 export const voxylApi = {

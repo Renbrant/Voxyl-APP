@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.4.15",
+  version: "0.4.16",
 };
 
 const notFoundResponse = {
@@ -40,7 +40,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.15 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.4.16 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -51,7 +51,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.4.15 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.4.16 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -165,6 +165,8 @@ type PodcastPlayErrorCode =
   | "not-found"
   | "rate-limited"
   | "own-content"
+  | "invalid-username"
+  | "username-taken"
   | "internal-error";
 
 class PodcastPlayError extends Error {
@@ -2399,6 +2401,144 @@ function preparePlaylistCreatorPictureSync(
   ).bind(resolvedPicture, ...params);
 }
 
+const USERNAME_MIN_LENGTH = 3;
+const USERNAME_MAX_LENGTH = 30;
+const USERNAME_PATTERN = /^[a-z0-9_]+$/;
+
+// Handles that would let an account impersonate the product or its staff.
+const RESERVED_USERNAMES = new Set([
+  "admin",
+  "administrator",
+  "moderator",
+  "voxyl",
+  "voxylapp",
+  "support",
+  "staff",
+  "root",
+  "system",
+  "official",
+]);
+
+// The browser used to lowercase the handle before sending it. Normalization is
+// enforced here instead, so every client writes the same canonical form.
+function normalizeUsernameInput(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new PodcastPlayError(400, "invalid-username", "username must be a string");
+  }
+
+  const normalized = value.trim().replace(/^@+/, "").toLowerCase();
+
+  if (normalized.length < USERNAME_MIN_LENGTH) {
+    throw new PodcastPlayError(
+      400,
+      "invalid-username",
+      `username must have at least ${USERNAME_MIN_LENGTH} characters`,
+    );
+  }
+
+  if (normalized.length > USERNAME_MAX_LENGTH) {
+    throw new PodcastPlayError(
+      400,
+      "invalid-username",
+      `username must have at most ${USERNAME_MAX_LENGTH} characters`,
+    );
+  }
+
+  if (!USERNAME_PATTERN.test(normalized)) {
+    throw new PodcastPlayError(
+      400,
+      "invalid-username",
+      "username may only contain letters, numbers and underscore",
+    );
+  }
+
+  if (RESERVED_USERNAMES.has(normalized)) {
+    throw new PodcastPlayError(409, "username-taken", "username is not available");
+  }
+
+  return normalized;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return /UNIQUE constraint failed/i.test(message) ||
+    /SQLITE_CONSTRAINT/i.test(message) ||
+    /D1_ERROR.*constraint/i.test(message);
+}
+
+function preparePlaylistCreatorUsernameSync(
+  env: Env,
+  user: D1User,
+  username: string,
+): D1PreparedStatement {
+  const predicates = ["creator_id = ?"];
+  const params: string[] = [user.id];
+
+  if (user.clerk_user_id) {
+    predicates.push("creator_clerk_user_id = ?");
+    params.push(user.clerk_user_id);
+  }
+
+  const legacyUserId = normalizeLegacyBase44UserId(
+    user.legacy_base44_user_id,
+  );
+
+  if (legacyUserId) {
+    predicates.push("creator_legacy_base44_user_id = ?");
+    params.push(legacyUserId);
+  }
+
+  // Guarded by the same precondition as the claim, so this is a no-op when the
+  // claim in the same batch did not apply.
+  return env.DB.prepare(
+    `UPDATE playlists
+     SET creator_username = ?
+     WHERE (${predicates.join(" OR ")})
+       AND EXISTS (
+         SELECT 1 FROM users
+         WHERE id = ? AND LOWER(username) = ?
+       )`,
+  ).bind(username, ...params, user.id, username);
+}
+
+// Claims a handle for the authenticated user. The NOT EXISTS precondition and
+// the case-insensitive unique index from migration 0009 both guard the claim,
+// so two concurrent requests cannot end up sharing a username.
+async function claimUsername(
+  env: Env,
+  user: D1User,
+  username: string,
+): Promise<boolean> {
+  const claimStatement = env.DB.prepare(
+    `UPDATE users
+     SET username = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND NOT EXISTS (
+         SELECT 1 FROM users other
+         WHERE other.id <> ?
+           AND other.username IS NOT NULL
+           AND LOWER(other.username) = ?
+       )`,
+  ).bind(username, user.id, user.id, username);
+
+  try {
+    const [claimResult] = await runD1Batch(env, [
+      claimStatement,
+      preparePlaylistCreatorUsernameSync(env, user, username),
+    ]);
+
+    return Number(claimResult?.meta?.changes ?? 0) > 0;
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 async function syncClerkProfilePicture(
   env: Env,
   user: D1User,
@@ -3507,6 +3647,17 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
   const updates: string[] = [];
   const params: unknown[] = [];
   let profilePictureUpdate: string | null | undefined;
+
+  if (Object.prototype.hasOwnProperty.call(payload, "username")) {
+    // Re-claiming the handle the user already holds is allowed: the claim
+    // excludes the caller's own row, and it re-syncs their playlists.
+    const username = normalizeUsernameInput(payload.username);
+    const claimed = await claimUsername(env, user, username);
+
+    if (!claimed) {
+      throw new PodcastPlayError(409, "username-taken", "username is not available");
+    }
+  }
 
   if (Object.prototype.hasOwnProperty.call(payload, "profile_picture")) {
     profilePictureUpdate = validateBoundedString(

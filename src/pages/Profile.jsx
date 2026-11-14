@@ -362,7 +362,6 @@ export default function Profile() {
       <AnimatePresence>
         {showUsernameModal && user &&
         <UsernameSetupModal
-          currentUser={user}
           currentUsername={user.username}
           onClose={() => setShowUsernameModal(false)}
           onSaved={(uname) => setLocalUser((prev) => ({ ...(prev || user), username: uname }))} />
