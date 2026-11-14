@@ -55,8 +55,8 @@ Android also maintains a monotonic integer `versionCode`.
 Example:
 
 ```text
-Voxyl 0.4.16
-Android versionCode 416
+Voxyl 0.5.0
+Android versionCode 500
 Package com.renbrant.voxyl
 ```
 
@@ -430,13 +430,15 @@ Repeated harness/tooling failures should trigger a redesign of the mechanism, no
 The current source candidate is unreleased. Previous published Android baseline: v0.4.13.
 
 ```text
-Voxyl v0.4.16
-source commit fix/56-username-validation-0.4.16 (pin its full SHA before packaging)
-versionCode 416
-APK Voxyl-v0.4.16-release.apk (not yet packaged/published)
+Voxyl v0.5.0
+source commit feat/143-rate-limiting-0.5.0 (pin its full SHA before packaging)
+versionCode 500
+APK Voxyl-v0.5.0-release.apk (not yet packaged/published)
 ```
 
-For this release, apply D1 migration `0009_username_normalization.sql` before deploying the Worker. It resolves case-insensitive username collisions (the earliest account keeps the handle; later ones get a deterministic suffix derived from their id and can choose a new handle in the app), rewrites stored handles as trimmed lowercase, clears whitespace-only handles, creates the case-insensitive unique index the claim depends on, and realigns `playlists.creator_username`. Deploy the Worker after the migration: the claim precondition assumes the index exists. Older app builds keep failing to set a username (they call a route that ignored the field) but are otherwise unaffected.
+For this release, no new D1 migration is required; `0009_username_normalization.sql` (v0.4.16) must already be applied. Deploying the Worker creates the rate limit bindings declared in `workers/api/wrangler.toml`, so they take effect with that deploy.
+
+For v0.4.16, apply D1 migration `0009_username_normalization.sql` before deploying the Worker. It resolves case-insensitive username collisions (the earliest account keeps the handle; later ones get a deterministic suffix derived from their id and can choose a new handle in the app), rewrites stored handles as trimmed lowercase, clears whitespace-only handles, creates the case-insensitive unique index the claim depends on, and realigns `playlists.creator_username`. Deploy the Worker after the migration: the claim precondition assumes the index exists. Older app builds keep failing to set a username (they call a route that ignored the field) but are otherwise unaffected.
 
 Previous note for 0.4.15: apply D1 migration `0008_report_moderation.sql` before deploying the Worker. It marks duplicate legacy open reports as `duplicate` and creates the partial unique index used by `POST /api/reports`; existing reports are preserved. Until the Worker is deployed the new web build cannot send reports, so deploy the Worker first. Older app builds keep failing to report (they call a route that never existed) but are otherwise unaffected.
 
