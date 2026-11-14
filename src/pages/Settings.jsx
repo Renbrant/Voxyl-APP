@@ -74,9 +74,7 @@ export default function Settings() {
   const themeOption = themeOptions.find(o => o.key === theme) || themeOptions[0];
   const ThemeIcon = themeOption.icon;
 
-  const isAdmin =
-    user?.role === 'admin' ||
-    user?.email?.toLowerCase() === 'renatobrant@gmail.com';
+  const isAdmin = user?.is_admin === true;
 
   const menuItems = [
     ...(isAdmin ? [{

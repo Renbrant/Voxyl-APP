@@ -2,7 +2,7 @@
 
 This directory contains current operational, architecture, authentication, release, migration, and platform-specific documentation for Voxyl.
 
-The current beta line is **Voxyl 0.4.x**, with **v0.6.3** as the current source version (unreleased). The previous published Android baseline is **v0.4.13**, which opens Home directly at native startup. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
+The current beta line is **Voxyl 0.4.x**, with **v0.6.4** as the current source version (unreleased). The previous published Android baseline is **v0.4.13**, which opens Home directly at native startup. Production uses Cloudflare infrastructure with Clerk authentication, and Android uses a process-owned Media3 playback service for persistent audio.
 
 ## Start Here
 
@@ -39,6 +39,7 @@ The v0.4.x UX phases are documented in `CHANGELOG.md`:
 - v0.4.9 — Playlist skip visualization and outro skip completion recording;
 - v0.4.10 — Audio player close control with playback stop and progress persistence.
 - v0.4.11 — Native startup bypasses the browser landing page and opens Home directly.
+- v0.6.4 — Admin configuration: hardcoded admin email removed, `is_admin` exposed to the client (unreleased; Worker needs `ADMIN_CLERK_USER_IDS` or `ADMIN_EMAILS` before deploy; no migration).
 - v0.6.3 — Dependency triage: unused dependencies removed, non-breaking audit fixes, Dependabot, `docs/dependency-policy.md` (unreleased; no migration).
 - v0.6.2 — Block state synchronization: shared client cache for hidden users and the blocked list, refreshed on every block or unblock (unreleased; client only, no migration).
 - v0.6.1 — Android release hardening: HTTPS promotion for feed media, `allowMixedContent` removed, backup disabled, R8 enabled (unreleased; no migration).

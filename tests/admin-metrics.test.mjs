@@ -231,18 +231,18 @@ describe('Admin Metrics API Route', () => {
     assert.equal(body.cloudflare.limits.d1Reads, 5000000);
   });
 
-  it('allows access for default admin email renatobrant@gmail.com even if role in DB is user', async () => {
-    const { token, jwk } = createJwt({ sub: 'user-renato', email: 'renatobrant@gmail.com' });
+  async function metricsStatus(email, envOverrides) {
+    const { token, jwk } = createJwt({ sub: 'user-configured', email });
     installJwksMock(jwk);
 
     const db = createMockD1({
       users: [
         {
-          id: 'u-renato',
-          clerk_user_id: 'user-renato',
-          email: 'renatobrant@gmail.com',
-          name: 'Renato Brant',
-          username: 'renatobrant',
+          id: 'u-configured',
+          clerk_user_id: 'user-configured',
+          email,
+          name: 'Configured Admin',
+          username: 'configured',
           role: 'user',
         },
       ],
@@ -252,12 +252,26 @@ describe('Admin Metrics API Route', () => {
       new Request('https://api.voxyl.renbrant.com/api/admin/metrics', {
         headers: { Authorization: `Bearer ${token}` },
       }),
-      { ...baseEnv, DB: db },
+      { ...baseEnv, DB: db, ...envOverrides },
     );
+    return response.status;
+  }
 
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.equal(body.ok, true);
-    assert.equal(body.currentUser.email, 'renatobrant@gmail.com');
+  it('does not grant admin to any email unless it is configured', async () => {
+    assert.equal(await metricsStatus('owner@example.com', {}), 403);
+  });
+
+  it('allows an email listed in ADMIN_EMAILS (case-insensitive) even if role in DB is user', async () => {
+    assert.equal(await metricsStatus('Owner@Example.com', { ADMIN_EMAILS: 'other@example.com, owner@example.com' }), 200);
+    assert.equal(await metricsStatus('owner@example.com', { ADMIN_EMAILS: 'other@example.com' }), 403);
+  });
+
+  it('allows a Clerk user id listed in ADMIN_CLERK_USER_IDS regardless of email', async () => {
+    assert.equal(await metricsStatus('any@example.com', { ADMIN_CLERK_USER_IDS: 'user-x, user-configured' }), 200);
+    assert.equal(await metricsStatus('any@example.com', { ADMIN_CLERK_USER_IDS: 'user-x' }), 403);
+  });
+
+  it('ignores empty admin configuration entries', async () => {
+    assert.equal(await metricsStatus('any@example.com', { ADMIN_EMAILS: ' , ', ADMIN_CLERK_USER_IDS: ',' }), 403);
   });
 });
