@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Component, useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { getNativeEntryRedirect } from '@/lib/entryRouting';
@@ -69,23 +69,6 @@ class AppErrorBoundary extends Component {
     return this.props.children;
   }
 }
-
-const BackButtonHandler = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    const handlePopState = () => {
-      if (location.pathname !== '/') {
-        navigate(-1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location.pathname, navigate]);
-
-  return null;
-};
 
 const AccountCacheBoundary = ({ children }) => {
   const { apiUser, clerkUser, isAuthenticated, isLoadingAuth, authChecked } = useAuth();
@@ -160,7 +143,6 @@ const AuthenticatedApp = () => {
 
   return (
     <>
-    <BackButtonHandler />
     <Routes location={location}>
       <Route element={<Layout />}>
         <Route path="/app" element={<Feed />} />

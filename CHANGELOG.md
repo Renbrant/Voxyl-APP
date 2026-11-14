@@ -6,6 +6,16 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.8 - November 2026 (Unreleased)
+
+### Back navigation and account sync recovery (issues #117 and #140)
+
+- Removed `BackButtonHandler` from `src/App.jsx`. Its `popstate` listener called `navigate(-1)`, which added a second history traversal on every browser Back or Forward and could skip pages or leave the app. React Router now owns Back/Forward on the web, and Android uses Capacitor's default hardware Back (WebView history, then exit).
+- The "Account sync needed" screen now offers a Sign out action next to Try again, so an identity conflict after switching accounts no longer traps the user without a way to choose another account.
+- Verified, with no code change: playlist creation (#108/#140) and deletion (#109) are implemented in the Worker with ownership checks and tests in `tests/playlist-create.test.mjs`, and the modal always leaves its loading state.
+- Added `tests/navigation-recovery.test.mjs`.
+- Client only; no Worker behavior change and no migration. Android hardware Back still needs a check on a real device.
+
 ## v0.6.7 - November 2026 (Unreleased)
 
 ### Harden image uploads (issue #116)

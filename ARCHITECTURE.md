@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.7
-versionCode 607
+Voxyl 0.6.8
+versionCode 608
 ```
+
+The v0.6.8 candidate removes the custom `popstate` handler so React Router owns Back/Forward (issue #117) and adds a sign-out action to the account sync failure screen (issue #140).
 
 The v0.6.7 candidate hardens image uploads (issue #116): type, extension and dimensions are decided from the file bytes, request and file sizes are bounded, and each account has an object and byte quota.
 
