@@ -1,41 +1,31 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { voxylApi } from '@/api/voxylApiClient';
 import { X, UserX, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { refreshBlockQueries, useOutboundBlocks } from '@/lib/blocks';
 import { t } from '@/lib/i18n';
 
-export default function BlockedUsersModal({ user, onClose, onCountChange }) {
-  const [blockedUsers, setBlockedUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function BlockedUsersModal({ user, onClose }) {
+  const queryClient = useQueryClient();
+  // Same cache entry the Settings count reads, so the two can never disagree.
+  const outbound = useOutboundBlocks(user.id);
+  const blockedUsers = outbound.data || [];
+  const loading = outbound.isLoading;
   const [unblocking, setUnblocking] = useState(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setError('');
-    voxylApi.blocks.listOutbound()
-      .then(blocks => {
-        setBlockedUsers(blocks);
-        onCountChange?.(blocks.length);
-        setLoading(false);
-      })
-      .catch(error => {
-        console.error('[BlockedUsersModal] Failed to load blocked users', { userId: user.id, error });
-        setError(t('blockLoadListError'));
-        setLoading(false);
-      });
-  }, [user.id, onCountChange]);
+  const [actionError, setActionError] = useState('');
+  const error = actionError || (outbound.isError ? t('blockLoadListError') : '');
 
   const handleUnblock = async (blockId) => {
     setUnblocking(blockId);
-    setError('');
+    setActionError('');
     try {
       await voxylApi.blocks.delete(blockId);
-      const updated = blockedUsers.filter(b => b.id !== blockId);
-      setBlockedUsers(updated);
-      onCountChange?.(updated.length);
+      // Updates the count, the hidden-user lists and content that was hidden.
+      await refreshBlockQueries(queryClient, user.id);
     } catch (error) {
       console.error('[BlockedUsersModal] Failed to unblock user', { blockId, error });
-      setError(t('blockUnblockError'));
+      setActionError(t('blockUnblockError'));
     } finally {
       setUnblocking(null);
     }

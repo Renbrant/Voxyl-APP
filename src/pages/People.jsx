@@ -8,6 +8,7 @@ import PodcastSearchBar from '@/components/explore/PodcastSearchBar';
 import PeopleUserCard from '@/components/people/PeopleUserCard';
 import PeopleRequestCard from '@/components/people/PeopleRequestCard';
 import { useDebounce } from '@/hooks/useDebounce';
+import { blockQueryKeys, fetchHiddenUserIds } from '@/lib/blocks';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -118,9 +119,11 @@ export default function People() {
   });
 
   const hiddenQuery = useQuery({
-    queryKey: ['people-hidden-users', user?.id],
+    // Same cache entry as the Home and Discover screens, so a block made anywhere applies here.
+    queryKey: blockQueryKeys.hidden(user?.id),
     enabled: socialDetailsActive,
-    queryFn: () => voxylApi.blocks.hiddenUserIds(),
+    queryFn: fetchHiddenUserIds,
+    refetchOnMount: 'always',
   });
 
   const outgoingQuery = useQuery({

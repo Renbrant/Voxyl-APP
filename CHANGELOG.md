@@ -6,6 +6,19 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.2 - November 2026 (Unreleased)
+
+### Block state synchronization (issue #48)
+
+- Hidden-user ids and the outbound block list now live in one TanStack Query cache (`src/lib/blocks.js`) instead of per-screen state and a separate local cache.
+- Home, Discover, People, Settings and the Blocked Users modal read the same entries, so a block or unblock made anywhere is reflected everywhere without a reload.
+- Blocking from a profile, the report menu or the follow-requests modal, and unblocking from the modal, call `refreshBlockQueries`, which invalidates the hidden-user and blocked-list queries together with the block-dependent feeds.
+- Content is matched to hidden users only by the canonical `creator_id`; usernames and display names are never treated as identities.
+- The Settings blocked count loads when Settings opens instead of waiting for the modal, and the modal shows an error when an unblock fails.
+- Added `tests/blocks-client.test.mjs` covering the helpers, the invalidation behavior and the wiring of each screen.
+- Server-side filtering of content endpoints for blocked users is not part of this change.
+- Client only; no Worker behavior change and no migration.
+
 ## v0.6.1 - November 2026 (Unreleased)
 
 ### Android release hardening (issue #146)

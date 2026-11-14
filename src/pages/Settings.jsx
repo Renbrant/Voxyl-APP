@@ -7,6 +7,7 @@ import { ChevronLeft, Moon, Sun, Globe, Eye, Ban, LogOut, Trash2, Shield, Monito
 import VoxylHeader from '@/components/common/VoxylHeader';
 import DeleteAccountModal from '@/components/profile/DeleteAccountModal';
 import BlockedUsersModal from '@/components/profile/BlockedUsersModal';
+import { useOutboundBlocks } from '@/lib/blocks';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import PageTransition from '@/components/common/PageTransition';
@@ -41,10 +42,12 @@ export default function Settings() {
   const [showBlocked, setShowBlocked] = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
-  const [blockedCount, setBlockedCount] = useState(0);
   const [showDangerZone, setShowDangerZone] = useState(false);
   const [dangerTaps, setDangerTaps] = useState(0);
   const [currentLang, setCurrentLang] = useState(lang);
+  // Loaded as soon as Settings opens; the Blocked Users modal is not needed to initialise it.
+  const outboundBlocks = useOutboundBlocks(user?.id);
+  const blockedCount = outboundBlocks.data?.length ?? 0;
 
   useEffect(() => {
     voxylApi.auth.me().then(u => {
@@ -249,10 +252,9 @@ export default function Settings() {
       </AnimatePresence>
       <AnimatePresence>
         {showBlocked && user && (
-          <BlockedUsersModal 
-            user={user} 
+          <BlockedUsersModal
+            user={user}
             onClose={() => setShowBlocked(false)}
-            onCountChange={setBlockedCount}
           />
         )}
       </AnimatePresence>

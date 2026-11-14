@@ -8,6 +8,7 @@ import { ArrowLeft, Ban } from 'lucide-react';
 import UserAvatar from '@/components/common/UserAvatar';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageTransition from '@/components/common/PageTransition';
+import { refreshBlockQueries } from '@/lib/blocks';
 import { t } from '@/lib/i18n';
 
 export default function UserProfile() {
@@ -209,6 +210,8 @@ export default function UserProfile() {
         setBlockStatusReady(true);
         setFollowStatus(null);
       }
+      // Hidden-user lists, the blocked count and block-dependent feeds refresh everywhere.
+      void refreshBlockQueries(queryClient, currentUser.id);
       setTheyFollowMe(false);
       setRelationshipReady(false);
       setRelationshipError('');

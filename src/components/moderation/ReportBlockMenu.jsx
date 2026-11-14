@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { voxylApi } from '@/api/voxylApiClient';
+import { refreshBlockQueries } from '@/lib/blocks';
 import { MoreVertical, Flag, Ban, X, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { t } from '@/lib/i18n';
@@ -30,6 +32,7 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
   const [blockError, setBlockError] = useState('');
   const [reportError, setReportError] = useState('');
   const [alreadyReported, setAlreadyReported] = useState(false);
+  const queryClient = useQueryClient();
 
   if (!currentUser || currentUser.id === targetUser?.id) return null;
 
@@ -61,8 +64,10 @@ export default function ReportBlockMenu({ targetUser, contentType = 'playlist', 
     try {
       await voxylApi.blocks.create(targetUser.id);
       setMode('done');
-      // Notify parent so it can re-filter the list
+      // Hide the user's content immediately, then refresh every block-dependent view
+      // and the blocked count from the server.
       onBlocked?.(targetUser.id);
+      void refreshBlockQueries(queryClient, currentUser.id);
     } catch (error) {
       console.error('[ReportBlockMenu] Failed to block user', { targetUserId: targetUser.id, error });
       setBlockError(t('blockCreateError'));

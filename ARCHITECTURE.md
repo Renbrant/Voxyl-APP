@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.1
-versionCode 601
+Voxyl 0.6.2
+versionCode 602
 ```
+
+The v0.6.2 candidate centralizes the client block state (issue #48). Hidden-user ids and the outbound block list live in TanStack Query (`src/lib/blocks.js`, keys under `['blocks', ...]`); Home, Discover, People, Settings and the Blocked Users modal read the same cache entries, and every block or unblock calls `refreshBlockQueries`, which invalidates them together with the block-dependent feeds. Content is matched to hidden users only by the canonical `creator_id`. The Settings blocked count loads on open instead of waiting for the modal.
 
 The v0.6.1 candidate hardens the Android release (issue #146). The Worker rewrites plain-HTTP enclosure and artwork URLs to HTTPS in `absolutePublicUrl`, so the WebView and the native player never receive cleartext media. `allowMixedContent` is removed from `capacitor.config.ts`. `android:allowBackup` is `false`, so the Clerk session and WebView storage are not included in cloud backup or device transfer. R8 and resource shrinking are enabled for the release build, with keep rules for the Capacitor plugin bridge and the audio plugin in `android/app/proguard-rules.pro`. These changes need device validation: release AAB playback in the background, lock-screen controls, and Clerk sign-in.
 

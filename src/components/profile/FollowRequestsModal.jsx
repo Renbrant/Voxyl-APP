@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { voxylApi } from '@/api/voxylApiClient';
 import { asArray } from '@/lib/arrayUtils';
+import { refreshBlockQueries } from '@/lib/blocks';
 import { X, UserCheck, UserX, Loader2, Ban, ChevronDown, ChevronUp, ListMusic } from 'lucide-react';
 import UserAvatar from '@/components/common/UserAvatar';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -126,6 +128,7 @@ function FollowRequestItem({ req, onAccept, onReject, onBlock, actionLoading }) 
 }
 
 export default function FollowRequestsModal({ currentUser, onClose, onCountChange }) {
+  const queryClient = useQueryClient();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
@@ -173,6 +176,7 @@ export default function FollowRequestsModal({ currentUser, onClose, onCountChang
     setError('');
     try {
       await voxylApi.blocks.create(follow.follower_id);
+      void refreshBlockQueries(queryClient, currentUser?.id);
       const updated = requests.filter(r => r.id !== follow.id);
       setRequests(updated);
       onCountChange?.(updated.length);
