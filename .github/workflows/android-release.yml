@@ -66,27 +66,34 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
 
-      - name: Build signed release bundle
+      - name: Build signed release bundle and APK
         working-directory: android
         run: |
           chmod +x ./gradlew
-          ./gradlew :app:bundleRelease --no-daemon
+          ./gradlew :app:bundleRelease :app:assembleRelease --no-daemon
 
-      - name: Verify bundle signature
+      - name: Verify signatures
         run: |
           aab=$(ls android/app/build/outputs/bundle/release/*.aab | head -n 1)
           jarsigner -verify "$aab"
+          echo "AAB signing certificate:"
+          keytool -printcert -jarfile "$aab" | grep -E "Owner|SHA256"
+          apk=$(ls android/app/build/outputs/apk/release/*.apk | head -n 1)
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          echo "APK signing certificate:"
+          "$apksigner" verify --print-certs "$apk" | grep -E "SHA-256|Verifies"
 
       - name: Remove decoded keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/upload.jks"
 
-      - name: Upload bundle and mapping
+      - name: Upload bundle, APK and mapping
         uses: actions/upload-artifact@v4
         with:
           name: voxyl-android-release
           path: |
             android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/mapping/release/mapping.txt
           if-no-files-found: error
           retention-days: 30
