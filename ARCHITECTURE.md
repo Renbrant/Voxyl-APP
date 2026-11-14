@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.0
-versionCode 600
+Voxyl 0.6.1
+versionCode 601
 ```
+
+The v0.6.1 candidate hardens the Android release (issue #146). The Worker rewrites plain-HTTP enclosure and artwork URLs to HTTPS in `absolutePublicUrl`, so the WebView and the native player never receive cleartext media. `allowMixedContent` is removed from `capacitor.config.ts`. `android:allowBackup` is `false`, so the Clerk session and WebView storage are not included in cloud backup or device transfer. R8 and resource shrinking are enabled for the release build, with keep rules for the Capacitor plugin bridge and the audio plugin in `android/app/proguard-rules.pro`. These changes need device validation: release AAB playback in the background, lock-screen controls, and Clerk sign-in.
 
 The v0.6.0 candidate requires every account to accept the Terms of Use before creating playlists, uploading files or claiming a username. `POST /api/me/accept-terms` records the accepted version in `users.terms_accepted_version` and `terms_accepted_at` (migration 0010). Requests without acceptance receive `403` with `code: terms-not-accepted`; a version that is no longer current receives `409` with `code: terms-version-mismatch`. The legal text is a draft pending legal review.
 

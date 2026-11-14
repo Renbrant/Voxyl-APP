@@ -68,8 +68,8 @@ android {
         applicationId "com.renbrant.voxyl"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 600
-        versionName "0.6.0"
+        versionCode 601
+        versionName "0.6.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -84,7 +84,8 @@ android {
 
         release {
             resValue "string", "clerk_publishable_key", clerkReleasePublishableKey
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

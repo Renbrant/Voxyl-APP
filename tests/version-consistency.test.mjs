@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_VERSION = "0.6.0";
-const EXPECTED_ANDROID_VERSION_CODE = 600;
+const EXPECTED_VERSION = "0.6.1";
+const EXPECTED_ANDROID_VERSION_CODE = 601;
 
 async function readText(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -35,17 +35,17 @@ test("keeps active Voxyl version metadata aligned", async () => {
   assert.equal(packageJson.version, EXPECTED_VERSION);
   assert.equal(packageLock.version, EXPECTED_VERSION);
   assert.equal(packageLock.packages[""].version, EXPECTED_VERSION);
-  assert.match(androidGradle, /versionName "0\.6\.0"/);
+  assert.match(androidGradle, /versionName "0\.6\.1"/);
   assert.match(androidGradle, new RegExp(`versionCode ${EXPECTED_ANDROID_VERSION_CODE}\\b`));
-  assert.match(workerSource, /version: "0\.6\.0"/);
-  assert.match(workerSource, /Voxyl\/0\.6\.0 \(\+https:\/\/v\.renbrant\.com\)/);
-  assert.match(workerSource, /Voxyl\/0\.6\.0 RSS Fetcher/);
-  assert.match(readme, /\*\*Voxyl 0\.6\.0 — Beta\*\*/);
-  assert.match(docsReadme, /\*\*v0\.6\.0\*\* as the current source version/);
-  assert.match(architecture, /Voxyl 0\.6\.0\r?\nversionCode 600/);
-  assert.match(releaseProcess, /Voxyl v0\.6\.0\r?\nsource commit/);
+  assert.match(workerSource, /version: "0\.6\.1"/);
+  assert.match(workerSource, /Voxyl\/0\.6\.1 \(\+https:\/\/v\.renbrant\.com\)/);
+  assert.match(workerSource, /Voxyl\/0\.6\.1 RSS Fetcher/);
+  assert.match(readme, /\*\*Voxyl 0\.6\.1 — Beta\*\*/);
+  assert.match(docsReadme, /\*\*v0\.6\.1\*\* as the current source version/);
+  assert.match(architecture, /Voxyl 0\.6\.1\r?\nversionCode 601/);
+  assert.match(releaseProcess, /Voxyl v0\.6\.1\r?\nsource commit/);
   assert.ok(
-    changelog.indexOf("## v0.6.0") < changelog.indexOf("## v0.4.16"),
-    "v0.6.0 must be the newest changelog entry",
+    changelog.indexOf("## v0.6.1") < changelog.indexOf("## v0.4.16"),
+    "v0.6.1 must be the newest changelog entry",
   );
 });

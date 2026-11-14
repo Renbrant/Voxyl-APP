@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.1 - November 2026 (Unreleased)
+
+### Android release hardening (issue #146)
+
+- Feed enclosure and artwork URLs with `http://` are promoted to `https://` by the Worker.
+- `allowMixedContent` is removed from the Capacitor configuration.
+- `android:allowBackup` is `false`, so session storage is not backed up or transferred.
+- R8 minification and resource shrinking are enabled for release builds, with keep rules added to `proguard-rules.pro`.
+
+Device validation (release AAB playback, lock-screen controls, Clerk sign-in) is still required.
+
 ## v0.6.0 - November 2026 (Unreleased)
 
 ### Mandatory Terms of Use (issue #142)
