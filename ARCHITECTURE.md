@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.2
-versionCode 602
+Voxyl 0.6.3
+versionCode 603
 ```
+
+The v0.6.3 candidate removes unused dependencies and applies non-breaking audit fixes (issue #115); see `docs/dependency-policy.md`.
 
 The v0.6.2 candidate centralizes the client block state (issue #48). Hidden-user ids and the outbound block list live in TanStack Query (`src/lib/blocks.js`, keys under `['blocks', ...]`); Home, Discover, People, Settings and the Blocked Users modal read the same cache entries, and every block or unblock calls `refreshBlockQueries`, which invalidates them together with the block-dependent feeds. Content is matched to hidden users only by the canonical `creator_id`. The Settings blocked count loads on open instead of waiting for the modal.
 
