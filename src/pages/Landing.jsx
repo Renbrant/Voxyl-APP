@@ -435,6 +435,7 @@ export default function Landing() {
             <p className="mt-1">{c.beta}</p>
           </div>
           <div className="flex gap-5">
+            <a href="/terms" className="transition hover:text-white/70">Terms</a>
             <a href="/privacy" className="transition hover:text-white/70">Privacy</a>
             <a href="https://github.com/Renbrant/Voxyl-APP" target="_blank" rel="noreferrer" className="transition hover:text-white/70">
               GitHub

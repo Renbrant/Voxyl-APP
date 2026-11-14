@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.5.0
-versionCode 500
+Voxyl 0.6.0
+versionCode 600
 ```
+
+The v0.6.0 candidate requires every account to accept the Terms of Use before creating playlists, uploading files or claiming a username. `POST /api/me/accept-terms` records the accepted version in `users.terms_accepted_version` and `terms_accepted_at` (migration 0010). Requests without acceptance receive `403` with `code: terms-not-accepted`; a version that is no longer current receives `409` with `code: terms-version-mismatch`. The legal text is a draft pending legal review.
 
 The v0.5.0 candidate adds rate limiting through the Workers Rate Limiting API. Three bindings (`RL_PUBLIC`, `RL_EXPENSIVE`, `RL_WRITE`) are declared in `workers/api/wrangler.toml`. The dispatcher checks them before routing: podcast search and RSS fetch are limited per user when the caller is authenticated and per IP otherwise, public discovery routes are limited per IP, and authenticated writes are limited per user. A limited request returns 429 with `code: rate-limited` and `Retry-After: 60`. A missing binding disables enforcement, so local development and tests run unlimited. Clients do not retry 429 responses automatically.
 

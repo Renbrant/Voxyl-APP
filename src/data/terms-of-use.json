@@ -1,0 +1,150 @@
+{
+  "version": "2026-11-14",
+  "effectiveDate": "2026-11-14",
+  "operator": "Renbrant",
+  "publicUrl": "https://v.renbrant.com/terms",
+  "locales": {
+    "en-US": {
+      "title": "Terms of Use",
+      "intro": [
+        "These Terms of Use govern your use of the Voxyl web and Android application. By creating an account or using Voxyl, you agree to these terms.",
+        "Voxyl is currently a beta service published by Renbrant. Some features, including sharing playlists and profiles with other users, depend on you following the rules below."
+      ],
+      "sections": [
+        {
+          "title": "1. Eligibility",
+          "paragraphs": [
+            "You must be at least 13 years old, or the minimum age required in your country to use online services without a parent or guardian, whichever is higher. You are responsible for keeping your account secure and for all activity under it."
+          ]
+        },
+        {
+          "title": "2. Your content",
+          "paragraphs": [
+            "You keep ownership of the content you create or upload, such as playlist titles, descriptions, cover images, profile pictures and usernames. You grant Voxyl a non-exclusive, worldwide, royalty-free licence to host, store, display and distribute that content inside the service, only so that the service can work as intended.",
+            "You confirm that you have the rights needed for any content you share."
+          ]
+        },
+        {
+          "title": "3. Prohibited content and conduct",
+          "items": [
+            "Content that sexualises minors, in any form. This is a zero-tolerance rule and is reported to the appropriate authorities.",
+            "Hate speech, harassment, threats, or content that targets people because of race, ethnicity, religion, gender, sexual orientation, disability or similar characteristics.",
+            "Violent, graphic or sexually explicit content, and content that promotes self-harm or dangerous acts.",
+            "Impersonating another person, organisation or Voxyl staff, including through usernames or profile pictures.",
+            "Spam, scams, phishing, fake engagement, or attempts to gain access to other accounts or to Voxyl systems.",
+            "Infringing copyright or other rights, including republishing protected material you do not have permission to share.",
+            "Attempting to interfere with, probe or overload the service, or to circumvent its limits."
+          ]
+        },
+        {
+          "title": "4. Reporting and blocking",
+          "paragraphs": [
+            "You can report content and block other users at any time from the options menu available on playlists and profiles. Reports are reviewed by the Voxyl team, which may remove content, restrict or suspend accounts, or take no action when a report does not violate these terms.",
+            "Blocking a user hides their content from you and prevents them from following you. Blocking does not notify the other user."
+          ]
+        },
+        {
+          "title": "5. Enforcement",
+          "paragraphs": [
+            "We may remove content, limit features, suspend or terminate accounts that break these terms, with or without prior notice when the risk to other people or to the service is serious. Where possible, we will explain the reason and how to appeal through the support contact below."
+          ]
+        },
+        {
+          "title": "6. Third-party content",
+          "paragraphs": [
+            "Podcasts and episodes are provided by their publishers and hosts. Voxyl does not own that content and is not responsible for its accuracy, legality or availability. Report problems with third-party content through the in-app report option or the support contact."
+          ]
+        },
+        {
+          "title": "7. Service availability and disclaimers",
+          "paragraphs": [
+            "Voxyl is provided as a beta service, as is. We do not guarantee uninterrupted availability, and features may change or be removed during the beta. To the extent permitted by law, we are not liable for indirect or consequential losses arising from the use of the service."
+          ]
+        },
+        {
+          "title": "8. Changes to these terms",
+          "paragraphs": [
+            "We may update these terms. When a new version is published, you will be asked to review and accept it before continuing to create or share content. The version and effective date shown on this page identify the terms you accepted."
+          ]
+        },
+        {
+          "title": "9. Contact",
+          "paragraphs": [
+            "For questions about these terms, reports you cannot submit in the app, or appeals, contact Voxyl through the support address shown below. The public Terms of Use are available at https://v.renbrant.com/terms."
+          ]
+        }
+      ]
+    },
+    "pt-BR": {
+      "title": "Termos de Uso",
+      "intro": [
+        "Estes Termos de Uso regem o uso do aplicativo Voxyl na web e no Android. Ao criar uma conta ou usar o Voxyl, você concorda com estes termos.",
+        "O Voxyl é atualmente um serviço beta publicado por Renbrant. Alguns recursos, como compartilhar playlists e perfis com outros usuários, dependem de você seguir as regras abaixo."
+      ],
+      "sections": [
+        {
+          "title": "1. Quem pode usar",
+          "paragraphs": [
+            "Você deve ter pelo menos 13 anos ou a idade mínima exigida no seu país para usar serviços online sem responsável legal, o que for maior. Você é responsável por manter sua conta segura e por toda atividade realizada nela."
+          ]
+        },
+        {
+          "title": "2. Seu conteúdo",
+          "paragraphs": [
+            "Você continua dono do conteúdo que cria ou envia, como títulos e descrições de playlists, imagens de capa, fotos de perfil e nomes de usuário. Você concede ao Voxyl uma licença não exclusiva, mundial e gratuita para hospedar, armazenar, exibir e distribuir esse conteúdo dentro do serviço, apenas para que o serviço funcione como previsto.",
+            "Você confirma que tem os direitos necessários para qualquer conteúdo que compartilhar."
+          ]
+        },
+        {
+          "title": "3. Conteúdo e conduta proibidos",
+          "items": [
+            "Conteúdo que sexualize menores, em qualquer forma. Esta é uma regra de tolerância zero e é comunicada às autoridades competentes.",
+            "Discurso de ódio, assédio, ameaças ou conteúdo que tenha como alvo pessoas por causa de raça, etnia, religião, gênero, orientação sexual, deficiência ou características semelhantes.",
+            "Conteúdo violento, gráfico ou sexualmente explícito, e conteúdo que incentive automutilação ou atos perigosos.",
+            "Fazer-se passar por outra pessoa, organização ou pela equipe do Voxyl, inclusive por meio de nomes de usuário ou fotos de perfil.",
+            "Spam, golpes, phishing, engajamento falso ou tentativas de acessar outras contas ou sistemas do Voxyl.",
+            "Violar direitos autorais ou outros direitos, inclusive republicar material protegido que você não tem permissão para compartilhar.",
+            "Tentar interferir, testar ou sobrecarregar o serviço, ou contornar seus limites."
+          ]
+        },
+        {
+          "title": "4. Denúncias e bloqueios",
+          "paragraphs": [
+            "Você pode denunciar conteúdo e bloquear outros usuários a qualquer momento pelo menu de opções disponível em playlists e perfis. As denúncias são analisadas pela equipe do Voxyl, que pode remover conteúdo, restringir ou suspender contas, ou não tomar nenhuma medida quando a denúncia não violar estes termos.",
+            "Bloquear um usuário oculta o conteúdo dele para você e impede que ele siga você. O bloqueio não notifica o outro usuário."
+          ]
+        },
+        {
+          "title": "5. Medidas de cumprimento",
+          "paragraphs": [
+            "Podemos remover conteúdo, limitar recursos, suspender ou encerrar contas que descumpram estes termos, com ou sem aviso prévio quando o risco para outras pessoas ou para o serviço for grave. Sempre que possível, explicaremos o motivo e como contestar pelo contato de suporte abaixo."
+          ]
+        },
+        {
+          "title": "6. Conteúdo de terceiros",
+          "paragraphs": [
+            "Podcasts e episódios são fornecidos pelos seus publicadores e hosts. O Voxyl não é dono desse conteúdo e não se responsabiliza por sua precisão, legalidade ou disponibilidade. Relate problemas com conteúdo de terceiros pela opção de denúncia no aplicativo ou pelo contato de suporte."
+          ]
+        },
+        {
+          "title": "7. Disponibilidade do serviço e isenções",
+          "paragraphs": [
+            "O Voxyl é fornecido como serviço beta, no estado em que se encontra. Não garantimos disponibilidade ininterrupta, e recursos podem mudar ou ser removidos durante o beta. Na medida permitida pela lei, não somos responsáveis por perdas indiretas ou consequenciais decorrentes do uso do serviço."
+          ]
+        },
+        {
+          "title": "8. Alterações nestes termos",
+          "paragraphs": [
+            "Podemos atualizar estes termos. Quando uma nova versão for publicada, você será convidado a revisá-la e aceitá-la antes de continuar criando ou compartilhando conteúdo. A versão e a data de vigência exibidas nesta página identificam os termos que você aceitou."
+          ]
+        },
+        {
+          "title": "9. Contato",
+          "paragraphs": [
+            "Para dúvidas sobre estes termos, denúncias que você não consiga enviar no aplicativo ou contestações, entre em contato com o Voxyl pelo endereço de suporte exibido abaixo. Os Termos de Uso públicos estão disponíveis em https://v.renbrant.com/terms."
+          ]
+        }
+      ]
+    }
+  }
+}

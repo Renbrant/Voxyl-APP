@@ -191,6 +191,9 @@ export const voxylApi = {
     async isAuthenticated() {
       return Boolean(await getClerkToken());
     },
+    acceptTerms(version) {
+      return apiFetch("/me/accept-terms", { method: "POST", body: { version } });
+    },
     async me() {
       const token = await getClerkToken();
       devAuthLog("/me token check", {

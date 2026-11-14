@@ -143,6 +143,7 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.14** | Playlist creation (unreleased) | Authenticated creation API, atomic beta limits, safe retries and recoverable save errors |
 | **v0.4.15** | Content reports (Worker deployed) | Authenticated `POST /api/reports`, one open report per reporter and content, admin moderation queue, recoverable report errors |
 | **v0.4.16** | Username validation (Worker deployed) | Server-enforced normalization and rules, case-insensitive uniqueness under concurrency, conflict responses without user enumeration |
+| **v0.6.0** | Terms of Use acceptance (unreleased) | Accounts must accept the current Terms of Use before creating playlists, uploading files or claiming a username (migration 0010) |
 | **v0.5.0** | Rate limiting (unreleased) | Per-IP limits on public discovery, RSS and search; per-user limits on authenticated writes; 429 responses with Retry-After |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
@@ -446,11 +447,11 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.5.0 — Beta** (unreleased)
+**Voxyl 0.6.0 — Beta** (unreleased)
 
-Android source versionCode: **500**
+Android source versionCode: **600**
 
-The v0.5.0 candidate adds rate limiting (issue #143). Anonymous discovery and RSS/search routes are limited per IP, and authenticated writes per user; a limited request returns 429 with `Retry-After: 60`. Limits are declared in `workers/api/wrangler.toml`. The v0.4.16 candidate moves username validation to the Worker (issue #56). `PATCH /api/me` normalizes the handle, enforces length, character and reserved-name rules, and claims it behind a precondition and a case-insensitive unique index, so two concurrent requests cannot share a handle. Unavailable handles return `409` without revealing the account that holds them, and owned playlists keep their creator handle in sync. The browser no longer performs its own availability lookup. It also contains the v0.4.15 content reporting work, whose Worker is already deployed, and the v0.4.14 playlist creation work. The previous Android baseline is v0.4.13. Deployment and signed APK/AAB packaging require separate validation.
+The v0.6.0 candidate requires acceptance of the Terms of Use before playlist creation, file upload and username claims (issue #142). The Worker returns `403 terms-not-accepted` until the current version is accepted through `POST /api/me/accept-terms`. The v0.5.0 candidate adds rate limiting (issue #143). Anonymous discovery and RSS/search routes are limited per IP, and authenticated writes per user; a limited request returns 429 with `Retry-After: 60`. Limits are declared in `workers/api/wrangler.toml`. The v0.4.16 candidate moves username validation to the Worker (issue #56). `PATCH /api/me` normalizes the handle, enforces length, character and reserved-name rules, and claims it behind a precondition and a case-insensitive unique index, so two concurrent requests cannot share a handle. Unavailable handles return `409` without revealing the account that holds them, and owned playlists keep their creator handle in sync. The browser no longer performs its own availability lookup. It also contains the v0.4.15 content reporting work, whose Worker is already deployed, and the v0.4.14 playlist creation work. The previous Android baseline is v0.4.13. Deployment and signed APK/AAB packaging require separate validation.
 
 Before deploying the Worker, apply migration `0009_username_normalization.sql`. It resolves case-insensitive handle collisions, rewrites stored handles as trimmed lowercase and creates the unique index the claim relies on.
 

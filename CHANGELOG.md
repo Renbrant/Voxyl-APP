@@ -6,6 +6,15 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.0 - November 2026 (Unreleased)
+
+### Mandatory Terms of Use (issue #142)
+
+- Accounts must accept the current Terms of Use before creating playlists, uploading files or claiming a username.
+- `POST /api/me/accept-terms` records the accepted version and timestamp; migration 0010 adds the columns and the legal document rows.
+- The Worker returns `403 terms-not-accepted` without acceptance and `409 terms-version-mismatch` for a stale version.
+- Adds a public Terms page and a footer link. The legal text is a draft pending legal review.
+
 ## v0.5.0 - November 2026 (Unreleased)
 
 ### Rate limiting (issue #143)

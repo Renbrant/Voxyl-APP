@@ -126,6 +126,13 @@ export default function Settings() {
       action: () => navigate('/privacy'),
       badge: null,
     },
+    {
+      icon: Shield,
+      label: t('settingsTermsOfUse'),
+      description: t('settingsTermsOfUseDesc'),
+      action: () => navigate('/terms'),
+      badge: null,
+    },
   ];
 
   const dangerItems = [

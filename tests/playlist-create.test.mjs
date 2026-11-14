@@ -50,8 +50,8 @@ function database({ bootstrap = false, role = 'user' } = {}) {
   for (const name of fs.readdirSync(directory).filter(n => n.endsWith('.sql')).sort()) {
     sqlite.exec(fs.readFileSync(new URL(name, directory), 'utf8'));
   }
-  if (!bootstrap) sqlite.prepare(`INSERT INTO users (id, clerk_user_id, email, name, username, role, clerk_profile_picture)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+  if (!bootstrap) sqlite.prepare(`INSERT INTO users (id, clerk_user_id, email, name, username, role, clerk_profile_picture, terms_accepted_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, '2026-11-14')`)
     .run('owner-user', 'clerk-owner', 'owner@example.com', 'Owner User', 'owner', role, 'https://images.example.com/avatar.jpg');
   const db = {
     sqlite,
@@ -94,7 +94,9 @@ afterEach(() => mock.restoreAll());
 
 describe('playlist creation through the Worker with real SQLite migrations', () => {
   it('creates an empty playlist for a newly bootstrapped account and returns the client DTO', async () => {
-    const { db, create } = setup({ bootstrap: true });
+    const { db, create, request } = setup({ bootstrap: true });
+    const accepted = await request('POST', '/api/me/accept-terms', { version: '2026-11-14' });
+    assert.equal(accepted.status, 200);
     const response = await create({ name: '  Brazuka  ' });
     const { playlist } = await response.json();
     assert.equal(response.status, 201);
@@ -192,7 +194,7 @@ describe('playlist creation through the Worker with real SQLite migrations', () 
 
   it('scopes idempotency to the owner and allows unkeyed legacy rows', () => {
     const db = database();
-    db.sqlite.prepare(`INSERT INTO users (id, clerk_user_id) VALUES ('other', 'clerk-other')`).run();
+    db.sqlite.prepare(`INSERT INTO users (id, clerk_user_id, terms_accepted_version) VALUES ('other', 'clerk-other', '2026-11-14')`).run();
     for (const [id, owner] of [['a', 'owner-user'], ['b', 'other']]) {
       db.sqlite.prepare(`INSERT INTO playlists (id, creator_id, title, creation_request_id) VALUES (?, ?, 'Test', 'same-key')`).run(id, owner);
     }
@@ -207,7 +209,7 @@ describe('playlist creation through the Worker with real SQLite migrations', () 
     for (const name of fs.readdirSync(directory).filter(n => n.endsWith('.sql') && !n.startsWith('0007')).sort()) {
       db.exec(fs.readFileSync(new URL(name, directory), 'utf8'));
     }
-    db.exec(`INSERT INTO users (id) VALUES ('legacy-owner');
+    db.exec(`INSERT INTO users (id, terms_accepted_version) VALUES ('legacy-owner', '2026-11-14');
       INSERT INTO playlists (id, creator_id, title, likes_count, rss_feeds)
       VALUES ('legacy', 'legacy-owner', 'Keep me', 9, '[]');`);
     const before = db.prepare('SELECT * FROM playlists').get();
@@ -248,7 +250,7 @@ describe('playlist deletion and editing with real SQLite foreign keys', () => {
       db.sqlite.prepare("INSERT INTO reports (id, reported_playlist_id) VALUES ('report', ?)").run(playlist.id);
       assert.equal((await request('DELETE', `${prefix}/${playlist.id}`, undefined, false)).status, 401);
       assert.equal((await request('DELETE', `${prefix}/missing`)).status, 404);
-      db.sqlite.exec("INSERT INTO users (id, clerk_user_id) VALUES ('other', 'clerk-other'); INSERT INTO playlists (id, creator_id, title) VALUES ('theirs', 'other', 'Other');");
+      db.sqlite.exec("INSERT INTO users (id, clerk_user_id, terms_accepted_version) VALUES ('other', 'clerk-other', '2026-11-14'); INSERT INTO playlists (id, creator_id, title) VALUES ('theirs', 'other', 'Other');");
       assert.equal((await request('DELETE', `${prefix}/theirs`)).status, 403);
       assert.ok(db.sqlite.prepare("SELECT id FROM playlists WHERE id = 'theirs'").get());
       const response = await request('DELETE', `${prefix}/${playlist.id}`);
