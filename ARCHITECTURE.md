@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.5
-versionCode 605
+Voxyl 0.6.6
+versionCode 606
 ```
+
+The v0.6.6 candidate closes anonymous user enumeration (issue #144): `searchUsers` and the new `getUserSuggestions` require a session, search needs two or more characters and escapes wildcards, anonymous profiles omit the real name, and blocks hide profiles and playlists in both directions.
 
 The v0.6.5 candidate fixes a signed-in startup crash on Home caused by a missing `getCache` import in v0.6.2.
 

@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.6.5",
+  version: "0.6.6",
 };
 
 const notFoundResponse = {
@@ -44,7 +44,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.5 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.6 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -55,7 +55,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.6.5 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.6.6 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -474,6 +474,10 @@ function isPeopleSummaryRoute(pathname: string): boolean {
 
 function isSearchUsersRoute(pathname: string): boolean {
   return pathname === "/api/functions/searchUsers" || pathname === "/functions/searchUsers";
+}
+
+function isUserSuggestionsRoute(pathname: string): boolean {
+  return pathname === "/api/functions/getUserSuggestions" || pathname === "/functions/getUserSuggestions";
 }
 
 function isGetPublicUserProfileRoute(pathname: string): boolean {
@@ -3969,57 +3973,149 @@ async function parseSearchUsersPayload(request: Request): Promise<{ query: strin
   return { query };
 }
 
+const USER_SEARCH_MIN_QUERY_LENGTH = 2;
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+// Resolves the signed-in viewer for routes that stay public. A missing or unverifiable
+// token is simply an anonymous viewer, so an expired session never breaks a shared link.
+async function getOptionalViewer(request: Request, env: Env): Promise<D1User | null> {
+  if (!request.headers.get("authorization")) return null;
+
+  try {
+    const claims = await getVerifiedClerkClaims(request, env);
+    return claims ? await resolveD1UserFromClerkClaims(env, claims) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function areUsersBlocked(env: Env, viewer: D1User, targetUserId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS found FROM blocks
+     WHERE (blocker_id = ? AND blocked_id = ?)
+        OR (blocker_id = ? AND blocked_id = ?)
+     LIMIT 1`,
+  )
+    .bind(viewer.id, targetUserId, targetUserId, viewer.id)
+    .first<{ found: number }>();
+
+  return Boolean(row);
+}
+
+// User search requires a session and a real query. It never lists accounts without a
+// term, never returns the caller or anyone blocked in either direction, and treats
+// LIKE wildcards in the term as plain characters so "%" cannot enumerate users.
 async function handleSearchUsers(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
   const { query } = await parseSearchUsersPayload(request);
   const normalizedQuery = query.trim();
-  let results: D1UserSearchRow[];
 
-  if (!normalizedQuery) {
-    const response = await env.DB.prepare(
-      `SELECT id, username,
-       COALESCE(
-         NULLIF(TRIM(profile_picture), ''),
-         NULLIF(TRIM(clerk_profile_picture), '')
-       ) AS profile_picture,
-       profile_hidden
-       FROM users
-       WHERE username IS NOT NULL
-         AND TRIM(username) <> ''
-         AND COALESCE(profile_hidden, 0) = 0
-       ORDER BY datetime(COALESCE(NULLIF(TRIM(created_at), ''), '1970-01-01')) DESC,
-         id ASC
-       LIMIT 10`,
-    ).all<D1UserSearchRow>();
-    results = response.results || [];
-  } else {
-    const response = await env.DB.prepare(
-      `SELECT id, username,
-       COALESCE(
-         NULLIF(TRIM(profile_picture), ''),
-         NULLIF(TRIM(clerk_profile_picture), '')
-       ) AS profile_picture,
-       profile_hidden
-       FROM users
-       WHERE username IS NOT NULL
-         AND TRIM(username) <> ''
-         AND LOWER(username) LIKE LOWER(? || '%')
-         AND (COALESCE(profile_hidden, 0) = 0 OR LOWER(username) = LOWER(?))
-       ORDER BY
-         CASE WHEN LOWER(username) = LOWER(?) THEN 0 ELSE 1 END,
-         LOWER(username) ASC,
-         id ASC
-       LIMIT 25`,
-    )
-      .bind(normalizedQuery, normalizedQuery, normalizedQuery)
-      .all<D1UserSearchRow>();
-    results = response.results || [];
+  if (normalizedQuery.length < USER_SEARCH_MIN_QUERY_LENGTH) {
+    return jsonResponse(
+      {
+        ok: false,
+        code: "query-too-short",
+        error: `Search needs at least ${USER_SEARCH_MIN_QUERY_LENGTH} characters`,
+      },
+      400,
+      corsHeaders,
+    );
   }
+
+  const viewerId = auth.user!.id;
+  const response = await env.DB.prepare(
+    `SELECT id, username,
+     COALESCE(
+       NULLIF(TRIM(profile_picture), ''),
+       NULLIF(TRIM(clerk_profile_picture), '')
+     ) AS profile_picture,
+     profile_hidden
+     FROM users
+     WHERE username IS NOT NULL
+       AND TRIM(username) <> ''
+       AND id <> ?
+       AND LOWER(username) LIKE LOWER(? || '%') ESCAPE '\\'
+       AND (COALESCE(profile_hidden, 0) = 0 OR LOWER(username) = LOWER(?))
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = ? AND b.blocked_id = users.id)
+            OR (b.blocker_id = users.id AND b.blocked_id = ?)
+       )
+     ORDER BY
+       CASE WHEN LOWER(username) = LOWER(?) THEN 0 ELSE 1 END,
+       LOWER(username) ASC,
+       id ASC
+     LIMIT 25`,
+  )
+    .bind(viewerId, escapeLikePattern(normalizedQuery), normalizedQuery, viewerId, viewerId, normalizedQuery)
+    .all<D1UserSearchRow>();
+  const results = response.results || [];
 
   return jsonResponse(
     {
       data: {
         users: results.map(toPublicUserSearchResult),
+      },
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+const USER_SUGGESTIONS_LIMIT = 10;
+
+// Signed-in only and capped: recent public accounts the caller does not already follow
+// and has no block with, in either direction. Anonymous callers cannot list accounts.
+async function handleUserSuggestions(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const auth = await requireSavedContentUser(request, env);
+
+  if (auth.response) {
+    return auth.response;
+  }
+
+  const viewerId = auth.user!.id;
+  const response = await env.DB.prepare(
+    `SELECT id, username,
+     COALESCE(
+       NULLIF(TRIM(profile_picture), ''),
+       NULLIF(TRIM(clerk_profile_picture), '')
+     ) AS profile_picture,
+     profile_hidden
+     FROM users
+     WHERE username IS NOT NULL
+       AND TRIM(username) <> ''
+       AND COALESCE(profile_hidden, 0) = 0
+       AND id <> ?
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = ? AND b.blocked_id = users.id)
+            OR (b.blocker_id = users.id AND b.blocked_id = ?)
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM follows f
+         WHERE f.follower_id = ? AND f.following_id = users.id
+       )
+     ORDER BY datetime(COALESCE(NULLIF(TRIM(created_at), ''), '1970-01-01')) DESC,
+       id ASC
+     LIMIT ${USER_SUGGESTIONS_LIMIT}`,
+  )
+    .bind(viewerId, viewerId, viewerId, viewerId)
+    .all<D1UserSearchRow>();
+
+  return jsonResponse(
+    {
+      data: {
+        users: (response.results || []).map(toPublicUserSearchResult),
       },
     },
     200,
@@ -4045,11 +4141,13 @@ async function parseUserIdPayload(request: Request): Promise<{ userId: string }>
   };
 }
 
-function toPublicUserProfile(user: D1User): PublicUserProfile {
+// The real name comes from the identity provider, so anonymous viewers only get the
+// public handle and picture.
+function toPublicUserProfile(user: D1User, viewer: D1User | null): PublicUserProfile {
   return {
     id: user.id,
     username: user.username,
-    full_name: user.name,
+    full_name: viewer ? user.name : null,
     profile_picture: resolveProfilePicture(user),
     created_at: user.created_at,
   };
@@ -4076,7 +4174,13 @@ async function handleGetPublicUserProfile(request: Request, env: Env): Promise<R
     return jsonResponse(notFoundResponse, 404, corsHeaders);
   }
 
-  return jsonResponse({ data: toPublicUserProfile(user) }, 200, corsHeaders);
+  const viewer = await getOptionalViewer(request, env);
+
+  if (viewer && viewer.id !== user.id && await areUsersBlocked(env, viewer, user.id)) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
+  return jsonResponse({ data: toPublicUserProfile(user, viewer) }, 200, corsHeaders);
 }
 
 function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
@@ -4100,6 +4204,12 @@ function toPublicUserPlaylist(row: D1UserPlaylistRow): PublicUserPlaylist {
 async function handleGetUserPlaylists(request: Request, env: Env): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
   const { userId } = await parseUserIdPayload(request);
+  const viewer = await getOptionalViewer(request, env);
+
+  if (viewer && viewer.id !== userId && await areUsersBlocked(env, viewer, userId)) {
+    return jsonResponse(notFoundResponse, 404, corsHeaders);
+  }
+
   const { results } = await env.DB.prepare(
     `SELECT id, title, description, cover_image, creator_id, creator_username,
       creator_picture, visibility, created_at, updated_at
@@ -8158,6 +8268,10 @@ if (request.method === "DELETE" && isMeRoute(pathname)) {
 
       if (request.method === "POST" && isSearchUsersRoute(pathname)) {
         return withCors(await handleSearchUsers(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isUserSuggestionsRoute(pathname)) {
+        return withCors(await handleUserSuggestions(request, env), request, env);
       }
 
       if (request.method === "POST" && isGetPublicUserProfileRoute(pathname)) {

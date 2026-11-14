@@ -59,7 +59,7 @@ describe('Issue #74 People dashboard ownership', () => {
   it('uses a clearly bounded recent Suggestions subset matching summary eligibility rules', () => {
     assert.match(
       peopleSource,
-      /invoke\('searchUsers', \{ query: '' \}\)/,
+      /invoke\('getUserSuggestions', \{\}\)/,
     );
     assert.match(peopleSource, /!hiddenIds\.has\(candidate\.id\)/);
     assert.match(peopleSource, /!followStatuses\[candidate\.id\]/);
