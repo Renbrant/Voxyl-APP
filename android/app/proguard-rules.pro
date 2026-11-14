@@ -19,3 +19,13 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Voxyl: keep the Capacitor bridge, the native plugins and the audio player classes
+# reachable from JavaScript, and keep annotations used for reflection.
+-keep class com.renbrant.voxyl.** { *; }
+-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
+-keepclassmembers class * {
+    @com.getcapacitor.PluginMethod public *;
+}
+-keep class ee.forgr.audio.** { *; }
+-keepattributes SourceFile,LineNumberTable,*Annotation*

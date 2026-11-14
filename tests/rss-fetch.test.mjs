@@ -240,6 +240,30 @@ describe('RSS fetch Worker route', () => {
     assert.equal(data.items[0].feedUrl, 'https://feeds.example.com/show.xml');
   });
 
+  it('promotes plain-HTTP enclosure and artwork URLs to HTTPS', async () => {
+    const feed = `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+        <channel>
+          <title>Insecure Podcast</title>
+          <description>Feed description</description>
+          <itunes:image href="http://cdn.example.com/feed.jpg" />
+          <item>
+            <guid>episode-http</guid>
+            <title>Episode HTTP</title>
+            <enclosure url="http://cdn.example.com/episode-http.mp3" type="audio/mpeg" length="1" />
+          </item>
+        </channel>
+      </rss>`;
+    mockFetchSequence([xmlResponse(feed)]);
+
+    const response = await worker.fetch(request('/api/rss/fetch', { url: 'https://feeds.example.com/http.xml' }), env());
+    const data = await body(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(data.image, 'https://cdn.example.com/feed.jpg');
+    assert.equal(data.items[0].audioUrl, 'https://cdn.example.com/episode-http.mp3');
+  });
+
   it('preserves mixed-case RSS pubDate values from the streaming parser', async () => {
     mockFetchSequence([xmlResponse(rssFeed(`<item>
       <guid>mixed-case-date</guid>
