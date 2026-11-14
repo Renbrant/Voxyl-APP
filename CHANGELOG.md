@@ -6,6 +6,14 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.5 - November 2026 (Unreleased)
+
+### Fix signed-in startup crash on Home
+
+- v0.6.2 (issue #48) dropped the `getCache` import from `src/pages/Feed.jsx` while the saved-likes `initialData` still called it. For a signed-in user this threw `ReferenceError: getCache is not defined` during render, and the app showed the startup error screen on web and Android. Signed-out sessions were not affected. Restored the import.
+- Added `tests/imports-declared.test.mjs`, which fails when a known helper (cache, React Query and block helpers) is called in `src/` without being imported or declared. ESLint's `no-undef` is not enforced here, so this class of error previously surfaced only at runtime.
+- Versions 0.6.2 to 0.6.4 should not be used for the web or Android client; the Worker is unaffected.
+
 ## v0.6.4 - November 2026 (Unreleased)
 
 ### Remove the hardcoded admin identity (issue #145)

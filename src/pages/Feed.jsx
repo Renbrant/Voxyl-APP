@@ -16,7 +16,7 @@ import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
 import MyPlaylistsContent from '@/components/feed/MyPlaylistsContent';
 import { useRequireAuth } from '@/hooks/useRequireAuth';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
-import { invalidateCache } from '@/lib/appCache';
+import { getCache, invalidateCache } from '@/lib/appCache';
 import { asArray } from '@/lib/arrayUtils';
 import { filterVisibleCreators, useHiddenUsers } from '@/lib/blocks';
 import { t } from '@/lib/i18n';
