@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.6 - November 2026 (Unreleased)
+
+### Stop anonymous user enumeration (issue #144)
+
+- `searchUsers` now requires a session. Empty or one-character terms return `400 query-too-short` instead of the ten newest accounts, LIKE wildcards in the term are escaped so `%` or `_` cannot match everyone, and the caller and anyone blocked in either direction are excluded.
+- New authenticated `getUserSuggestions` route backs the People "Suggestions" tab: at most 10 recent public accounts, excluding the caller, accounts already followed, blocked users in either direction and hidden profiles. The client no longer sends an empty search.
+- `getPublicUserProfile` stays reachable for shared `/user/:id` links, but anonymous viewers get the handle and picture only; the real name (`full_name`) is returned to signed-in viewers. An unverifiable token is treated as anonymous so an expired session does not break a shared link.
+- `getPublicUserProfile` and `getUserPlaylists` return 404 to a signed-in viewer with a block in either direction.
+- Added `tests/user-enumeration-worker.test.mjs` (real SQLite): auth, minimum length, wildcards, blocks, hidden profiles, suggestions cap and anonymous name redaction.
+- **Deploy note:** this is a Worker change. Deploy the Worker; no migration. Older clients that still send an empty search will see the People Suggestions tab fail until they update.
+
 ## v0.6.5 - November 2026 (Unreleased)
 
 ### Fix signed-in startup crash on Home

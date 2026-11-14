@@ -86,7 +86,8 @@ export default function People() {
   const [requestActionError, setRequestActionError] = useState(null);
 
   const debouncedUserSearch = useDebounce(userSearch, 400);
-  const searchMode = debouncedUserSearch.trim().length > 0;
+  // The Worker rejects searches shorter than this, so the client never sends them.
+  const searchMode = debouncedUserSearch.trim().length >= 2;
   const socialDetailsActive = Boolean(user && (selectedSection || searchMode));
 
   useEffect(() => {
@@ -147,7 +148,7 @@ export default function People() {
   const suggestionsQuery = useQuery({
     queryKey: ['people-suggestions-preview', user?.id],
     enabled: Boolean(user && selectedSection === 'suggestions'),
-    queryFn: () => voxylApi.functions.invoke('searchUsers', { query: '' }).then((response) => response.data?.users || []),
+    queryFn: () => voxylApi.functions.invoke('getUserSuggestions', {}).then((response) => response.data?.users || []),
   });
 
   const searchQuery = useQuery({
