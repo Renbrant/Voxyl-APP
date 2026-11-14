@@ -38,9 +38,7 @@ export default function Sidebar({ peopleRequestsCount = 0 }) {
     });
   }, [clerkLoaded, isAuthenticated, isLoadingAuth, user]);
 
-  const isAdmin =
-    user?.role === 'admin' ||
-    user?.email?.toLowerCase() === 'renatobrant@gmail.com';
+  const isAdmin = user?.is_admin === true;
 
   return (
     <aside

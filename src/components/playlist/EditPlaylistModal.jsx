@@ -44,7 +44,7 @@ export default function EditPlaylistModal({ playlist, onClose, onSaved, onDelete
     }
   }, [user]);
 
-  const MAX_FEEDS = getMaxFeeds(currentUser?.role === 'admin');
+  const MAX_FEEDS = getMaxFeeds(currentUser?.is_admin === true);
   const [name, setName] = useState(playlist.name || '');
   const [description, setDescription] = useState(playlist.description || '');
   const [maxDuration, setMaxDuration] = useState(playlist.max_duration || 0);

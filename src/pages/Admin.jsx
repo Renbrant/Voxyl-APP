@@ -42,9 +42,8 @@ export default function Admin() {
   const [cfMetricTab, setCfMetricTab] = useState('writes');
 
   const currentUser = apiUser || user;
-  const isAdmin =
-    currentUser?.role === 'admin' ||
-    currentUser?.email?.toLowerCase() === 'renatobrant@gmail.com';
+  // Display only: the Worker decides admin access and enforces it on every request.
+  const isAdmin = currentUser?.is_admin === true;
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['admin-metrics'],

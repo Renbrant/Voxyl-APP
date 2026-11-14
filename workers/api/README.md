@@ -73,6 +73,16 @@ in Clerk and whether destructive operations such as account deletion need a
 separate live-session check. Do not assume that logging out revokes an already
 issued JWT immediately at this Worker.
 
+## Admin Access
+
+Admin access is configuration only; no identity is hardcoded in source. A user is an admin when any of these holds:
+
+    users.role = 'admin' in D1
+    the user's Clerk id is listed in ADMIN_CLERK_USER_IDS (comma-separated, preferred: ids do not change)
+    the user's email is listed in ADMIN_EMAILS (comma-separated, case-insensitive)
+
+Set the values as Worker secrets or variables, for example `npx wrangler secret put ADMIN_CLERK_USER_IDS --config workers/api/wrangler.toml`, before deploying a release that depends on them. `GET /api/me` returns `is_admin` so the client can show or hide admin entry points; every admin route still checks the role on the Worker.
+
 ## Profile Avatar Model
 
 D1 fields:

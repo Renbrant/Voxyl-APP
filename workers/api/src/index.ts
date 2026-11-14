@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.6.3",
+  version: "0.6.4",
 };
 
 const notFoundResponse = {
@@ -35,6 +35,7 @@ interface Env {
   PODCAST_INDEX_API_KEY?: string;
   PODCAST_INDEX_API_SECRET?: string;
   ADMIN_EMAILS?: string;
+  ADMIN_CLERK_USER_IDS?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   RL_PUBLIC?: RateLimitBinding;
@@ -43,7 +44,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.3 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.4 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -54,7 +55,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.6.3 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.6.4 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -3366,15 +3367,18 @@ function resolveProfilePicture(user: D1User): string | null {
 
 function toClientUser(
   user: D1User,
+  env: Env,
 ): D1User & {
   full_name: string | null;
   picture: string | null;
   custom_profile_picture: string | null;
+  is_admin: boolean;
 } {
   const resolvedPicture = resolveProfilePicture(user);
 
   return {
     ...user,
+    is_admin: isUserAdmin(user, env),
     custom_profile_picture: user.profile_picture,
     profile_picture: resolvedPicture,
     full_name: user.name,
@@ -3826,7 +3830,7 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     {
       ok: true,
       user: {
-        ...toClientUser(user),
+        ...toClientUser(user, env),
         terms_accepted_version: terms?.terms_accepted_version ?? null,
         terms_accepted_at: terms?.terms_accepted_at ?? null,
       },
@@ -3940,8 +3944,8 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
   return jsonResponse(
     {
       ok: true,
-      user: toClientUser(updated),
-      data: toClientUser(updated),
+      user: toClientUser(updated, env),
+      data: toClientUser(updated, env),
     },
     200,
     corsHeaders,
@@ -6195,7 +6199,7 @@ async function createPlaylistResponse(request: Request, env: Env): Promise<Respo
   const validated = validatePlaylistUpdatePayload(body);
   if (!validated.name) throw new PodcastPlayError(400, "invalid-request", "name is required");
   const feeds = (validated.rss_feeds || []) as Record<string, unknown>[];
-  const feedLimit = user.role === "admin" ? 100 : BETA_PLAYLIST_FEED_LIMIT;
+  const feedLimit = isUserAdmin(user, env) ? 100 : BETA_PLAYLIST_FEED_LIMIT;
   if (feeds.length > feedLimit) throw new PodcastPlayError(409, "feed-limit", `Maximum ${feedLimit} podcasts per playlist`);
   const payload = {
     name: validated.name,
@@ -6257,7 +6261,7 @@ async function createPlaylistResponse(request: Request, env: Env): Promise<Respo
     payload.episodes_sort_order, user.name, user.email, user.username,
     resolveProfilePicture(user), Number(user.profile_hidden || 0), payload.visibility === "public" ? 1 : 0,
     crypto.randomUUID(), requestId, requestHash, ...owner.params,
-    user.role === "admin" ? Number.MAX_SAFE_INTEGER : BETA_PLAYLIST_LIMIT,
+    isUserAdmin(user, env) ? Number.MAX_SAFE_INTEGER : BETA_PLAYLIST_LIMIT,
   ).run();
   if (Number(result.meta?.changes || 0) === 0) {
     const concurrentReplay = await findRetry();
@@ -6321,7 +6325,7 @@ async function updatePlaylistResponse(request: Request, env: Env, playlistId: st
     return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
   }
 
-  const feedLimit = user.role === "admin" ? 100 : BETA_PLAYLIST_FEED_LIMIT;
+  const feedLimit = isUserAdmin(user, env) ? 100 : BETA_PLAYLIST_FEED_LIMIT;
   if (payload.rss_feeds && payload.rss_feeds.length > feedLimit
       && payload.rss_feeds.length > parseRssFeeds(playlist.rss_feeds).length) {
     throw new PodcastPlayError(409, "feed-limit", `Maximum ${feedLimit} podcasts per playlist`);
@@ -6536,7 +6540,7 @@ async function followsResponse(request: Request, env: Env): Promise<Response> {
     (followerId !== null && allowedUserIds.has(followerId)) ||
     (followingId !== null && allowedUserIds.has(followingId));
 
-  if (currentUser.role !== "admin" && !queryInvolvesCurrentUser) {
+  if (!isUserAdmin(currentUser, env) && !queryInvolvesCurrentUser) {
     return jsonResponse({ ok: false, error: "Forbidden" }, 403, corsHeaders);
   }
 
@@ -7437,15 +7441,21 @@ async function topPlaylistsByPlaybackResponse(request: Request, env: Env): Promi
   );
 }
 
+function parseAdminList(value: string | undefined, normalize: (item: string) => string): string[] {
+  return (value || "").split(",").map((item) => normalize(item.trim())).filter(Boolean);
+}
+
+// Admin access comes only from configuration: the D1 role, the Clerk user ids in
+// ADMIN_CLERK_USER_IDS (preferred, stable) or the emails in ADMIN_EMAILS. No
+// identity is hardcoded in source (issue #145).
 function isUserAdmin(user: D1User, env: Env): boolean {
   if (user.role === "admin") return true;
-  const email = (user.email || "").trim().toLowerCase();
-  if (email === "renatobrant@gmail.com") return true;
-  if (env.ADMIN_EMAILS) {
-    const list = env.ADMIN_EMAILS.split(",").map((e) => e.trim().toLowerCase());
-    if (list.includes(email)) return true;
+  const clerkIds = parseAdminList(env.ADMIN_CLERK_USER_IDS, (id) => id);
+  if (clerkIds.length > 0 && [user.id, user.clerk_user_id].some((id) => id && clerkIds.includes(id))) {
+    return true;
   }
-  return false;
+  const email = (user.email || "").trim().toLowerCase();
+  return Boolean(email) && parseAdminList(env.ADMIN_EMAILS, (item) => item.toLowerCase()).includes(email);
 }
 
 // ---------------------------------------------------------------------------

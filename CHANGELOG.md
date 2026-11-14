@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.4 - November 2026 (Unreleased)
+
+### Remove the hardcoded admin identity (issue #145)
+
+- The Worker no longer compares against a literal email address. `isUserAdmin` grants admin from `users.role = 'admin'`, `ADMIN_CLERK_USER_IDS` (preferred) or `ADMIN_EMAILS`, and ignores empty entries.
+- `GET /api/me` and `PATCH /api/me` return `is_admin`. The Admin page, Sidebar, Settings, playlist modals and the 404 page use it instead of repeating the rule on the client. Authorization stays on the Worker.
+- Playlist feed limits, the playlist creation limit and the follows query use the same `isUserAdmin` criterion.
+- Added `tests/no-hardcoded-identities.test.mjs`, which fails when a personal email address appears in `src/` or `workers/api/src/` (published support and privacy data excluded), and rewrote `tests/admin-metrics.test.mjs` around configured admins.
+- **Deploy note:** configure `ADMIN_CLERK_USER_IDS` or `ADMIN_EMAILS` (or set `role = 'admin'` in D1) before deploying the Worker, otherwise nobody can open `/admin`. Documented in `workers/api/README.md`.
+- No migration.
+
 ## v0.6.3 - November 2026 (Unreleased)
 
 ### Dependency triage (issue #115)

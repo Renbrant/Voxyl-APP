@@ -21,7 +21,7 @@ function getLimits(isAdmin = false) {
 }
 
 export default function CreatePlaylistModal({ user, onClose, onCreated, playlistCount = 0 }) {
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.is_admin === true;
   const { MAX_PLAYLISTS, MAX_FEEDS } = getLimits(isAdmin);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
