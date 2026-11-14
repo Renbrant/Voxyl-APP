@@ -6,6 +6,17 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.3 - November 2026 (Unreleased)
+
+### Dependency triage (issue #115)
+
+- Removed 16 direct dependencies that nothing imports: `@hookform/resolvers`, `@radix-ui/react-toast`, `@stripe/react-stripe-js`, `@stripe/stripe-js`, `canvas-confetti`, `fast-xml-parser`, `html2canvas`, `jspdf`, `lodash`, `moment`, `react-hot-toast`, `react-leaflet`, `react-markdown`, `react-quill`, `three` and `zod`. This also drops the transitive packages behind the critical `jspdf` advisory.
+- Applied the non-breaking `npm audit fix` (no `--force`). The audit went from 33 findings (3 critical, 16 high) to 2 moderate.
+- The 2 remaining findings are in `react-router` 6.x and affect server-side hydration only, which this SPA does not use. The fix is a React Router 7 migration, tracked separately.
+- `npm ci` still applies the `@capgo/capacitor-native-audio` patch.
+- Added Dependabot for weekly grouped npm updates and monthly GitHub Actions updates, and documented the policy in `docs/dependency-policy.md`.
+- No application behavior change and no migration.
+
 ## v0.6.2 - November 2026 (Unreleased)
 
 ### Block state synchronization (issue #48)
