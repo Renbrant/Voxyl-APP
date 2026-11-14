@@ -18,5 +18,6 @@
    - `docs/release-process.md` (exemplos e release de referência)
    - `CHANGELOG.md` (nova seção no topo com os detalhes da mudança)
    - `tests/version-consistency.test.mjs` (constantes `EXPECTED_VERSION`, `EXPECTED_ANDROID_VERSION_CODE` e assertions)
+   - `tests/podcast-search.test.mjs` (regex do `User-Agent` `Voxyl/0.x.y`)
 5. **Validação**:
    - Sempre execute `npm test` para certificar que `version-consistency.test.mjs` e toda a suíte de testes passem sem regressões.

@@ -184,7 +184,6 @@ const entityNames = [
   "PodcastLike",
   "PodcastPlay",
   "Referral",
-  "Report",
   "User",
 ];
 
@@ -257,6 +256,20 @@ export const voxylApi = {
       return apiFetch("/blocks/hidden-users").then((data) => data?.user_ids || []);
     },
   },
+  reports: {
+    // Reporter identity, reported user and title are resolved by the Worker.
+    create({ contentType, contentId, reason, details }) {
+      return apiFetch("/reports", {
+        method: "POST",
+        body: {
+          content_type: contentType,
+          content_id: contentId,
+          reason,
+          details: details || undefined,
+        },
+      });
+    },
+  },
   people: {
     summary() {
       return apiFetch("/people/summary");
@@ -293,6 +306,12 @@ export const voxylApi = {
     metrics(options = {}) {
       const query = options?.fresh ? "?fresh=1" : "";
       return apiFetch(`/admin/metrics${query}`);
+    },
+    reports(status = "open") {
+      return apiFetch("/admin/reports", { params: { status } }).then((data) => data?.reports || []);
+    },
+    updateReport(id, status) {
+      return apiFetch(`/admin/reports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
     },
   },
 };

@@ -141,6 +141,7 @@ The 0.4.x line is the UX-focused phase of the Voxyl beta, built on the independe
 | **v0.4.13** | Playback presentation | Gray skip zones, visible position dots, singular day filters and total/playable episode durations |
 
 | **v0.4.14** | Playlist creation (unreleased) | Authenticated creation API, atomic beta limits, safe retries and recoverable save errors |
+| **v0.4.15** | Content reports (unreleased) | Authenticated `POST /api/reports`, one open report per reporter and content, admin moderation queue, recoverable report errors |
 
 The persistent Android playback architecture introduced in v0.3.2 remains the native playback foundation for the current beta line.
 
@@ -443,11 +444,13 @@ Voxyl is built around explicit user control and server-side authorization.
 
 ## Current Version
 
-**Voxyl 0.4.14 — Beta** (unreleased)
+**Voxyl 0.4.15 — Beta** (unreleased)
 
-Android source versionCode: **414**
+Android source versionCode: **415**
 
-The v0.4.14 candidate restores playlist creation through the Worker, prevents duplicate retry saves and handles errors in both creation forms. The previous Android baseline is v0.4.13. Deployment and signed APK/AAB packaging require separate validation.
+The v0.4.15 candidate makes content reporting work end to end (issue #55): the app sends reports to the authenticated `POST /api/reports` Worker route instead of the removed generic Report entity, errors are shown instead of leaving the form loading, and administrators get a report queue in `/admin`. It also contains the v0.4.14 playlist creation work, which restores playlist creation through the Worker, prevents duplicate retry saves and handles errors in both creation forms. The previous Android baseline is v0.4.13. Deployment and signed APK/AAB packaging require separate validation.
+
+Before deploying the Worker, apply migration `0008_report_moderation.sql` (in addition to `0007_playlist_creation_idempotency.sql` if it is not applied yet). It marks duplicate legacy open reports and creates the unique index the report endpoint relies on.
 
 Before deploying the Worker, apply migration `0007_playlist_creation_idempotency.sql`. Creation enforces the beta limits of 2 playlists and 5 podcasts per playlist for standard accounts; administrator status is resolved on the server. A local easter-egg flag no longer grants extra creation capacity. Existing playlists are preserved.
 
