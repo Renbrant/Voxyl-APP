@@ -20,11 +20,13 @@ Voxyl is currently in **beta**.
 
 ### 🤖 Android
 
-**[Download the latest Voxyl APK](https://github.com/Renbrant/Voxyl-APP/releases/latest)**
+**[Download the Voxyl Android test build (APK)](https://github.com/Renbrant/Voxyl-APP/releases/download/android-test/Voxyl-test.apk)**
 
-Android releases are distributed directly through GitHub while Voxyl remains in beta.
+> **This is a test build.** It is a signed release build published for testing before each Google Play upload, so it may be unstable or ahead of what is on the store. The release notes of the [`android-test` pre-release](https://github.com/Renbrant/Voxyl-APP/releases/tag/android-test) state the exact version and commit.
 
-> Android may ask you to allow installation from unknown sources because the app is not currently distributed through Google Play.
+The link always points to the most recent test build, which is replaced each time the Android release workflow runs.
+
+> Android may ask you to allow installation from unknown sources because the test build is not distributed through Google Play.
 
 Production web deployment metadata is available at:
 
