@@ -16,8 +16,9 @@ import PullToRefreshIndicator from '@/components/common/PullToRefreshIndicator';
 import MyPlaylistsContent from '@/components/feed/MyPlaylistsContent';
 import { useRequireAuth } from '@/hooks/useRequireAuth';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
-import { getCache, setCache, invalidateCache, TTL_5MIN } from '@/lib/appCache';
+import { invalidateCache } from '@/lib/appCache';
 import { asArray } from '@/lib/arrayUtils';
+import { filterVisibleCreators, useHiddenUsers } from '@/lib/blocks';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
@@ -201,58 +202,28 @@ function HomeRankedContent({
 
 export default function Feed() {
   const [user, setUser] = useState(null);
-  const [blockedIds, setBlockedIds] = useState([]);
   const [authResolved, setAuthResolved] = useState(false);
-  const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
-  const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
-  const [hiddenUsersError, setHiddenUsersError] = useState('');
   const [tab, setTab] = useState('for-you');
 
   const { requireAuth, redirectToLogin } = useRequireAuth();
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
-  const loadHiddenUsers = async (currentUser) => {
-    if (!currentUser?.id) return;
-
-    const cacheKey = 'hidden-users-' + currentUser.id;
-
-    setHiddenUsersLoading(true);
-    setHiddenUsersError('');
-
-    try {
-      const ids = [
-        ...new Set(
-          asArray(await voxylApi.blocks.hiddenUserIds()),
-        ),
-      ];
-
-      setBlockedIds(ids);
-      setCache(cacheKey, ids, TTL_5MIN);
-      setHiddenUsersReady(true);
-    } catch (error) {
-      console.error('[Feed] Failed to load hidden users', { error });
-
-      const cached = getCache(cacheKey);
-
-      if (Array.isArray(cached)) {
-        setBlockedIds(cached);
-        setHiddenUsersReady(true);
-      } else {
-        setHiddenUsersReady(false);
-        setHiddenUsersError(t('blockLoadHiddenError'));
-      }
-    } finally {
-      setHiddenUsersLoading(false);
-    }
-  };
+  // Shared, always-fresh block state: refreshed on mount and after any block/unblock.
+  const {
+    blockedIds,
+    setBlockedIds,
+    hiddenUsersReady,
+    hiddenUsersLoading,
+    hiddenUsersError,
+    loadHiddenUsers,
+  } = useHiddenUsers(user?.id);
 
   useEffect(() => {
     voxylApi.auth.me()
       .then(currentUser => {
         setUser(currentUser);
         setAuthResolved(true);
-        loadHiddenUsers(currentUser);
       })
       .catch(error => {
         if (error?.status && error.status !== 401) {
@@ -383,9 +354,7 @@ export default function Feed() {
   const canRenderSocialContent = !user || hiddenUsersReady;
 
   const rankedPlaylists = canRenderSocialContent
-    ? asArray(homeRankings?.playlists).filter(
-        playlist => !blockedIds.includes(playlist.creator_id),
-      )
+    ? filterVisibleCreators(homeRankings?.playlists, blockedIds)
     : [];
 
   const rankedPodcasts = canRenderSocialContent

@@ -18,7 +18,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
 import { resolveExploreTab } from '@/lib/discoverTabs';
-import { getCache, setCache, TTL_5MIN } from '@/lib/appCache';
+import { isCreatorHidden, useHiddenUsers } from '@/lib/blocks';
 import {
   handlePodcastLikeMutationSuccess,
   loadPlaylistLikeRecords,
@@ -49,11 +49,7 @@ export default function Explore() {
   const [voxylSearch, setVoxylSearch] = useState(params.get('vq') || '');
 
 
-  const [blockedIds, setBlockedIds] = useState([]);
   const [authResolved, setAuthResolved] = useState(false);
-  const [hiddenUsersReady, setHiddenUsersReady] = useState(false);
-  const [hiddenUsersLoading, setHiddenUsersLoading] = useState(false);
-  const [hiddenUsersError, setHiddenUsersError] = useState('');
   const [followStatuses, setFollowStatuses] = useState({});
 
   const [podcastSortBy, setPodcastSortBy] = useState(params.get('sort') || 'relevance');
@@ -81,31 +77,15 @@ export default function Explore() {
   const containerRef = useRef(null);
   const queryClient = useQueryClient();
 
-  const loadHiddenUsers = async (u) => {
-    if (!u?.id) return;
-    const cacheKey = `hidden-users-${u.id}`;
-    setHiddenUsersLoading(true);
-    setHiddenUsersError('');
-    try {
-      const hiddenIds = await voxylApi.blocks.hiddenUserIds();
-      const ids = [...new Set(Array.isArray(hiddenIds) ? hiddenIds : [])];
-      setBlockedIds(ids);
-      setCache(cacheKey, ids, TTL_5MIN);
-      setHiddenUsersReady(true);
-    } catch (error) {
-      console.error('[Explore] Failed to load hidden users', { error });
-      const cached = getCache(cacheKey);
-      if (Array.isArray(cached)) {
-        setBlockedIds(cached);
-        setHiddenUsersReady(true);
-      } else {
-        setHiddenUsersReady(false);
-        setHiddenUsersError(t('blockLoadHiddenError'));
-      }
-    } finally {
-      setHiddenUsersLoading(false);
-    }
-  };
+  // user is declared above; the shared block state follows it.
+  const {
+    blockedIds,
+    setBlockedIds,
+    hiddenUsersReady,
+    hiddenUsersLoading,
+    hiddenUsersError,
+    loadHiddenUsers,
+  } = useHiddenUsers(user?.id);
 
   const { pullProgress, refreshing } = usePullToRefresh(() => {
     queryClient.invalidateQueries({ queryKey: ['explore-playlists'] });
@@ -120,7 +100,6 @@ export default function Explore() {
     voxylApi.auth.me().then(u => {
       setUser(u);
       setAuthResolved(true);
-      loadHiddenUsers(u);
       voxylApi.entities.Follow.filter({ follower_id: u.id })
         .then(follows => {
           const map = {};
@@ -300,7 +279,7 @@ export default function Explore() {
   const canRenderSocialContent = !user || hiddenUsersReady;
   const filteredPlaylists = canRenderSocialContent ? playlists
     .filter(p => {
-      if (blockedIds.includes(p.creator_id)) return false;
+      if (isCreatorHidden(p, blockedIds)) return false;
       if (p.visibility === 'private') return false;
       if (p.visibility === 'friends_only' && !(user && followStatuses[p.creator_id] === 'accepted')) return false;
       return !voxylSearch ||
