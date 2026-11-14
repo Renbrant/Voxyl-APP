@@ -73,6 +73,23 @@ in Clerk and whether destructive operations such as account deletion need a
 separate live-session check. Do not assume that logging out revokes an already
 issued JWT immediately at this Worker.
 
+## Image Uploads
+
+`POST /api/files/upload` (avatars and playlist covers) judges files by their bytes, never by the declared MIME type or file name:
+
+    allowed: JPEG, PNG, WebP (SVG, GIF, HEIC and anything else -> 415 unsupported-image)
+    size: 5 MB per file; a declared body over 5 MB + 64 KB is refused before parsing (413 file-too-large)
+    dimensions: at most 8192 px per side and 36 megapixels, read from the header (413 image-dimensions)
+    quota: at most 40 objects and 100 MB per account (413 storage-quota-exceeded)
+    key: profiles/<clerk user id>/<timestamp>-<uuid>.<jpg|png|webp>; the client file name is not used
+    metadata: Content-Type comes from the detected format, with a one-year immutable Cache-Control
+
+Old objects are never deleted automatically, because they may still be used as an avatar or a cover. Account deletion removes everything under the account prefix.
+
+Rate limiting: uploads are POST requests, so they fall under the per-user `RL_WRITE` limit described in `wrangler.toml`.
+
+Serving: images are served from `https://voxyl-media.renbrant.com`, a separate origin from the app and the API, so a stored file cannot read the app's storage. Because the Worker stores only verified raster images with a matching Content-Type, no script can be served as an image. For defense in depth, add a Cloudflare Transform Rule on that hostname that sets `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox` (R2 object metadata cannot set these headers). This is a dashboard setting, not part of the repository.
+
 ## Admin Access
 
 Admin access is configuration only; no identity is hardcoded in source. A user is an admin when any of these holds:

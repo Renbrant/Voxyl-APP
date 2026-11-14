@@ -6,6 +6,19 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.7 - November 2026 (Unreleased)
+
+### Harden image uploads (issue #116)
+
+- `POST /api/files/upload` now decides the file type from its bytes (`workers/api/src/imageInspection.ts`) and ignores the declared MIME type and file name. Only JPEG, PNG and WebP are accepted; SVG, GIF, HEIC, HTML and spoofed files return `415 unsupported-image`.
+- Header-declared dimensions are bounded (8192 px per side, 36 megapixels) without decoding pixels: `413 image-dimensions`.
+- A declared request body over 5 MB + 64 KB is rejected before the multipart data is parsed, and files over 5 MB return `413 file-too-large` (previously 400).
+- Per-account storage quota of 40 objects and 100 MB (`413 storage-quota-exceeded`). Objects are never deleted automatically because they may still be used as avatars or covers.
+- The stored key no longer contains the client file name (`profiles/<clerk id>/<timestamp>-<uuid>.<jpg|png|webp>`), and the object is stored with the detected Content-Type and an immutable Cache-Control.
+- Documented the serving origin, the per-user write rate limit, the existing account-deletion cleanup and the recommended `nosniff` and `Content-Security-Policy` Transform Rule in `workers/api/README.md`.
+- Added `tests/image-upload-worker.test.mjs` (spoofed MIME, SVG/HTML/GIF, oversized file and body, dimensions, quota, key shape).
+- Worker change: deploy the Worker; no migration.
+
 ## v0.6.6 - November 2026 (Unreleased)
 
 ### Stop anonymous user enumeration (issue #144)
