@@ -4,7 +4,7 @@ import sax from "sax";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.5.0",
+  version: "0.6.0",
 };
 
 const notFoundResponse = {
@@ -43,7 +43,7 @@ interface Env {
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.5.0 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.0 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -54,7 +54,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.5.0 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.6.0 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -170,6 +170,8 @@ type PodcastPlayErrorCode =
   | "own-content"
   | "invalid-username"
   | "username-taken"
+  | "terms-not-accepted"
+  | "terms-version-mismatch"
   | "internal-error";
 
 class PodcastPlayError extends Error {
@@ -711,6 +713,90 @@ async function enforceRateLimit(request: Request, env: Env, pathname: string): P
     },
     429,
     { "retry-after": String(RATE_LIMIT_RETRY_AFTER_SECONDS) },
+  );
+}
+
+// Must match the version in src/data/terms-of-use.json and migration 0010.
+// tests/terms-of-use.test.mjs enforces that the three stay in step.
+const TERMS_OF_USE_VERSION = "2026-11-14";
+
+function isAcceptTermsRoute(pathname: string): boolean {
+  return pathname === "/me/accept-terms" || pathname === "/api/me/accept-terms";
+}
+
+// Content creation and claiming a username require the current terms to be
+// accepted. The check runs against the database, not the client, so a stale or
+// modified app cannot skip it.
+async function assertTermsAcceptedForUserId(env: Env, userId: string): Promise<void> {
+  const row = await env.DB.prepare(
+    "SELECT terms_accepted_version FROM users WHERE id = ? LIMIT 1",
+  )
+    .bind(userId)
+    .first<{ terms_accepted_version: string | null }>();
+
+  if (row?.terms_accepted_version !== TERMS_OF_USE_VERSION) {
+    throw new PodcastPlayError(
+      403,
+      "terms-not-accepted",
+      "Accept the current Terms of Use before continuing",
+    );
+  }
+}
+
+async function acceptTermsResponse(request: Request, env: Env): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const claims = await getVerifiedClerkClaims(request, env);
+
+  if (!claims) {
+    return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
+  }
+
+  const user = await resolveD1UserFromClerkClaims(env, claims);
+
+  if (!user) {
+    return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
+  }
+
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    throw new PodcastPlayError(400, "invalid-request", "Request body must be valid JSON");
+  }
+
+  const submittedVersion =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>).version
+      : undefined;
+
+  // The client must acknowledge the version it displayed. If the terms changed in
+  // the meantime, the user has to review the new text rather than accept blindly.
+  if (submittedVersion !== TERMS_OF_USE_VERSION) {
+    throw new PodcastPlayError(
+      409,
+      "terms-version-mismatch",
+      "The Terms of Use changed. Review the current version before accepting.",
+    );
+  }
+
+  await env.DB.prepare(
+    `UPDATE users
+     SET terms_accepted_version = ?,
+         terms_accepted_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(TERMS_OF_USE_VERSION, user.id)
+    .run();
+
+  return jsonResponse(
+    {
+      ok: true,
+      terms_accepted_version: TERMS_OF_USE_VERSION,
+    },
+    200,
+    corsHeaders,
   );
 }
 
@@ -3724,7 +3810,25 @@ async function meResponse(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ ok: false, error: "User bootstrap failed" }, 500, corsHeaders);
   }
 
-  return jsonResponse({ ok: true, user: toClientUser(user) }, 200, corsHeaders);
+  const terms = await env.DB.prepare(
+    "SELECT terms_accepted_version, terms_accepted_at FROM users WHERE id = ? LIMIT 1",
+  )
+    .bind(user.id)
+    .first<{ terms_accepted_version: string | null; terms_accepted_at: string | null }>();
+
+  return jsonResponse(
+    {
+      ok: true,
+      user: {
+        ...toClientUser(user),
+        terms_accepted_version: terms?.terms_accepted_version ?? null,
+        terms_accepted_at: terms?.terms_accepted_at ?? null,
+      },
+      terms_current_version: TERMS_OF_USE_VERSION,
+    },
+    200,
+    corsHeaders,
+  );
 }
 
 async function updateMeResponse(request: Request, env: Env): Promise<Response> {
@@ -3762,6 +3866,7 @@ async function updateMeResponse(request: Request, env: Env): Promise<Response> {
     // Re-claiming the handle the user already holds is allowed: the claim
     // excludes the caller's own row, and it re-syncs their playlists.
     const username = normalizeUsernameInput(payload.username);
+    await assertTermsAcceptedForUserId(env, user.id);
     const claimed = await claimUsername(env, user, username);
 
     if (!claimed) {
@@ -4027,6 +4132,14 @@ async function handleFileUpload(request: Request, env: Env): Promise<Response> {
   if (!claims) {
     return jsonResponse(unauthenticatedResponse, 401, corsHeaders);
   }
+
+  const uploader = await getUserByClerkUserId(env, claims.userId);
+
+  if (!uploader) {
+    throw new PodcastPlayError(403, "terms-not-accepted", "Accept the current Terms of Use before continuing");
+  }
+
+  await assertTermsAcceptedForUserId(env, uploader.id);
 
   let formData: FormData;
 
@@ -6059,6 +6172,7 @@ async function createPlaylistResponse(request: Request, env: Env): Promise<Respo
   if (auth.response) return auth.response;
   const user = auth.user!;
   const claims = auth.claims!;
+  await assertTermsAcceptedForUserId(env, user.id);
   const body = await readPlaylistCreateBody(request);
   // Compatibility with the existing create-from-podcast client.
   if (!hasOwn(body, "visibility") && hasOwn(body, "is_public")) {
@@ -7965,6 +8079,10 @@ export default {
 
       if (request.method === "GET" && isMeRoute(pathname)) {
         return withCors(await meResponse(request, env), request, env);
+      }
+
+      if (request.method === "POST" && isAcceptTermsRoute(pathname)) {
+        return withCors(await acceptTermsResponse(request, env), request, env);
       }
 
       if (request.method === "PATCH" && isMeRoute(pathname)) {

@@ -24,6 +24,8 @@ import PlaylistDetail from '@/pages/PlaylistDetail';
 import UserProfile from '@/pages/UserProfile';
 import PlaylistPreview from '@/pages/PlaylistPreview';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
+import TermsOfUse from '@/pages/TermsOfUse';
+import TermsAcceptanceGate from '@/components/legal/TermsAcceptanceGate';
 import AccountDeletion from '@/pages/AccountDeletion';
 import PodcastDetail from '@/pages/PodcastDetail';
 import Admin from '@/pages/Admin';
@@ -179,6 +181,7 @@ const AuthenticatedApp = () => {
       <Route path="/share/:id" element={<PlaylistPreview />} />
       <Route path="/user/:userId" element={<UserProfile />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
+      <Route path="/terms" element={<TermsOfUse />} />
       <Route path="/account-deletion" element={<AccountDeletion />} />
       <Route path="/podcast/:feedUrl" element={<PodcastDetail />} />
       <Route path="*" element={<PageNotFound />} />
@@ -196,6 +199,7 @@ function App() {
           <PlayerProvider>
             <Router>
               <AuthenticatedApp />
+              <TermsAcceptanceGate />
             </Router>
             <Toaster />
           </PlayerProvider>

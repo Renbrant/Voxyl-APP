@@ -122,6 +122,9 @@ function seed() {
   for (const person of Object.values(people)) {
     insertUser.run(person.id, person.clerk, person.email, person.name, person.username, 'user');
   }
+  // Username claims are gated on the current Terms of Use; these tests cover the
+  // username rules themselves, so every seeded account has accepted the terms.
+  db.raw.prepare('UPDATE users SET terms_accepted_version = ?').run('2026-11-14');
   const insertPlaylist = db.raw.prepare(
     `INSERT INTO playlists (id, creator_id, creator_clerk_user_id, creator_username, title, visibility)
      VALUES (?, ?, ?, ?, ?, ?)`,
