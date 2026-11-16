@@ -6,6 +6,15 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.12 - November 2026 (Unreleased)
+
+### Account deletion signs out on Android (issue #104)
+
+- After a successful deletion, the delete-account modal now signs out through the auth context (`useAuth().logout`). On Android this ends the native Clerk session; the previous call to the web Clerk helper did nothing in the Android app, so the deleted user's session and screens could remain.
+- The app always returns to the start screen afterwards (`window.location.replace('/')`), even if sign-out reports a problem.
+- Extended `tests/account-deletion-client.test.mjs`.
+- Client only; no Worker behavior change and no migration.
+
 ## v0.6.11 - November 2026 (Unreleased)
 
 ### Higher beta limits
