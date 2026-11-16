@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.9
-versionCode 609
+Voxyl 0.6.10
+versionCode 610
 ```
+
+The v0.6.10 candidate adds a test APK download to the landing page next to the stable v0.4.13 APK, labeled with the source version.
 
 The v0.6.9 candidate restores background auto-advance and the full episode list: R8 is disabled again for release builds until background playback is validated on a device, RSS fetch has its own rate limit (`RL_RSS`, 300 per minute) separate from podcast search, playlist feeds are fetched at most four at a time, and playlist cards no longer fetch feeds for their cover.
 

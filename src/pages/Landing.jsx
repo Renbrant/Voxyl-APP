@@ -15,8 +15,11 @@ import {
   Users,
 } from 'lucide-react';
 import { lang, setLanguage } from '@/lib/i18n';
+import { version as APP_VERSION } from '../../package.json';
 
 const APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/v0.4.13/Voxyl-v0.4.13-release.apk';
+// Test build: rebuilt from main by the Android Release Bundle workflow.
+const TEST_APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/android-test/Voxyl-test.apk';
 const RELEASES_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/latest';
 
 const copy = {
@@ -75,6 +78,8 @@ const copy = {
     apkTitle: 'Baixe o APK oficial do Voxyl.',
     apkBody: 'Baixe o APK oficial do GitHub. O Android pode pedir permissão para instalar aplicativos de fontes externas.',
     apkButton: 'Baixar APK v0.4.13',
+    testApkButton: `Baixar versão de teste v${APP_VERSION}`,
+    testApkNote: 'A versão de teste traz as novidades mais recentes, mas pode ter instabilidades. Ela substitui a versão estável instalada.',
     releasesButton: 'Ver releases no GitHub',
     finalTitle: 'Pronto para ouvir?',
     finalBody: 'Abra o Voxyl agora mesmo. Nenhuma instalação é necessária.',
@@ -137,6 +142,8 @@ const copy = {
     apkTitle: 'Download the official Voxyl APK.',
     apkBody: 'Download the official APK from GitHub. Android may ask you to allow installs from external sources.',
     apkButton: 'Download APK v0.4.13',
+    testApkButton: `Download test version v${APP_VERSION}`,
+    testApkNote: 'The test version has the newest changes but may be unstable. It replaces the installed stable version.',
     releasesButton: 'View GitHub releases',
     finalTitle: 'Ready to listen?',
     finalBody: 'Open Voxyl right now. No installation is required.',
@@ -387,6 +394,7 @@ export default function Landing() {
                 <h2 className="mt-3 font-grotesk text-3xl font-bold">{c.apkTitle}</h2>
                 <p className="mt-4 max-w-3xl leading-7 text-white/55">{c.apkBody}</p>
                 <p className="mt-4 text-sm font-medium text-white/45">{c.currentBeta}</p>
+                <p className="mt-2 max-w-3xl text-sm text-white/45">{c.testApkNote}</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
                 <a
@@ -395,6 +403,13 @@ export default function Landing() {
                 >
                   <Download className="h-5 w-5" />
                   {c.apkButton}
+                </a>
+                <a
+                  href={TEST_APK_DOWNLOAD_URL}
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-orange-500/40 bg-orange-500/10 px-5 py-3 font-semibold text-orange-300 transition hover:bg-orange-500/20"
+                >
+                  <Download className="h-5 w-5" />
+                  {c.testApkButton}
                 </a>
                 <a
                   href={RELEASES_URL}
