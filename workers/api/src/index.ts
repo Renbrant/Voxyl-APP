@@ -5,7 +5,7 @@ import { dimensionsAllowed, inspectImage } from "./imageInspection.ts";
 const healthResponse = {
   ok: true,
   service: "voxyl-api",
-  version: "0.6.8",
+  version: "0.6.9",
 };
 
 const notFoundResponse = {
@@ -41,11 +41,12 @@ interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   RL_PUBLIC?: RateLimitBinding;
   RL_EXPENSIVE?: RateLimitBinding;
+  RL_RSS?: RateLimitBinding;
   RL_WRITE?: RateLimitBinding;
 }
 
 const PODCAST_INDEX_BASE_URL = "https://api.podcastindex.org/api/1.0";
-const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.8 (+https://v.renbrant.com)";
+const PODCAST_INDEX_USER_AGENT = "Voxyl/0.6.9 (+https://v.renbrant.com)";
 const PODCAST_SEARCH_TIMEOUT_MS = 8000;
 const PODCAST_SEARCH_MAX_QUERY_LENGTH = 120;
 const PODCAST_SEARCH_MAX_RESULTS = 50;
@@ -56,7 +57,7 @@ const RSS_FETCH_MAX_REDIRECTS = 5;
 const RSS_FETCH_FRESH_TTL_MS = 15 * 60 * 1000;
 const RSS_FETCH_KV_TTL_SECONDS = 24 * 60 * 60;
 const RSS_FETCH_MAX_DESCRIPTION_LENGTH = 2000;
-const RSS_FETCH_USER_AGENT = "Voxyl/0.6.8 RSS Fetcher (+https://v.renbrant.com)";
+const RSS_FETCH_USER_AGENT = "Voxyl/0.6.9 RSS Fetcher (+https://v.renbrant.com)";
 const RSS_FETCH_ACCEPT = "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml, */*;q=0.1";
 
 const podcastLanguageAliases: Record<string, string[]> = {
@@ -619,7 +620,7 @@ type RateLimitBinding = {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 };
 
-type RateLimitClass = "public" | "expensive" | "write";
+type RateLimitClass = "public" | "expensive" | "rss" | "write";
 
 const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 
@@ -627,7 +628,13 @@ const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 // Public discovery and RSS/search are the costly anonymous surface; authenticated
 // writes are limited per user. Reads of the caller's own data are not limited here.
 function getRateLimitClass(request: Request, pathname: string): RateLimitClass | null {
-  if (request.method === "POST" && (isPodcastSearchRoute(pathname) || isRssFetchRoute(pathname))) {
+  // RSS fetch has its own, larger budget: opening one playlist fetches every feed in it,
+  // and most of those requests are served from the KV cache.
+  if (request.method === "POST" && isRssFetchRoute(pathname)) {
+    return "rss";
+  }
+
+  if (request.method === "POST" && isPodcastSearchRoute(pathname)) {
     return "expensive";
   }
 
@@ -651,6 +658,8 @@ function getRateLimiter(env: Env, rateLimitClass: RateLimitClass): RateLimitBind
       return env.RL_PUBLIC;
     case "expensive":
       return env.RL_EXPENSIVE;
+    case "rss":
+      return env.RL_RSS;
     case "write":
       return env.RL_WRITE;
   }
@@ -697,7 +706,7 @@ async function enforceRateLimit(request: Request, env: Env, pathname: string): P
     }
 
     key = `write:user:${userId}`;
-  } else if (rateLimitClass === "expensive") {
+  } else if (rateLimitClass === "expensive" || rateLimitClass === "rss") {
     const userId = await lookupRateLimitUserId(request, env);
     const subject = userId ? `user:${userId}` : `ip:${getClientIp(request)}`;
     key = `${request.method} ${pathname}:${subject}`;

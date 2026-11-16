@@ -1,5 +1,4 @@
-import { getFeedFromCache, saveFeedToCache, getRSSCacheFromCloud } from '@/lib/feedCache';
-import { voxylApi } from '@/api/voxylApiClient';
+import { getFeedFromCache, getRSSCacheFromCloud } from '@/lib/feedCache';
 
 /**
  * Get cover image for playlist
@@ -27,18 +26,9 @@ export async function getPlaylistCoverImage(playlist) {
       feedData = await getRSSCacheFromCloud(feed.url).catch(() => null);
     }
     
-    // If still not found, fetch from API
-    if (!feedData) {
-      try {
-        const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: feed.url, count: 10 });
-        feedData = res.data;
-        if (feedData) {
-          saveFeedToCache(feed.url, feedData);
-        }
-      } catch (err) {
-        // Silent fail, use feed.image fallback
-      }
-    }
+    // No network fetch here: cover images are drawn for every playlist card, and
+    // fetching each feed would spend the RSS rate limit the playlist screens need.
+    // Without cached data the card falls back to the feed's own image below.
 
     const episodeCount = feedData?.items?.length || 0;
     
