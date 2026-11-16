@@ -53,7 +53,7 @@ describe('Issue #104 account deletion client contract', () => {
     );
 
     const logoutIndex = handler.indexOf(
-      "await voxylApi.auth.logout('/')",
+      'await logout(false)',
     );
 
     const deleteCatchIndex = handler.indexOf(
@@ -77,6 +77,20 @@ describe('Issue #104 account deletion client contract', () => {
     );
 
     assert.doesNotMatch(failureSource, /auth\.logout/);
+    assert.doesNotMatch(failureSource, /logout\(/);
+  });
+
+  it('signs out through the platform-aware auth context after deletion', () => {
+    const handler = section(
+      modalSource,
+      '  const handleDelete = async () => {',
+      '  const current = steps[step];',
+    );
+
+    assert.match(modalSource, /import \{ useAuth \} from '@\/lib\/AuthContext'/);
+    assert.match(modalSource, /const \{ logout \} = useAuth\(\);/);
+    assert.doesNotMatch(handler, /voxylApi\.auth\.logout/);
+    assert.match(handler, /finally \{\s*window\.location\.replace\('\/'\);/);
   });
 
   it('uses permanent deletion copy and exposes a visible error', () => {

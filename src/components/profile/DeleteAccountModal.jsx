@@ -3,6 +3,7 @@ import { voxylApi } from '@/api/voxylApiClient';
 import { clearLegacyAuthCredentials } from '@/lib/legacyAuthCleanup';
 import { clearAccountClientData } from '@/lib/accountCache';
 import { queryClientInstance } from '@/lib/query-client';
+import { useAuth } from '@/lib/AuthContext';
 import { X, Trash2, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -37,6 +38,7 @@ const STEPS = () => [
 
 export default function DeleteAccountModal({ user, onClose }) {
   const [step, setStep] = useState(0);
+  const { logout } = useAuth();
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -67,11 +69,15 @@ export default function DeleteAccountModal({ user, onClose }) {
       queryClientInstance.clear();
       clearAccountClientData(user?.id, { deleted: true });
 
+      // Platform-aware sign-out: on Android this ends the native Clerk session,
+      // which the web Clerk helper cannot reach. Always leave the account screens
+      // afterwards, even if sign-out reports a problem.
       try {
-        await voxylApi.auth.logout('/');
+        await logout(false);
       } catch (logoutError) {
         console.warn('[deleteAccount] post-deletion logout cleanup failed:', logoutError);
-        window.location.assign('/');
+      } finally {
+        window.location.replace('/');
       }
     } catch (deleteError) {
       console.error('[deleteAccount] deletion failed:', deleteError);
