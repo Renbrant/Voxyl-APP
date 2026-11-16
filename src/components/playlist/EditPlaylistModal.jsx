@@ -28,7 +28,7 @@ const TIME_FILTER_OPTIONS = [
 ];
 
 function getMaxFeeds(isAdmin = false) {
-  return isAdmin ? 100 : 5;
+  return isAdmin ? 100 : 10;
 }
 
 export default function EditPlaylistModal({ playlist, onClose, onSaved, onDeleted, user }) {

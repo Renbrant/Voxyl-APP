@@ -6,6 +6,15 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.11 - November 2026 (Unreleased)
+
+### Higher beta limits
+
+- Standard accounts can now own 5 playlists (was 2) with up to 10 podcasts each (was 5). Administrators keep unlimited playlists and 100 podcasts per playlist.
+- Worker: `BETA_PLAYLIST_LIMIT = 5`, `BETA_PLAYLIST_FEED_LIMIT = 10`. Client: `CreatePlaylistModal` and `EditPlaylistModal` use the same values, and the limit message says 5 playlists.
+- Updated `tests/playlist-create.test.mjs` for the new limits.
+- Worker change: deploy the Worker; no migration.
+
 ## v0.6.10 - November 2026 (Unreleased)
 
 ### Test APK on the landing page

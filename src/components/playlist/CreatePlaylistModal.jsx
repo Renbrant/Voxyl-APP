@@ -10,8 +10,8 @@ import { invalidateCreatedPlaylistQueries } from '@/lib/savedContentQueries';
 import { cn } from '@/lib/utils';
 import { getPodcastSearchErrorMessage } from '@/lib/podcastSearchErrors';
 
-const BASE_MAX_PLAYLISTS = 2;
-const BASE_MAX_FEEDS = 5;
+const BASE_MAX_PLAYLISTS = 5;
+const BASE_MAX_FEEDS = 10;
 // Beta quotas must match the authoritative Worker limits. Local easter-egg
 // storage is not an entitlement and cannot grant extra creation capacity.
 function getLimits(isAdmin = false) {
