@@ -169,12 +169,12 @@ describe('playlist creation through the Worker with real SQLite migrations', () 
 
   it('enforces feed limits and the final playlist slot atomically under concurrent creates', async () => {
     const { create, db } = setup();
-    const feedResponse = await create({ name: 'Too many', rss_feeds: Array.from({ length: 6 }, (_, i) => ({ url: `https://example.com/${i}` })) });
+    const feedResponse = await create({ name: 'Too many', rss_feeds: Array.from({ length: 11 }, (_, i) => ({ url: `https://example.com/${i}` })) });
     assert.equal((await feedResponse.json()).code, 'feed-limit');
-    assert.equal((await create({ name: 'First' })).status, 201);
+    for (let i = 0; i < 4; i += 1) assert.equal((await create({ name: `First ${i}` })).status, 201);
     const responses = await Promise.all(Array.from({ length: 4 }, (_, i) => create({ name: `Concurrent ${i}` })));
     assert.deepEqual(responses.map(r => r.status).sort(), [201, 409, 409, 409]);
-    assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM playlists').get().n, 2);
+    assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM playlists').get().n, 5);
   });
 
   it('replays concurrent retries, including at quota, and rejects reusing a key for different data', async () => {
@@ -242,7 +242,7 @@ describe('playlist deletion and editing with real SQLite foreign keys', () => {
     it(`${prefix}: authorizes deletion, cleans references and immediately releases quota`, async () => {
       const { db, create, request } = setup();
       const { playlist } = await (await create({ name: 'Delete me' })).json();
-      await create({ name: 'Keep me' });
+      for (let i = 0; i < 4; i += 1) await create({ name: `Keep me ${i}` });
       assert.equal((await create({ name: 'Full' })).status, 409);
       db.sqlite.prepare("INSERT INTO playlist_likes (id, playlist_id, user_id) VALUES ('like', ?, 'owner-user')").run(playlist.id);
       db.sqlite.prepare("INSERT INTO playlist_episodes_cache (id, playlist_id, episodes_json) VALUES ('cache', ?, '[]')").run(playlist.id);
@@ -266,7 +266,7 @@ describe('playlist deletion and editing with real SQLite foreign keys', () => {
     });
   }
 
-  for (const [role, limit] of [['user', 5], ['admin', 100]]) {
+  for (const [role, limit] of [['user', 10], ['admin', 100]]) {
     it(`enforces ${role} feed growth limit while preserving maintenance of legacy playlists`, async () => {
       const { db, create, request } = setup({ role });
       const { playlist } = await (await create({ name: 'Feeds' })).json();

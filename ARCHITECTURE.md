@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.10
-versionCode 610
+Voxyl 0.6.11
+versionCode 611
 ```
+
+The v0.6.11 candidate raises the beta limits for standard accounts to 5 playlists and 10 podcasts per playlist (from 2 and 5), in the Worker and in the client modals.
 
 The v0.6.10 candidate adds a test APK download to the landing page next to the stable v0.4.13 APK, labeled with the source version.
 
