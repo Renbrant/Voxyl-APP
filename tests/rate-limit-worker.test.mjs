@@ -95,7 +95,7 @@ describe('expensive anonymous routes (RL_EXPENSIVE, keyed by IP)', () => {
 
   it('keys anonymous callers by client IP and by route', async () => {
     const limiter = fakeLimiter(false);
-    env.RL_EXPENSIVE = limiter;
+    env.RL_RSS = limiter;
 
     await call('/api/rss/fetch', { ip: '198.51.100.9', payload: { url: 'https://example.com/feed.xml' } });
 
@@ -119,6 +119,20 @@ describe('expensive anonymous routes (RL_EXPENSIVE, keyed by IP)', () => {
 
     assert.notEqual(response.status, 429);
     assert.equal(limiter.keys.length, 1);
+  });
+});
+
+describe('RSS fetch (RL_RSS, separate from podcast search)', () => {
+  it('uses the RSS limiter and never spends the podcast search budget', async () => {
+    const search = fakeLimiter(true);
+    const rss = fakeLimiter(true);
+    env.RL_EXPENSIVE = search;
+    env.RL_RSS = rss;
+
+    await call('/api/functions/fetchRSSFeed', { token: issued.token, payload: { url: 'https://example.com/feed.xml' } }).catch(() => {});
+
+    assert.deepEqual(rss.keys, ['POST /api/functions/fetchRSSFeed:user:user-limited']);
+    assert.equal(search.keys.length, 0);
   });
 });
 
@@ -206,7 +220,7 @@ describe('unlimited requests', () => {
 
 describe('client-facing behaviour', () => {
   it('keeps CORS headers on the 429 so the browser can read the error', async () => {
-    env.RL_EXPENSIVE = fakeLimiter(false);
+    env.RL_RSS = fakeLimiter(false);
 
     const response = await call('/api/rss/fetch', { payload: { url: 'https://example.com/feed.xml' } });
 

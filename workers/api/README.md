@@ -191,7 +191,8 @@ The Worker applies per-route limits through the Workers Rate Limiting API. The b
 | Binding | Routes | Key | Limit |
 |---|---|---|---|
 | `RL_PUBLIC` | `searchUsers`, `getPublicUserProfile`, `getUserPlaylists` | client IP | 60 / 60 s |
-| `RL_EXPENSIVE` | podcast search, RSS fetch | user id when authenticated, otherwise client IP | 20 / 60 s |
+| `RL_EXPENSIVE` | podcast search | user id when authenticated, otherwise client IP | 20 / 60 s |
+| `RL_RSS` | RSS fetch (opening a playlist fetches every feed in it) | user id when authenticated, otherwise client IP | 300 / 60 s |
 | `RL_WRITE` | every authenticated `POST`, `PATCH`, `PUT` and `DELETE` | user id | 30 / 60 s |
 
 A limited request returns `429` with `{ "ok": false, "code": "rate-limited" }` and `Retry-After: 60`. The response keeps the CORS headers. A missing binding disables enforcement, which is how local development and the test suite run. Limits are starting values; calibrate them against real traffic before tightening, and note that a single playlist open can issue one RSS fetch per feed.

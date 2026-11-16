@@ -35,10 +35,17 @@ namespace_id = "1001"
   period = 60
 
 [[ratelimits]]
-name = "RL_EXPENSIVE"     # podcast search and RSS fetch, keyed by user or IP
+name = "RL_EXPENSIVE"     # podcast search, keyed by user or IP
 namespace_id = "1002"
   [ratelimits.simple]
   limit = 20
+  period = 60
+
+[[ratelimits]]
+name = "RL_RSS"           # RSS fetch, keyed by user or IP; one playlist fetches every feed in it
+namespace_id = "1004"
+  [ratelimits.simple]
+  limit = 300
   period = 60
 
 [[ratelimits]]

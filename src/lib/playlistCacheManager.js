@@ -168,6 +168,28 @@ export async function getInitialPlaylistEpisodes(playlistId, viewer = 'guest', i
   };
 }
 
+// A playlist can hold many feeds. Fetching them all at once floods the RSS route,
+// so at most MAX_PARALLEL_FEED_FETCHES requests run at the same time.
+const MAX_PARALLEL_FEED_FETCHES = 4;
+let activeFeedFetches = 0;
+const waitingFeedFetches = [];
+
+export async function withFeedFetchSlot(task) {
+  if (activeFeedFetches >= MAX_PARALLEL_FEED_FETCHES) {
+    // The finishing request hands its slot straight to this one.
+    await new Promise((resolve) => waitingFeedFetches.push(resolve));
+  } else {
+    activeFeedFetches += 1;
+  }
+  try {
+    return await task();
+  } finally {
+    const next = waitingFeedFetches.shift();
+    if (next) next();
+    else activeFeedFetches -= 1;
+  }
+}
+
 // Refresh and sync episodes (background sync with cloud and RSS feeds)
 export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, options = {}) {
   const { onProgress, viewer = 'guest', isCurrent = () => true } = options;
@@ -195,7 +217,7 @@ export async function refreshAndSyncPlaylistEpisodes(playlistId, playlist, optio
     const cloudCachePromise = getCloudCache(playlistId);
     const feedPromises = rssFeeds.map(async (f, index) => {
       try {
-          const res = await voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 100 });
+          const res = await withFeedFetchSlot(() => voxylApi.functions.invoke('fetchRSSFeed', { url: f.url, count: 100 }));
           const fresh = res.data;
           if (fresh?.items?.length && isCurrent()) {
             saveFeedToCache(f.url, fresh);

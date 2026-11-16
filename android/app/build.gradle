@@ -68,8 +68,8 @@ android {
         applicationId "com.renbrant.voxyl"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 608
-        versionName "0.6.8"
+        versionCode 609
+        versionName "0.6.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -97,8 +97,11 @@ android {
 
         release {
             resValue "string", "clerk_publishable_key", clerkReleasePublishableKey
-            minifyEnabled true
-            shrinkResources true
+            // R8 is off again: the first R8 release build (0.6.1) was never validated on a
+            // device, and background auto-advance stopped working in that build line.
+            // Re-enable only after background playback is checked on a real device.
+            minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (System.getenv('ANDROID_KEYSTORE_PATH')) {
                 signingConfig signingConfigs.release

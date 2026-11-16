@@ -6,6 +6,16 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.9 - November 2026 (Unreleased)
+
+### Background auto-advance and missing episodes
+
+- Android: R8 and resource shrinking are disabled again for release builds. The player code is unchanged since v0.4.13, which advanced to the next episode with the screen off; the test APK built from the R8 release line does not. R8 was never validated on a device (see v0.6.1). Re-enable it only after background playback is checked on a real device.
+- Worker: RSS fetch now has its own rate limit, `RL_RSS` (300 per minute per user or IP), instead of sharing the 20 per minute podcast search budget. Opening one playlist fetches every feed in it, so feeds beyond the 20th were rejected with 429 and their episodes never appeared, even though the screen showed it was loading.
+- Client: playlist feeds are fetched at most four at a time, and playlist cards no longer fetch feeds to pick a cover image (they use cached data or the feed image), so browsing playlists no longer spends the RSS budget.
+- Added an `RL_RSS` test to `tests/rate-limit-worker.test.mjs`.
+- Worker change: deploy the Worker (new `RL_RSS` binding in `wrangler.toml`); no migration.
+
 ## v0.6.8 - November 2026 (Unreleased)
 
 ### Back navigation and account sync recovery (issues #117 and #140)
