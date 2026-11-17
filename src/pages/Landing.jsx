@@ -27,6 +27,11 @@ const copy = {
     navHow: 'Como funciona',
     navFeatures: 'Recursos',
     navInstall: 'Instalar atalho',
+    navBeta: 'Seja beta tester',
+    betaEyebrow: 'Programa beta · Google Play',
+    betaTitle: 'Teste o Voxyl antes de todo mundo.',
+    betaBody: 'Entre no grupo de testadores e instale o app pela Google Play. Leva menos de um minuto.',
+    betaButton: 'Quero ser beta tester',
     openApp: 'Começar a ouvir',
     eyebrow: 'Podcasts do seu jeito',
     heroTitleA: 'Descubra, organize e compartilhe',
@@ -91,6 +96,11 @@ const copy = {
     navHow: 'How it works',
     navFeatures: 'Features',
     navInstall: 'Install shortcut',
+    navBeta: 'Become a beta tester',
+    betaEyebrow: 'Beta program · Google Play',
+    betaTitle: 'Try Voxyl before everyone else.',
+    betaBody: 'Join the testers group and install the app from Google Play. It takes less than a minute.',
+    betaButton: 'Become a beta tester',
     openApp: 'Start listening',
     eyebrow: 'Podcasts, your way',
     heroTitleA: 'Discover, organize and share',
@@ -199,6 +209,7 @@ export default function Landing() {
             <a href="#how" className="transition hover:text-white">{c.navHow}</a>
             <a href="#features" className="transition hover:text-white">{c.navFeatures}</a>
             <a href="#install" className="transition hover:text-white">{c.navInstall}</a>
+            <Link to="/beta" className="font-semibold text-orange-300 transition hover:text-orange-200">{c.navBeta}</Link>
           </nav>
 
           <div className="flex items-center gap-2">
@@ -383,6 +394,24 @@ export default function Landing() {
                 </div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section id="beta" className="mx-auto max-w-7xl px-4 pt-20 sm:px-6 lg:px-8 lg:pt-24">
+          <div className="flex flex-col gap-6 rounded-[2rem] border border-white/8 bg-white/[0.035] p-7 sm:p-10 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-400">{c.betaEyebrow}</p>
+              <h2 className="mt-3 font-grotesk text-3xl font-bold">{c.betaTitle}</h2>
+              <p className="mt-4 max-w-2xl leading-7 text-white/55">{c.betaBody}</p>
+            </div>
+            <Link
+              to="/beta"
+              className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-2xl bg-orange-500 px-6 py-3 font-semibold text-white shadow-xl shadow-orange-500/20 transition hover:bg-orange-400"
+            >
+              <Smartphone className="h-5 w-5" />
+              {c.betaButton}
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
         </section>
 

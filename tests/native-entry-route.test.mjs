@@ -29,6 +29,6 @@ test('router replaces native root before landing and authentication-loading bran
   assert.match(app, /getNativeEntryRedirect\(location, Capacitor\.isNativePlatform\(\)\)/);
   assert.match(app, /<Navigate to=\{nativeEntryRedirect\} replace \/>/);
   const nativeRedirectIndex = app.indexOf('if (nativeEntryRedirect)');
-  assert.ok(nativeRedirectIndex < app.indexOf("if (location.pathname === '/')"));
+  assert.ok(nativeRedirectIndex < app.indexOf("if (location.pathname === '/' || location.pathname === '/beta')"));
   assert.ok(nativeRedirectIndex < app.indexOf('if (isLoadingPublicSettings || isLoadingAuth)'));
 });

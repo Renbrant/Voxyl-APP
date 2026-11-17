@@ -13,6 +13,7 @@ import { PlayerProvider } from '@/lib/PlayerContext';
 import Layout from '@/components/Layout';
 // Add page imports here
 import Landing from '@/pages/Landing';
+import BetaTesters from '@/pages/BetaTesters';
 import Feed from '@/pages/Feed';
 import Explore from '@/pages/Explore';
 import People from '@/pages/People';
@@ -107,12 +108,13 @@ const AuthenticatedApp = () => {
     return <Navigate to={nativeEntryRedirect} replace />;
   }
 
-  // The public landing page is intentionally available immediately and does not
-  // wait for authentication or public-account settings to finish loading.
-  if (location.pathname === '/') {
+  // The public landing and beta tester pages are intentionally available
+  // immediately and do not wait for authentication or public-account settings.
+  if (location.pathname === '/' || location.pathname === '/beta') {
     return (
       <Routes location={location}>
         <Route path="/" element={<Landing />} />
+        <Route path="/beta" element={<BetaTesters />} />
       </Routes>
     );
   }
