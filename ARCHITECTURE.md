@@ -633,10 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.12
-versionCode 612
+Voxyl 0.6.13
+versionCode 613
 ```
 
+The v0.6.13 candidate adds the public /beta page for joining the Google Play closed test through a Google Group (no email collected by Voxyl).
 The v0.6.12 candidate signs out of the native Clerk session after account deletion on Android (issue #104).
 The v0.6.11 candidate raises the beta limits for standard accounts to 5 playlists and 10 podcasts per playlist (from 2 and 5), in the Worker and in the client modals.
 

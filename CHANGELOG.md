@@ -6,6 +6,16 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.13 - November 2026 (Unreleased)
+
+### Beta tester page
+
+- New public page at `/beta`, in Portuguese and English, explaining how to join the Google Play closed test: join the `voxyl-beta-testers` Google Group, accept the Play testing invitation, and install from Google Play.
+- The landing page links to it from the header and from a new "Become a beta tester" section.
+- Voxyl does not collect any email for this: the Google Group is the tester list attached to the closed testing track.
+- Added `tests/beta-testers-page.test.mjs`.
+- Client only; no Worker behavior change and no migration.
+
 ## v0.6.12 - November 2026 (Unreleased)
 
 ### Account deletion signs out on Android (issue #104)
