@@ -6,6 +6,15 @@ Voxyl is still in beta / pre-release development. The active product version was
 
 Historical entries below retain their original version labels for traceability.
 
+## v0.6.14 - November 2026 (Unreleased)
+
+### Landing page offers only the beta APK
+
+- Removed the stable v0.4.13 APK download from the landing page. The APK section now has a single "Download beta APK vX" button pointing at the `android-test` release (`Voxyl-test.apk`), and "Current beta" shows the source version from `package.json`.
+- "View GitHub releases" now opens the `android-test` release instead of the latest stable release (v0.4.13).
+- Updated `tests/landing-test-apk.test.mjs`.
+- Client only; no Worker behavior change and no migration.
+
 ## v0.6.13 - November 2026 (Unreleased)
 
 ### Beta tester page
