@@ -17,10 +17,9 @@ import {
 import { lang, setLanguage } from '@/lib/i18n';
 import { version as APP_VERSION } from '../../package.json';
 
-const APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/v0.4.13/Voxyl-v0.4.13-release.apk';
-// Test build: rebuilt from main by the Android Release Bundle workflow.
-const TEST_APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/android-test/Voxyl-test.apk';
-const RELEASES_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/latest';
+// Beta APK: rebuilt from main by the Android Release Bundle workflow.
+const BETA_APK_DOWNLOAD_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/download/android-test/Voxyl-test.apk';
+const RELEASES_URL = 'https://github.com/Renbrant/Voxyl-APP/releases/tag/android-test';
 
 const copy = {
   pt: {
@@ -51,7 +50,7 @@ const copy = {
     optionShortcutBody: 'Tenha um ícone do Voxyl como se fosse um app, sem precisar baixar uma loja de aplicativos.',
     optionApkTitle: 'Instalar o APK no Android',
     optionApkBody: 'Para quem prefere uma instalação nativa no Android, o APK oficial da versão beta está disponível no GitHub.',
-    currentBeta: 'Beta atual: v0.4.13',
+    currentBeta: `Beta atual: v${APP_VERSION}`,
     featuresEyebrow: 'Mais do que um player',
     featuresTitle: 'Uma experiência feita para ouvir e descobrir em comunidade.',
     featureDiscoverTitle: 'Descubra podcasts',
@@ -82,9 +81,8 @@ const copy = {
     apkEyebrow: 'Prefere instalar no Android?',
     apkTitle: 'Baixe o APK oficial do Voxyl.',
     apkBody: 'Baixe o APK oficial do GitHub. O Android pode pedir permissão para instalar aplicativos de fontes externas.',
-    apkButton: 'Baixar APK v0.4.13',
-    testApkButton: `Baixar versão de teste v${APP_VERSION}`,
-    testApkNote: 'A versão de teste traz as novidades mais recentes, mas pode ter instabilidades. Ela substitui a versão estável instalada.',
+    apkButton: `Baixar APK beta v${APP_VERSION}`,
+    betaApkNote: 'Esta é uma versão beta: traz as novidades mais recentes, mas pode ter instabilidades.',
     releasesButton: 'Ver releases no GitHub',
     finalTitle: 'Pronto para ouvir?',
     finalBody: 'Abra o Voxyl agora mesmo. Nenhuma instalação é necessária.',
@@ -120,7 +118,7 @@ const copy = {
     optionShortcutBody: 'Keep a Voxyl icon like a regular app without downloading anything from an app store.',
     optionApkTitle: 'Install the Android APK',
     optionApkBody: 'If you prefer a native Android installation, the official beta APK is available on GitHub.',
-    currentBeta: 'Current beta: v0.4.13',
+    currentBeta: `Current beta: v${APP_VERSION}`,
     featuresEyebrow: 'More than a player',
     featuresTitle: 'A listening and discovery experience built around people.',
     featureDiscoverTitle: 'Discover podcasts',
@@ -151,9 +149,8 @@ const copy = {
     apkEyebrow: 'Prefer an Android installation?',
     apkTitle: 'Download the official Voxyl APK.',
     apkBody: 'Download the official APK from GitHub. Android may ask you to allow installs from external sources.',
-    apkButton: 'Download APK v0.4.13',
-    testApkButton: `Download test version v${APP_VERSION}`,
-    testApkNote: 'The test version has the newest changes but may be unstable. It replaces the installed stable version.',
+    apkButton: `Download beta APK v${APP_VERSION}`,
+    betaApkNote: 'This is a beta version: it has the newest changes but may be unstable.',
     releasesButton: 'View GitHub releases',
     finalTitle: 'Ready to listen?',
     finalBody: 'Open Voxyl right now. No installation is required.',
@@ -423,22 +420,15 @@ export default function Landing() {
                 <h2 className="mt-3 font-grotesk text-3xl font-bold">{c.apkTitle}</h2>
                 <p className="mt-4 max-w-3xl leading-7 text-white/55">{c.apkBody}</p>
                 <p className="mt-4 text-sm font-medium text-white/45">{c.currentBeta}</p>
-                <p className="mt-2 max-w-3xl text-sm text-white/45">{c.testApkNote}</p>
+                <p className="mt-2 max-w-3xl text-sm text-white/45">{c.betaApkNote}</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
                 <a
-                  href={APK_DOWNLOAD_URL}
+                  href={BETA_APK_DOWNLOAD_URL}
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-orange-500 px-5 py-3 font-semibold text-white transition hover:bg-orange-400"
                 >
                   <Download className="h-5 w-5" />
                   {c.apkButton}
-                </a>
-                <a
-                  href={TEST_APK_DOWNLOAD_URL}
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-orange-500/40 bg-orange-500/10 px-5 py-3 font-semibold text-orange-300 transition hover:bg-orange-500/20"
-                >
-                  <Download className="h-5 w-5" />
-                  {c.testApkButton}
                 </a>
                 <a
                   href={RELEASES_URL}

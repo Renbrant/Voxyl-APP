@@ -633,9 +633,11 @@ Project-specific architecture and procedures stay in Voxyl; generic engineering 
 Current source release baseline:
 
 ```text
-Voxyl 0.6.13
-versionCode 613
+Voxyl 0.6.14
+versionCode 614
 ```
+
+The v0.6.14 candidate removes the stable v0.4.13 APK from the landing page; the page offers only the beta APK (`android-test` release), labeled with the source version.
 
 The v0.6.13 candidate adds the public /beta page for joining the Google Play closed test through a Google Group (no email collected by Voxyl).
 The v0.6.12 candidate signs out of the native Clerk session after account deletion on Android (issue #104).
